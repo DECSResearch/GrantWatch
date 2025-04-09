@@ -1,14 +1,14 @@
 import sys
 
-import download_json
-import status_logger
+import grants_data.download_json as download_json
 import gpt_summarizer
-
+import grants_data.process_json_data as process_json_data
 
 success=download_json.gen_grants()
 if not success:
-    status_logger.logger("error","CSV file download failed.")
     sys.exit(1)
+
+
 
 
 gpt_summarizer.summarizer()
