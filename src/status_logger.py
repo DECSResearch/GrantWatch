@@ -14,7 +14,7 @@ level_map = {
     'error': logging.error,
     'critical': logging.critical,
 }
-def debug_logger(level_name,message):
+def logger(level_name,message):
 
         log_func = level_map[level_name.lower()]
         if log_func:
