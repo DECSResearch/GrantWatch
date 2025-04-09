@@ -51,6 +51,3 @@ def gen_grants():
         status_logger.logger("error",f"Error writing to file - grants_data.json: {e}")
 
     return success
-
-if __name__ == "__main__":
-    gen_grants()

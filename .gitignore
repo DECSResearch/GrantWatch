@@ -172,5 +172,5 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
-src/logs/date.csv
 src/grants_data
+src/info_date/date.csv
