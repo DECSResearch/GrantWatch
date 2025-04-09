@@ -1,7 +1,7 @@
 import requests
 import datetime
 
-import status_logger
+from logs.status_logger import logger
 
        
 HEADERS = {
@@ -27,7 +27,7 @@ PAYLOAD = {
 
 def gen_grants():
     success = False
-    status_logger.logger("info","Downloading CSV file...")
+    logger("info","Downloading CSV file...")
     try:
         url = "https://micro.grants.gov/rest/opportunities/search_export_Mark2"
         response = requests.get(url, stream=True)
@@ -37,17 +37,25 @@ def gen_grants():
         
         if response.status_code == 200:
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            with open(f"src/grants_data/grants_data_{timestamp}.json", "wb") as file:                
+            with open(f"src/grants_data/grants_json_data/grants_data_{timestamp}.json", "wb") as file:                
                 file.write(response.content)
-            status_logger.logger("info",f"CSV file downloaded successfully as 'grants_data_{timestamp}.json'.")
+            logger("info",f"CSV file downloaded successfully as 'grants_data_{timestamp}.json'.")
             success = True
         
         else:
-            status_logger.logger("error",f"Failed to download CSV file. HTTP Status Code:", response.status_code)
+            logger("error",f"Failed to download CSV file. HTTP Status Code:", response.status_code)
         
     except requests.exceptions.RequestException as e:
-        status_logger.logger("error",f"Error downloading {url}: {e}")
+        logger("error",f"Error downloading {url}: {e}")
     except Exception as e:
-        status_logger.logger("error",f"Error writing to file - grants_data.json: {e}")
+        logger("error",f"Error writing to file - grants_data.json: {e}")
 
     return success
+
+
+if __name__ == "__main__":
+    success = gen_grants()
+    if success:
+        print("CSV file downloaded successfully.")
+    else:
+        print("Failed to download CSV file.")
