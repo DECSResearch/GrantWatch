@@ -22,25 +22,21 @@ def get_latest_file_path(file_path=FILE_PATH):
             logger("info", f"Latest file: {latest_file}")
             
             file_path= os.path.join(file_path, latest_file)
-            date= latest_file.split('_')[2].split('.')[0]
-            
-            logger("info", f"Date extracted: {date}")
-            
-            return file_path, date
+
+            return file_path
 
         else:
             logger("warning", "No matching files found.")
-            return None, None
+            return None
         
     except FileNotFoundError:
         logger("error", f"Directory not found: {file_path}")
-        return None, None
+        return None
     
     except PermissionError:
         logger("error", f"Permission denied: {file_path}")
-        return None, None
+        return None
 
     except Exception as e:
         logger("error", f"Error getting latest file path: {e}")
-        return None, None
-    
+        return None

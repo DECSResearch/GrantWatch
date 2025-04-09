@@ -2,15 +2,12 @@ import datetime
 
 from logs.status_logger import logger
 
+FILENAME= 'src\info_date\date.csv'
 
-def write_new_date(file_name):
+def write_new_date(date):
     try:
-        with open(file_name, 'w') as file:
-            date = datetime.datetime.now().date()
-            date = date.strftime("%Y-%m-%d")
+        with open(FILENAME, 'w') as file:
             file.write(f"{date}")
-            logger("info",f"New date written to file: {date}")
-            return True
+            logger("info",f"New date written to date file: {date}")
     except Exception as e:
-        logger("error",f"Error writing to file - {file_name}: {e}")
-        return False  
+        logger("error",f"Error writing to date file - {FILENAME}: {e}")
