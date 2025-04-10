@@ -3,6 +3,8 @@ from  grants_data.get_json_data import process_json_data
 from grants_data.get_file_path import get_latest_file_path
 from grants_data.date_filter_data import date_filter_json_data
 
+from llm_utils.keywords_gen import keyword_extractor
+
 from logs.status_logger import logger
 
 def onlyTheGoodStuff():
@@ -26,4 +28,10 @@ def onlyTheGoodStuff():
         logger("warning", "No data found after date filtering.")
         return False
     
+    keywords = keyword_extractor()
+    if keywords == None:
+        logger("error", "Failed to extract keywords.")
+        return False
+    
+    print("Keywords: ", keywords)
     
