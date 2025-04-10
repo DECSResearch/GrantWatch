@@ -1,7 +1,7 @@
 import datetime
 
-from info_date import update_date
-from info_date import check_new_date
+from date_utils import update_date
+from date_utils import check_new_date
 
 from logs.status_logger import logger
 

@@ -3,7 +3,7 @@ import datetime
 
 from logs.status_logger import logger
 
-FILENAME= 'src\info_date\date.csv'
+FILENAME= 'src\date_utils\date.csv'
 
 def check_for_new_date():
     try:
@@ -12,7 +12,6 @@ def check_for_new_date():
             line = file.readline()
             if len(line)>1:
                 last_date = line
-                print(f"Last date in file: {last_date}")
                 last_date = datetime.datetime.strptime(last_date, "%Y-%m-%d").date()
                 logger("info",f"Last date in file: {last_date}")
                 return last_date

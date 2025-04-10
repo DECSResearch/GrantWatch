@@ -2,7 +2,7 @@ import datetime
 
 from logs.status_logger import logger
 
-FILENAME= 'src\info_date\date.csv'
+FILENAME= 'src\date_utils\date.csv'
 
 def write_new_date(date):
     try:

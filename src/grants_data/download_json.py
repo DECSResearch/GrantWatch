@@ -51,11 +51,3 @@ def gen_grants():
         logger("error",f"Error writing to file - grants_data.json: {e}")
 
     return success
-
-
-if __name__ == "__main__":
-    success = gen_grants()
-    if success:
-        print("CSV file downloaded successfully.")
-    else:
-        print("Failed to download CSV file.")

@@ -173,4 +173,4 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 src/grants_data/grants_json_data
-src/info_date/date.csv
+src/date_utils/date.csv
