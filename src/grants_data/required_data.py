@@ -2,6 +2,7 @@ from grants_data.download_json import gen_grants
 from  grants_data.get_json_data import process_json_data
 from grants_data.get_file_path import get_latest_file_path
 from grants_data.date_filter_data import date_filter_json_data
+from grants_data.keyword_filter_data import filter_grants_by_keywords
 
 from llm_utils.keywords_gen import keyword_extractor
 
@@ -24,6 +25,7 @@ def onlyTheGoodStuff():
         return False
     
     date_sorted_data = date_filter_json_data(whole_json_data)
+    del whole_json_data
     if len(date_sorted_data) == 0:
         logger("warning", "No data found after date filtering.")
         return False
@@ -33,5 +35,10 @@ def onlyTheGoodStuff():
         logger("error", "Failed to extract keywords.")
         return False
     
-    print("Keywords: ", keywords)
+    keyword_json_data= filter_grants_by_keywords(date_sorted_data, keywords)
+    del date_sorted_data
+    if len(keyword_json_data) == 0:
+        logger("warning", "No data found after keyword filtering.")
+        return False
+    logger("info", f"Filtered JSON data length: {len(keyword_json_data)}")
     

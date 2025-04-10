@@ -43,7 +43,7 @@ def keyword_extractor():
     
 def keyword_prompt_gen(keywords, number_of_keywords):
     logger("info", "Generating keyword prompt...")
-    prompt = f"Generate more keywords for the following for grants opportunity filtering (don't repeat, or exceed {number_of_keywords} words):\n\n"
+    prompt = f"Generate more keywords for the following for grants opportunity filtering (include the input keywords also, or exceed {number_of_keywords} words):\n\n"
     prompt += f"{keywords}\n\n"
     prompt += "Please provide a list of keywords that are derived to the above content. Please do not include any other text or explanation. Just provide the keywords in a comma-separated format.\n\n"
     return prompt
