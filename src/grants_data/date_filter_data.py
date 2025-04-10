@@ -33,12 +33,12 @@ def date_filter_json_data(json_data):
             return []
         date=get_and_update_date()
         refined_data = []
-        date = datetime.datetime.strptime(date, "%Y-%m-%d").date()
         logger("info", f"Filtering JSON data for date: {date}...")
         for item in json_data:
-            posted_date = item.get('POSTED_DATE')
+            posted_date = str(item.get('POSTED_DATE'))
+            posted_date = posted_date.replace("/", "-")
             if posted_date:
-                posted_date = datetime.datetime.strptime(posted_date, "%Y-%m-%d").date()
+                posted_date = datetime.datetime.strptime(posted_date, "%m-%d-%Y").date()
             else:
                 item['POSTED_DATE'] = None
 

@@ -22,6 +22,7 @@ def onlyTheGoodStuff():
         return False
     
     date_sorted_data = date_filter_json_data(whole_json_data)
-    print(date_sorted_data[0])
-    print(len(date_sorted_data))
+    if len(date_sorted_data) == 0:
+        logger("warning", "No data found after date filtering.")
+        return False
     
