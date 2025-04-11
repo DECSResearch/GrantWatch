@@ -36,6 +36,10 @@ def onlyTheGoodStuff():
         logger("error", "Failed to extract keywords.")
         return False
     
+    ## filter for title, category, and description
+    
+    ######################TO-DO#######################
+    
     keyword_json_data= filter_grants_by_keywords(date_sorted_data, keywords , threshold)
     del date_sorted_data
     if len(keyword_json_data) == 0:
@@ -49,4 +53,14 @@ def onlyTheGoodStuff():
     #with open("src/grants_data/grants_json_data/filtered_grants.json", "w", encoding="utf-8") as f:
     #    json.dump(keyword_json_data, f, ensure_ascii=False, indent=4)
     
+    final_json_data = keyword_json_data
+    
+    final_json_data.sort(key=lambda x: x['POSTED_DATE'], reverse=True)
+    logger("info", f"Sorted JSON data length: {len(keyword_json_data)}")
+    
+    
+    
+    #######################################################
+    
+    return final_json_data
     
