@@ -8,22 +8,27 @@ def keyword_extractor():
         config = config_loader()
         if not config:
             logger("critical", "Configuration loading failed. Exiting keyword extractor.")
-            return None
+            return None , None
 
         model = config.get("llm_model")
         if not model:
             logger("critical", "Model not specified in configuration. Exiting keyword extractor.")
-            return None
+            return None , None
 
         keywords = config.get("keywords")
         if not keywords:
             logger("error", "Keywords not specified in configuration. Exiting keyword extractor.")
-            return None
+            return None , None
         
         number_of_keywords = config.get("number_of_keywords")
         if not number_of_keywords:
             logger("warning", "Number of keywords not specified in configuration. Using default value of 30.")
-            return None
+            return None , None
+        
+        threshold = config.get("threshold")
+        if not threshold:
+            logger("warning", "Threshold not specified in configuration. Using default value of 80.")
+            return None , 80 
         
         content= keyword_prompt_gen(keywords, number_of_keywords)
 
@@ -33,13 +38,13 @@ def keyword_extractor():
             keywords = keywords.split(",")
             keywords = [keyword.strip() for keyword in keywords if keyword.strip()]
             logger("info", f"Keywords are extracted")
-            return keywords
+            return keywords , threshold
         else:
             logger("error", "Failed to extract keywords from LLM response.")
-            return None
+            return None , None
     except Exception as e:
         logger("error", f"An error occurred during keyword extraction: {e}")
-        return None
+        return None , None
     
 def keyword_prompt_gen(keywords, number_of_keywords):
     logger("info", "Generating keyword prompt...")

@@ -8,6 +8,8 @@ from llm_utils.keywords_gen import keyword_extractor
 
 from logs.status_logger import logger
 
+from pprint import pprint
+
 def onlyTheGoodStuff():
     #success = gen_grants()
     #if not success:
@@ -30,15 +32,16 @@ def onlyTheGoodStuff():
         logger("warning", "No data found after date filtering.")
         return False
     
-    keywords = keyword_extractor()
+    keywords , threshold = keyword_extractor()
     if keywords == None:
         logger("error", "Failed to extract keywords.")
         return False
     
-    keyword_json_data= filter_grants_by_keywords(date_sorted_data, keywords)
+    keyword_json_data= filter_grants_by_keywords(date_sorted_data, keywords , threshold)
     del date_sorted_data
     if len(keyword_json_data) == 0:
         logger("warning", "No data found after keyword filtering.")
         return False
     logger("info", f"Filtered JSON data length: {len(keyword_json_data)}")
     
+    pprint(keyword_json_data[1])

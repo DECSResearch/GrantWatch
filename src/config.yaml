@@ -1,3 +1,4 @@
 keywords: "cybersecurity, ai, ml"
 llm_model: "gemma3:27b"
 number_of_keywords: 20
+threshold: 90

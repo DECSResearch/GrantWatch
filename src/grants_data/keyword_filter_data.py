@@ -1,7 +1,8 @@
 from logs.status_logger import logger
+from rapidfuzz import fuzz
 
 
-def filter_grants_by_keywords(grants, keywords):
+def filter_grants_by_keywords(grants, keywords, threshold):
     try:
         logger("info", f"Filtering grants by {len(keywords)} keywords...")
         filtered_grants = []
@@ -9,10 +10,13 @@ def filter_grants_by_keywords(grants, keywords):
         lower_keywords = [key.lower() for key in keywords]
 
         for grant in grants:
-            description = grant.get("FUNDING_DESCRIPTION", "")
-            description = description.lower()
-            if any(kw in description for kw in lower_keywords):
-                filtered_grants.append(grant)
+            description = grant.get("FUNDING_DESCRIPTION", "").lower()
+            
+            for kw in lower_keywords:
+                score = fuzz.partial_ratio(kw, description)
+                if score >= threshold:
+                    filtered_grants.append(grant)
+                    break
 
         logger("info", f"Filtered grants count: {len(filtered_grants)}")
         return filtered_grants
