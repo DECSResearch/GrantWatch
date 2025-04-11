@@ -2,7 +2,7 @@ from logs.status_logger import logger
 from rapidfuzz import fuzz
 
 
-def filter_grants_by_keywords(grants, keywords, threshold):
+def filter_grants_by_keywords(grants, grants_key, keywords, threshold):
     try:
         logger("info", f"Filtering grants by {len(keywords)} keywords...")
         filtered_grants = []
@@ -10,12 +10,10 @@ def filter_grants_by_keywords(grants, keywords, threshold):
         lower_keywords = [key.lower() for key in keywords]
 
         for grant in grants:
-            description = grant.get("FUNDING_DESCRIPTION", "").lower()
+            description = grant.get(f"{grants_key}", "").lower()
             
             scores = [fuzz.partial_ratio(kw, description) for kw in lower_keywords]
             aggregated_score = sum(scores) / len(scores) if scores else 0
-            
-            print(f"For grant '{grant.get('OPPORTUNITY_TITLE')}', aggregated score: {aggregated_score:.2f}")
             
             if aggregated_score >= threshold:
                 filtered_grants.append(grant)

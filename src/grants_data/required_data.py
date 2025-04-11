@@ -40,7 +40,7 @@ def onlyTheGoodStuff():
     
     ######################TO-DO#######################
     
-    keyword_json_data= filter_grants_by_keywords(date_sorted_data, keywords , threshold)
+    keyword_json_data= filter_grants_by_keywords(date_sorted_data,"FUNDING_DESCRIPTION", keywords , threshold)
     del date_sorted_data
     if len(keyword_json_data) == 0:
         logger("warning", "No data found after keyword filtering.")
