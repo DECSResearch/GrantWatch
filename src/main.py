@@ -13,4 +13,4 @@ if not success:
 
 
 # send the good stuff to the emailer
-parse_send_grants(grants)
+#parse_send_grants(grants)

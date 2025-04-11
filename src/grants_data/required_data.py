@@ -6,6 +6,7 @@ from grants_data.keyword_filter_data import filter_grants_by_keywords
 from grants_data.filter_with_forecast import filter_forecasted_data
 
 from llm_utils.keywords_gen import keyword_extractor
+from llm_utils.gpt_summarizer import description_summarizer
 
 from logs.status_logger import logger
 
@@ -62,13 +63,18 @@ def onlyTheGoodStuff():
         return False , None
     logger("info", f"Filtered keyword length: {len(keyword_json_data)}")
     
-    #from pprint import pprint
+    from pprint import pprint
     #import json
     #
     #with open("src/grants_data/grants_json_data/filtered_grants.json", "w", encoding="utf-8") as f:
     #    json.dump(keyword_json_data, f, ensure_ascii=False, indent=4)
     
-    final_json_data = keyword_json_data
+    summarized_json_data = description_summarizer(keyword_json_data)
+    if summarized_json_data == None:
+        logger("error", "Failed to summarize descriptions.")
+        return False , None
+
+    final_json_data = summarized_json_data
     
     final_json_data.sort(key=lambda x: x['POSTED_DATE'], reverse=True)
     logger("info", "Sorted JSON data")
