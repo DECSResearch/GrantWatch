@@ -42,7 +42,6 @@ def onlyTheGoodStuff():
     if not forecast:
         logger("info", "Forecast is set to False. Filtering grants with OPPORTUNITY_STATUS = 'Forecasted'")
         status_sorted_data = filter_forecasted_data(date_sorted_data)
-        del date_sorted_data
         if len(status_sorted_data) == 0:
             logger("info", "No data found after status filtering.")
             return False , None
