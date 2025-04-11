@@ -1,6 +1,6 @@
 from mail_utils.gmail_utils.gmail import passer
 from logs.status_logger import logger
-from mail_utils.html_gen import html_maker
+from mail_utils.grants_html_gen import html_maker
 
 def parse_send_grants(grants):
     try:
