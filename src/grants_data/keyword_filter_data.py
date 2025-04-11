@@ -12,11 +12,13 @@ def filter_grants_by_keywords(grants, keywords, threshold):
         for grant in grants:
             description = grant.get("FUNDING_DESCRIPTION", "").lower()
             
-            for kw in lower_keywords:
-                score = fuzz.partial_ratio(kw, description)
-                if score >= threshold:
-                    filtered_grants.append(grant)
-                    break
+            scores = [fuzz.partial_ratio(kw, description) for kw in lower_keywords]
+            aggregated_score = sum(scores) / len(scores) if scores else 0
+            
+            print(f"For grant '{grant.get('OPPORTUNITY_TITLE')}', aggregated score: {aggregated_score:.2f}")
+            
+            if aggregated_score >= threshold:
+                filtered_grants.append(grant)
 
         logger("info", f"Filtered grants count: {len(filtered_grants)}")
         return filtered_grants

@@ -8,7 +8,6 @@ from llm_utils.keywords_gen import keyword_extractor
 
 from logs.status_logger import logger
 
-from pprint import pprint
 
 def onlyTheGoodStuff():
     #success = gen_grants()
@@ -44,4 +43,10 @@ def onlyTheGoodStuff():
         return False
     logger("info", f"Filtered JSON data length: {len(keyword_json_data)}")
     
-    pprint(keyword_json_data[1])
+    #from pprint import pprint
+    #import json
+    #
+    #with open("src/grants_data/grants_json_data/filtered_grants.json", "w", encoding="utf-8") as f:
+    #    json.dump(keyword_json_data, f, ensure_ascii=False, indent=4)
+    
+    
