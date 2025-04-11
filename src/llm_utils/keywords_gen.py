@@ -8,27 +8,33 @@ def keyword_extractor():
         config = config_loader()
         if not config:
             logger("critical", "Configuration loading failed. Exiting keyword extractor.")
-            return None , None
+            return None , None , None
 
         model = config.get("llm_model")
         if not model:
             logger("critical", "Model not specified in configuration. Exiting keyword extractor.")
-            return None , None
+            return None , None , None
 
         keywords = config.get("keywords")
         if not keywords:
             logger("error", "Keywords not specified in configuration. Exiting keyword extractor.")
-            return None , None
+            return None , None , None
         
         number_of_keywords = config.get("number_of_keywords")
         if not number_of_keywords:
             logger("warning", "Number of keywords not specified in configuration. Using default value of 30.")
-            return None , None
+            return None , None , None
         
         threshold = config.get("threshold")
         if not threshold:
             logger("warning", "Threshold not specified in configuration. Using default value of 80.")
-            return None , 80 
+            threshold = 80 
+            
+        forecast = config.get("forcast")
+        if not forecast:
+            logger("warning", "Forecast not specified in configuration. Using default value of False.")
+            forecast = False
+        
         
         content= keyword_prompt_gen(keywords, number_of_keywords)
 
@@ -38,13 +44,13 @@ def keyword_extractor():
             keywords = keywords.split(",")
             keywords = [keyword.strip() for keyword in keywords if keyword.strip()]
             logger("info", f"Keywords are extracted")
-            return keywords , threshold
+            return keywords , threshold , forecast
         else:
             logger("error", "Failed to extract keywords from LLM response.")
-            return None , None
+            return None , None , None
     except Exception as e:
         logger("error", f"An error occurred during keyword extraction: {e}")
-        return None , None
+        return None , None, None
     
 def keyword_prompt_gen(keywords, number_of_keywords):
     logger("info", "Generating keyword prompt...")

@@ -14,3 +14,4 @@ keywords: "'cybersecurity', 'ai', 'ml', 'artificial intelligence', 'machine lear
 llm_model: "gemma3:27b"
 number_of_keywords: 50
 threshold: 60
+forcast: False
