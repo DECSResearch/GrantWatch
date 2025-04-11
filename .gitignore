@@ -176,3 +176,5 @@ src/grants_data/grants_json_data
 src/date_utils/date.csv
 src/mail_utils/gmail_utils/api_creds.json
 src/recipient_mails.txt
+src/mail_utils/gmail_utils/token_creds.json
+src/mail_utils/recipient_mails.txt
