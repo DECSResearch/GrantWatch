@@ -37,8 +37,6 @@ def description_summarizer(grants):
                 logger("error", f"LLM response does not contain a valid summary for grant '{grant.get('OPPORTUNITY_TITLE', 'No Title')}'.")
         except Exception as e:
             logger("error", f"An error occurred during description summarization for grant '{grant.get('OPPORTUNITY_TITLE', 'No Title')}': {e}")
-        from pprint import pprint
-        pprint(grant)
     return grants
 
 def description_prompt_gen(grant):
