@@ -21,12 +21,12 @@ def get_token(creds_path, scopes):
     token = None
 
 
-    if os.path.exists('src/mail_utils/gmail_utils/token_creds.json'):
+    if os.path.exists(r'src\mail_utils\gmail_utils\token_creds.json'):
         try:
-            token = Credentials.from_authorized_user_file('token_creds.json', scopes)
+            token = Credentials.from_authorized_user_file(r'src\mail_utils\gmail_utils\token_creds.json', scopes)
         except Exception as e:
             logger('error',f"Invalid token_creds.json file: {e}")
-            os.remove('src/mail_utils/gmail_utils/token_creds.json') 
+            os.remove(r'src\mail_utils\gmail_utils\token_creds.json') 
             token = None
 
 
@@ -39,7 +39,7 @@ def get_token(creds_path, scopes):
             flow = InstalledAppFlow.from_client_secrets_file(creds_path, scopes)
             token = flow.run_local_server(port=0)
 
-        with open('src/mail_utils/gmail_utils/token_creds.json', 'w') as token_file:
+        with open(r'src\mail_utils\gmail_utils\token_creds.json', 'w') as token_file:
             token_file.write(token.to_json())
 
     return token
