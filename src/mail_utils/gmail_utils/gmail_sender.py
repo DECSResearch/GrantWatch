@@ -5,7 +5,7 @@ from mail_utils.grants_html_gen import html_maker
 def parse_send_grants(grants):
     try:
         logger('info',"Preparing to send mail")
-        creds_path = 'src\mail_utils\gmail_utils\\api_creds.json' 
+        creds_path = r'src\mail_utils\gmail_utils\api_creds.json' 
         sender_email = "c2sr.und@gmail.com"
 
         recipient_email = get_emails()
