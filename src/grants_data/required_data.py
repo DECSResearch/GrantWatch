@@ -18,23 +18,23 @@ def onlyTheGoodStuff():
     latest_file_path = get_latest_file_path()
     if latest_file_path== None:
         logger("error", "No latest file path found.")
-        return False
+        return False , None
 
     whole_json_data=process_json_data(latest_file_path)
     if len(whole_json_data) == 0:
         logger("error", "Failed to process JSON data.")
-        return False
+        return False , None
     
     date_sorted_data = date_filter_json_data(whole_json_data)
     del whole_json_data
     if len(date_sorted_data) == 0:
         logger("warning", "No data found after date filtering.")
-        return False
+        return False , None
     
     keywords , threshold = keyword_extractor()
     if keywords == None:
         logger("error", "Failed to extract keywords.")
-        return False
+        return False , None
     
     ## filter for title, category, and description
     
@@ -44,7 +44,7 @@ def onlyTheGoodStuff():
     del date_sorted_data
     if len(keyword_json_data) == 0:
         logger("warning", "No data found after keyword filtering.")
-        return False
+        return False , None
     logger("info", f"Filtered JSON data length: {len(keyword_json_data)}")
     
     #from pprint import pprint
@@ -62,5 +62,5 @@ def onlyTheGoodStuff():
     
     #######################################################
     
-    return final_json_data
+    return True, final_json_data
     
