@@ -43,10 +43,9 @@ def description_prompt_gen(grant):
 
     grant_json_str = json.dumps(grant, indent=2)
     prompt = (
-        "Summarize the following grant information in a concise, informative paragraph.\n\n"
+        "Summarize the following grant information in a concise, informative paragraph(250-350 words).\n\n"
         "Grant Information (JSON):\n"
         f"{grant_json_str}\n\n"
-        "The summary should not include - opportunity title, agency name and code, posted date, close date, funding amounts, and contact information. Do not include additional commentary."
-        "Just use description and links to the grant.\n\n"
+        "The summary should not include - opportunity title, agency name and code, posted date, close date, funding amounts, links and contact information. Do not include additional commentary.\n\n"
     )
     return prompt

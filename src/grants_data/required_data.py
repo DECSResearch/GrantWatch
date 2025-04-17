@@ -12,10 +12,10 @@ from logs.status_logger import logger
 
 
 def onlyTheGoodStuff():
-    #success = gen_grants()
-    #if not success:
-    #    logger("error", "Failed to generate grants data.")
-    #    return success
+    success = gen_grants()
+    if not success:
+        logger("error", "Failed to generate grants data.")
+        return success
 
     latest_file_path = get_latest_file_path()
     if latest_file_path== None:
