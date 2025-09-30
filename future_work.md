@@ -7,5 +7,3 @@ In upcoming releases, we plan to evolve GrantWatch from a simple scraper-notifie
 4. Fliter : Concept/Full proposal, Due Dates (PostgreSQL)
 5. Suggestions/ Best Matches : User intrests and suggest best matches (RAG)
 6. ChatBot : Query - RAG
-
-
