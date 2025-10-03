@@ -1,4 +1,5 @@
 import os
+from typing import Any, Dict
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -9,14 +10,32 @@ def _env(name: str, default: str) -> str:
     return value if value else default
 
 
+def _connection_kwargs() -> Dict[str, Any]:
+    url = os.getenv("POSTGRES_URL") or os.getenv("DATABASE_URL")
+    if url:
+        return {"dsn": url}
+
+    host = _env("POSTGRES_HOST", "localhost")
+    kwargs: Dict[str, Any] = {
+        "dbname": _env("POSTGRES_DB", "your_db"),
+        "user": _env("POSTGRES_USER", "your_user"),
+        "password": _env("POSTGRES_PASSWORD", "your_password"),
+        "host": host,
+        "port": int(os.getenv("POSTGRES_PORT", "5432")),
+    }
+
+    sslmode = os.getenv("POSTGRES_SSLMODE")
+    if not sslmode and "neon.tech" in host:
+        sslmode = "require"
+
+    if sslmode:
+        kwargs["sslmode"] = sslmode
+
+    return kwargs
+
+
 def get_connection():
-    return psycopg2.connect(
-        dbname=_env("POSTGRES_DB", "your_db"),
-        user=_env("POSTGRES_USER", "your_user"),
-        password=_env("POSTGRES_PASSWORD", "your_password"),
-        host=_env("POSTGRES_HOST", "localhost"),
-        port=int(os.getenv("POSTGRES_PORT", "5432")),
-    )
+    return psycopg2.connect(**_connection_kwargs())
 
 
 def fetch_upcoming(stage=None, days=30):

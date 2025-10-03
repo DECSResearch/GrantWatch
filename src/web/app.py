@@ -7,6 +7,9 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from psycopg2.extras import RealDictCursor
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from sql_utils import get_connection
 
@@ -284,6 +287,7 @@ def get_grants(
         )
 
     return {"results": results}
+
 
 
 
