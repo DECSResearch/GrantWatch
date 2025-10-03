@@ -178,3 +178,7 @@ src/mail_utils/gmail_utils/api_creds.json
 src/recipient_mails.txt
 src/mail_utils/gmail_utils/token_creds.json
 src/mail_utils/recipient_mails.txt
+config/credentials.json
+config/gmail_token.json
+config/*.json
+

@@ -1,21 +1,52 @@
+"""Entry point for the GrantWatch data pipeline."""
+from __future__ import annotations
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from grants_data.pipeline import onlyTheGoodStuff
+from notifications.gmail_notifier import notify_grant_release
 from sql_utils import fetch_upcoming
-from grants.data.loader import load_grants_from_json
 
-def main():
-    # Example: load some grants JSON dump
-    # load_grants_from_json("sample_grants.json")
 
-    # Fetch concept proposals due in 30 days
-    concept = fetch_upcoming(stage="concept", days=30)
+def _print_upcoming(stage: str, days: int) -> None:
+    try:
+        rows = fetch_upcoming(stage=stage, days=days)
+    except Exception as exc:
+        print(f"Unable to fetch upcoming {stage} proposals: {exc}")
+        return
+
+    if not rows:
+        print(f"No upcoming {stage} proposals in the next {days} days.")
+        return
+
+    for row in rows:
+        print(f"{row['title']} | Due: {row['close_date']}")
+
+
+def main() -> None:
+    success, filtered_grants = onlyTheGoodStuff()
+    if success:
+        csv_path = getattr(onlyTheGoodStuff, "last_csv_path", None)
+        message = f"Pipeline complete. Filtered {len(filtered_grants)} grants."
+        if csv_path:
+            message += f" CSV saved to: {csv_path}"
+        print(message)
+        try:
+            notify_grant_release(filtered_grants, str(csv_path) if csv_path else None)
+        except Exception as exc:
+            print(f"Failed to dispatch email notification: {exc}")
+    else:
+        print("Pipeline failed; check logs for details.")
+        return
+
     print("Concept proposals due soon:")
-    for row in concept:
-        print(f"{row['title']} | Due: {row['close_date']}")
+    _print_upcoming(stage="concept", days=30)
 
-    # Fetch all full proposals due in 60 days
-    full = fetch_upcoming(stage="full", days=60)
     print("\nFull proposals due soon:")
-    for row in full:
-        print(f"{row['title']} | Due: {row['close_date']}")
+    _print_upcoming(stage="full", days=60)
+
 
 if __name__ == "__main__":
     main()
