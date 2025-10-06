@@ -1,8 +1,20 @@
 import os
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Tuple, Optional
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
+
+
+_DSN_ENV_VARS = (
+    "POSTGRES_PRISMA_URL",
+    "POSTGRES_URL",
+    "POSTGRES_URL_NON_POOLING",
+    "DATABASE_URL",
+    "DATABASE_URL_UNPOOLED",
+    "NEON_DATABASE_URL",
+    "VERCEL_POSTGRES_URL",
+    "PGDATABASE_URL",
+)
 
 
 def _env(name: str, default: str) -> str:
@@ -10,21 +22,29 @@ def _env(name: str, default: str) -> str:
     return value if value else default
 
 
+def _first_env(*names: str) -> Optional[str]:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return value
+    return None
+
+
 def _connection_kwargs() -> Dict[str, Any]:
-    url = os.getenv("POSTGRES_URL") or os.getenv("DATABASE_URL")
+    url = _first_env(*_DSN_ENV_VARS)
     if url:
         return {"dsn": url}
 
-    host = _env("POSTGRES_HOST", "localhost")
+    host = _env("POSTGRES_HOST", _env("PGHOST", "localhost"))
     kwargs: Dict[str, Any] = {
-        "dbname": _env("POSTGRES_DB", "your_db"),
-        "user": _env("POSTGRES_USER", "your_user"),
-        "password": _env("POSTGRES_PASSWORD", "your_password"),
+        "dbname": _env("POSTGRES_DB", _env("PGDATABASE", "your_db")),
+        "user": _env("POSTGRES_USER", _env("PGUSER", "your_user")),
+        "password": _env("POSTGRES_PASSWORD", _env("PGPASSWORD", "your_password")),
         "host": host,
-        "port": int(os.getenv("POSTGRES_PORT", "5432")),
+        "port": int(os.getenv("POSTGRES_PORT") or os.getenv("PGPORT") or "5432"),
     }
 
-    sslmode = os.getenv("POSTGRES_SSLMODE")
+    sslmode = os.getenv("POSTGRES_SSLMODE") or os.getenv("PGSSLMODE")
     ssl_domain = os.getenv("POSTGRES_SSL_DOMAIN", "neon.tech")
     if not sslmode and ssl_domain and ssl_domain in host:
         sslmode = "require"
@@ -35,12 +55,15 @@ def _connection_kwargs() -> Dict[str, Any]:
     return kwargs
 
 
+
 def get_connection():
     return psycopg2.connect(**_connection_kwargs())
 
 
+
 def _normalise(value: str) -> str:
     return value.strip().lower()
+
 
 
 def available_subscription_fields(limit: int = 200) -> List[Tuple[str, str]]:
@@ -81,6 +104,7 @@ def available_subscription_fields(limit: int = 200) -> List[Tuple[str, str]]:
         return [(row[0], row[1]) for row in cur.fetchall()]
 
 
+
 def add_subscription(email: str, field: str) -> bool:
     email_clean = _normalise(email)
     field_clean = _normalise(field)
@@ -97,6 +121,7 @@ def add_subscription(email: str, field: str) -> bool:
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(query, (email_clean, field_clean))
         return cur.rowcount > 0
+
 
 
 def get_subscribers_for_fields(fields: Iterable[str]) -> Dict[str, List[str]]:
@@ -118,6 +143,7 @@ def get_subscribers_for_fields(fields: Iterable[str]) -> Dict[str, List[str]]:
     for field, email in rows:
         subscribers.setdefault(field, []).append(email)
     return subscribers
+
 
 
 def fetch_upcoming(stage=None, days=30):

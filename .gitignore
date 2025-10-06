@@ -182,3 +182,7 @@ config/credentials.json
 config/gmail_token.json
 config/*.json
 
+# Node/Next.js build artifacts
+node_modules/
+.next/
+aws/dist/

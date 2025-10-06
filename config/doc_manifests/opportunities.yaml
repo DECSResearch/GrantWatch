@@ -1,0 +1,62 @@
+opportunities:
+  - opportunity_id: opp-001
+    title: GrantWatch Sample Opportunity
+    metadata:
+      agency: Department of Innovation
+      cfda: 00.000
+    documents:
+      - id: sf424
+        label: SF-424 Application Form
+        filename_pattern: "^SF424(_[A-Za-z0-9-]+)?\\.pdf$"
+        required: true
+        content_types:
+          - application/pdf
+        max_mb: 15
+        max_pages: 20
+        required_sections:
+          - APPLICATION FOR FEDERAL ASSISTANCE
+          - AUTHORIZED FOR LOCAL REPRODUCTION
+      - id: project-narrative
+        label: Project Narrative
+        filename_pattern: "^Project-Narrative.*\\.(pdf|docx)$"
+        required: true
+        content_types:
+          - application/pdf
+          - application/vnd.openxmlformats-officedocument.wordprocessingml.document
+        max_mb: 25
+        max_pages: 30
+        required_sections:
+          - Needs Statement
+          - Goals and Objectives
+          - Evaluation Plan
+      - id: budget-justification
+        label: Budget Justification
+        filename_pattern: "^Budget-Justification.*\\.pdf$"
+        required: false
+        content_types:
+          - application/pdf
+        max_mb: 10
+        max_pages: 10
+        required_sections:
+          - Cost Breakdown
+  - opportunity_id: opp-002
+    title: Workforce Readiness Pilot
+    metadata:
+      agency: Department of Labor
+    documents:
+      - id: cover-letter
+        label: Cover Letter
+        filename_pattern: "^Cover-Letter.*\\.pdf$"
+        required: true
+        content_types:
+          - application/pdf
+        max_mb: 5
+        max_pages: 2
+      - id: training-plan
+        label: Training Plan
+        filename_pattern: "^Training-Plan.*\\.pdf$"
+        required: true
+        content_types:
+          - application/pdf
+        max_mb: 12
+        max_pages: 25

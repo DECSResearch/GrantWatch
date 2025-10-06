@@ -3,8 +3,10 @@ from __future__ import annotations
 
 from datetime import date
 from typing import Dict, List, Optional
+import logging
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, EmailStr
 from psycopg2.extras import RealDictCursor
@@ -12,10 +14,28 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from doc_checker.config import get_settings
+from .document_checker_routes import router as document_checker_router
+
 from sql_utils import add_subscription, available_subscription_fields, get_connection
+
+settings = get_settings()
 
 app = FastAPI(title="GrantWatch Filters")
 
+allow_origins = settings.allowed_origins or ["*"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allow_origins if "*" not in allow_origins else ["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_credentials=False,
+)
+
+app.include_router(document_checker_router)
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("grantwatch.web")
 
 
 class SubscriptionPayload(BaseModel):
@@ -482,6 +502,7 @@ def get_grants(
             cur.execute(query, params)
             rows = cur.fetchall()
     except Exception as exc:
+        logger.exception("Database query failed when fetching grants")
         raise HTTPException(status_code=500, detail=f"Database query failed: {exc}") from exc
 
     results = []
@@ -504,7 +525,11 @@ def get_grants(
 
 @app.get("/api/subscription-fields")
 def subscription_fields(limit: int = Query(default=200, ge=1, le=500)) -> Dict[str, List[Dict[str, str]]]:
-    options = available_subscription_fields(limit=limit)
+    try:
+        options = available_subscription_fields(limit=limit)
+    except Exception as exc:
+        logger.exception("Database query failed when loading subscription fields")
+        raise HTTPException(status_code=500, detail="Database query failed while loading subscription fields.") from exc
     if not options:
         options = [("concept", "Concept stage"), ("full", "Full stage")]
 
@@ -539,6 +564,9 @@ def create_subscription(payload: SubscriptionPayload) -> Dict[str, Dict[str, str
         add_subscription(payload.email, field_key)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Failed to create subscription")
+        raise HTTPException(status_code=500, detail="Database query failed while saving the subscription.") from exc
 
     return {"field": {"key": field_key, "label": label}}
 

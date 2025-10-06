@@ -7,3 +7,7 @@ python-dotenv
 
 fastapi
 uvicorn
+email-validator
+boto3
+PyYAML
+pdfplumber
