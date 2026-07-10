@@ -86,6 +86,16 @@ class TestKeywordFilter:
         )
         assert out == []
 
+    def test_word_boundaries_prevent_substring_matches(self):
+        records = [
+            {"FUNDING_DESCRIPTION": "this particular program"},
+            {"FUNDING_DESCRIPTION": "funding for art programs"},
+            {"FUNDING_DESCRIPTION": "Art, culture, and heritage"},
+        ]
+        out = filter_grants_by_keywords(records, "FUNDING_DESCRIPTION", ["art"], 1)
+        assert len(out) == 2
+        assert all("particular" not in r["FUNDING_DESCRIPTION"] for r in out)
+
 
 class TestSummarizer:
     def test_summary_is_plain_text(self):
