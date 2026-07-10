@@ -186,6 +186,9 @@ config/*.json
 node_modules/
 .next/
 aws/dist/
+.vercel/
 
-# Grants.gov daily XML extract downloads (large generated data)
+# Generated grants data (downloaded/derived artifacts)
 grants_data/grants_xml_data/
+grants_data/grants_json_data/
+grants_data/grants_csv_data/
