@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -94,11 +95,23 @@ def gen_grants(rows: Optional[int] = None) -> bool:
     payload = _build_payload(requested_rows)
 
     try:
-        response = requests.post(export_url, headers=_headers(), json=payload, timeout=_TIMEOUT)
-        response.raise_for_status()
-    except requests.RequestException as exc:
-        logger("error", f"Failed to download grants data: {exc}")
-        return False
+        attempts = int(os.getenv("GRANTS_GOV_RETRIES", "3"))
+    except ValueError:
+        attempts = 3
+
+    response = None
+    for attempt in range(1, attempts + 1):
+        try:
+            response = requests.post(export_url, headers=_headers(), json=payload, timeout=_TIMEOUT)
+            response.raise_for_status()
+            break
+        except requests.RequestException as exc:
+            if attempt == attempts:
+                logger("error", f"Failed to download grants data after {attempts} attempts: {exc}")
+                return False
+            wait = 2 ** attempt
+            logger("warning", f"Download attempt {attempt}/{attempts} failed ({exc}); retrying in {wait}s")
+            time.sleep(wait)
 
     try:
         records = response.json()
@@ -113,6 +126,14 @@ def gen_grants(rows: Optional[int] = None) -> bool:
     if not records:
         logger("warning", "Grants.gov export returned no records")
         return False
+
+    if len(records) >= requested_rows:
+        logger(
+            "warning",
+            f"Export returned {len(records)} records, matching the rows cap of {requested_rows}; "
+            "results are likely truncated. Raise GRANTS_GOV_ROWS or use GRANTS_DATA_SOURCE=extract "
+            "for the complete corpus.",
+        )
 
     destination = _write_output(records)
     logger("info", f"Stored {len(records)} grants into {destination}")

@@ -109,13 +109,15 @@ def _load_source_records() -> List[Dict[str, object]]:
     if source != "export":
         logger("warning", f"Unknown GRANTS_DATA_SOURCE '{source}'; falling back to 'export'")
 
-    if not gen_grants():
-        logger("error", "Failed to generate grants data.")
-        return []
-
-    latest_file_path = getattr(gen_grants, "last_download_path", None)
-    if latest_file_path is None:
+    if gen_grants():
+        latest_file_path = getattr(gen_grants, "last_download_path", None)
+        if latest_file_path is None:
+            latest_file_path = get_latest_file_path()
+    else:
+        logger("error", "Failed to download grants data; looking for a cached export.")
         latest_file_path = get_latest_file_path()
+        if latest_file_path is not None:
+            logger("warning", f"Using cached export at {latest_file_path}")
 
     if latest_file_path is None:
         logger("error", "No latest file path found.")
