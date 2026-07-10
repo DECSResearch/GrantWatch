@@ -19,6 +19,7 @@ class Settings:
     default_max_mb: int = 25
     default_max_pages: int = 50
     textract_feature_type: str | None = None
+    upload_token: str | None = None
 
     @property
     def ttl_seconds(self) -> int:
@@ -39,6 +40,7 @@ def get_settings() -> Settings:
     max_mb = int(os.getenv("DOC_CHECKER_DEFAULT_MAX_MB", "25"))
     max_pages = int(os.getenv("DOC_CHECKER_DEFAULT_MAX_PAGES", "50"))
     textract_feature = os.getenv("DOC_CHECKER_TEXTRACT_FEATURE", "") or None
+    upload_token = (os.getenv("DOC_CHECKER_UPLOAD_TOKEN") or "").strip() or None
 
     return Settings(
         bucket_name=bucket,
@@ -51,4 +53,5 @@ def get_settings() -> Settings:
         default_max_mb=max_mb,
         default_max_pages=max_pages,
         textract_feature_type=textract_feature,
+        upload_token=upload_token,
     )

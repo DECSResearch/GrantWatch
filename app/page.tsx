@@ -49,7 +49,16 @@ type UploadUrlResponse = {
 type ManifestIndex = Record<string, { title: string }>;
 
 const API_BASE = process.env.NEXT_PUBLIC_DOC_CHECKER_API ?? "http://localhost:8000";
+// Note: a NEXT_PUBLIC_ token is visible to anyone loading the page; it deters
+// anonymous scanners hitting the API directly, not determined attackers.
+const UPLOAD_TOKEN = process.env.NEXT_PUBLIC_DOC_CHECKER_UPLOAD_TOKEN;
 const STORAGE_KEY = "grant-doc-checker-submission";
+
+function apiHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (UPLOAD_TOKEN) headers["X-Upload-Token"] = UPLOAD_TOKEN;
+  return headers;
+}
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
@@ -199,7 +208,7 @@ export default function Page() {
         opportunity_id?: string;
       }>(`${API_BASE}/start-submission`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: apiHeaders(),
         body: JSON.stringify({ opportunity_id: opportunityId }),
       });
       setSubmissionId(response.submission_id);
@@ -232,7 +241,7 @@ export default function Page() {
       };
       const descriptor = await jsonFetch<UploadUrlResponse>(`${API_BASE}/upload-url`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: apiHeaders(),
         body: JSON.stringify(payload),
       });
       setSubmissionId(descriptor.submission_id);

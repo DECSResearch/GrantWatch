@@ -1,12 +1,27 @@
 from __future__ import annotations
 
+import hmac
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from doc_checker import service
+from doc_checker.config import get_settings
 from doc_checker.manifest import ManifestNotFoundError, get_manifest, list_manifests
+
+
+def _require_upload_token(x_upload_token: Optional[str] = Header(default=None)) -> None:
+    """Optional shared-secret gate for the write endpoints.
+
+    Enforced only when DOC_CHECKER_UPLOAD_TOKEN is configured; otherwise the
+    endpoints stay open for local development.
+    """
+    expected = get_settings().upload_token
+    if expected is None:
+        return
+    if not x_upload_token or not hmac.compare_digest(x_upload_token, expected):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Missing or invalid upload token")
 
 
 router = APIRouter()
@@ -62,14 +77,14 @@ class StatusResponse(BaseModel):
     updated_at: Optional[str]
 
 
-@router.post("/start-submission", response_model=StartSubmissionResponse)
+@router.post("/start-submission", response_model=StartSubmissionResponse, dependencies=[Depends(_require_upload_token)])
 def start_submission(payload: StartSubmissionPayload | None = None) -> StartSubmissionResponse:
     payload = payload or StartSubmissionPayload()
     record = service.start_submission(payload.opportunity_id)
     return StartSubmissionResponse(submission_id=record["submission_id"], opportunity_id=record.get("opportunity_id"))
 
 
-@router.post("/upload-url", response_model=UploadUrlResponse)
+@router.post("/upload-url", response_model=UploadUrlResponse, dependencies=[Depends(_require_upload_token)])
 def create_upload_url(payload: UploadUrlPayload) -> UploadUrlResponse:
     if not payload.requirement_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="requirement_id is required to track checklist status")
