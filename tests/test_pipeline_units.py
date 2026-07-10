@@ -51,9 +51,9 @@ class TestNormalizeRecords:
 class TestDateFilter:
     def test_none_and_old_dates_are_dropped(self, monkeypatch):
         monkeypatch.setenv("GRANTS_GOV_LOOKBACK_DAYS", "90")
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
 
-        recent = (datetime.utcnow() - timedelta(days=5)).strftime("%m/%d/%Y")
+        recent = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%m/%d/%Y")
         records = [
             {"POSTED_DATE": None},
             {"POSTED_DATE": ""},
