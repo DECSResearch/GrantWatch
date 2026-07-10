@@ -17,7 +17,7 @@ load_dotenv()
 from doc_checker.config import get_settings
 from .document_checker_routes import router as document_checker_router
 
-from grants.sql_utils import add_subscription, available_subscription_fields, get_connection
+from grants.sql_utils import add_subscription, available_subscription_fields, db_connection
 
 settings = get_settings()
 
@@ -725,12 +725,12 @@ def get_grants(
     """
 
     try:
-        with get_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        with db_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(query, params)
             rows = cur.fetchall()
     except Exception as exc:
         logger.exception("Database query failed when fetching grants")
-        raise HTTPException(status_code=500, detail=f"Database query failed: {exc}") from exc
+        raise HTTPException(status_code=500, detail="Database query failed while fetching grants.") from exc
 
     results = []
     for row in rows:
@@ -779,7 +779,11 @@ def create_subscription(payload: SubscriptionPayload) -> Dict[str, Dict[str, str
     if not field_key:
         raise HTTPException(status_code=400, detail="Field selection is required.")
 
-    available = {key.lower(): (label or key) for key, label in available_subscription_fields(limit=500)}
+    try:
+        available = {key.lower(): (label or key) for key, label in available_subscription_fields(limit=500)}
+    except Exception as exc:
+        logger.exception("Database query failed when validating subscription field")
+        raise HTTPException(status_code=500, detail="Database query failed while saving the subscription.") from exc
     label = available.get(field_key)
     if not label:
         if field_key in {"concept", "full"}:
