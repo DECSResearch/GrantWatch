@@ -7,7 +7,7 @@ load_dotenv()
 
 from grants_data.pipeline import onlyTheGoodStuff
 from notifications.gmail_notifier import notify_grant_release
-from sql_utils import fetch_upcoming
+from grants.sql_utils import fetch_upcoming
 
 
 def _print_upcoming(stage: str, days: int) -> None:

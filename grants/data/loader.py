@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List
 
 from notifications.gmail_notifier import send_grant_notification
-from sql_utils import get_connection, get_subscribers_for_fields
+from grants.sql_utils import get_connection, get_subscribers_for_fields
 
 from logs.status_logger import logger
 
