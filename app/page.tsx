@@ -143,7 +143,7 @@ export default function Page() {
 
   useEffect(() => {
     setError(null);
-    jsonFetch<ManifestResponse>(`${API_BASE}/manifest?opportunity_id=${opportunityId}`)
+    jsonFetch<ManifestResponse>(`${API_BASE}/manifest?opportunity_id=${encodeURIComponent(opportunityId)}`)
       .then(setManifest)
       .catch((err) => setError(err.message));
   }, [opportunityId]);
@@ -154,13 +154,40 @@ export default function Page() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [submissionId]);
 
-  const refreshStatus = async (id: string) => {
+  const refreshStatus = async (id: string): Promise<StatusResponse | null> => {
     try {
-      const data = await jsonFetch<StatusResponse>(`${API_BASE}/status/${id}`);
+      const data = await jsonFetch<StatusResponse>(`${API_BASE}/status/${encodeURIComponent(id)}`);
       setStatus(data);
+      // Keep the opportunity selector consistent with a submission restored
+      // from localStorage after a reload.
+      if (data.opportunity_id && data.opportunity_id !== opportunityId) {
+        setOpportunityId(data.opportunity_id);
+      }
+      return data;
     } catch (err) {
       setError((err as Error).message);
+      return null;
     }
+  };
+
+  // Validation is event-driven (S3 -> Lambda), so poll briefly after an
+  // upload instead of showing a permanently "Pending" row.
+  const pollStatus = async (id: string, requirementId: string) => {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      const data = await refreshStatus(id);
+      const entry = data?.files.find((file) => file.requirement_id === requirementId);
+      if (entry && entry.status !== "pending") return;
+    }
+  };
+
+  const handleOpportunityChange = (nextOpportunityId: string) => {
+    if (nextOpportunityId === opportunityId) return;
+    // A submission belongs to one opportunity; starting fresh prevents files
+    // from validating against the wrong manifest.
+    setOpportunityId(nextOpportunityId);
+    setSubmissionId(null);
+    setStatus(null);
   };
 
   const handleStart = async (): Promise<string | null> => {
@@ -214,6 +241,7 @@ export default function Page() {
         setUploading((current) => ({ ...current, [requirementId]: progress }));
       });
       await refreshStatus(descriptor.submission_id);
+      void pollStatus(descriptor.submission_id, requirementId);
       setTimeout(() => {
         setUploading((current) => {
           const next = { ...current };
@@ -247,7 +275,7 @@ export default function Page() {
               <span>Opportunity</span>
               <select
                 value={opportunityId}
-                onChange={(event) => setOpportunityId(event.target.value)}
+                onChange={(event) => handleOpportunityChange(event.target.value)}
                 style={{ padding: "0.5rem", minWidth: "240px" }}
               >
                 {opportunityOptions.map(([id, item]) => (
@@ -271,7 +299,7 @@ export default function Page() {
               disabled={!submissionId}
               style={{ alignSelf: "flex-end", padding: "0.6rem 1.2rem" }}
             >
-              Run Checks
+              Refresh Status
             </button>
           </div>
           {submissionId && (
