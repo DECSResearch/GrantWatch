@@ -1,13 +1,13 @@
-psycopg2-binary
-requests
-google-api-python-client
-google-auth
-google-auth-oauthlib
-python-dotenv
+psycopg2-binary==2.9.12
+requests==2.34.2
+google-api-python-client==2.198.0
+google-auth==2.55.2
+google-auth-oauthlib==1.4.0
+python-dotenv==1.2.2
 
-fastapi
-uvicorn
-email-validator
-boto3
-PyYAML
-pdfplumber
+fastapi==0.139.0
+uvicorn==0.51.0
+email-validator==2.3.0
+boto3==1.43.45
+PyYAML==6.0.3
+pdfplumber==0.11.10
