@@ -1,4 +1,30 @@
-﻿# Grants.gov Document Checker
+﻿# GrantWatch
+
+## Grants Data Pipeline
+
+`grants_data/pipeline.py` downloads Grants.gov opportunities, filters them by
+date/status/keywords, summarizes descriptions with an LLM, writes a CSV, and
+loads Postgres. Two data sources are supported via `GRANTS_DATA_SOURCE`:
+
+- `export` (default): the search_export JSON endpoint, capped at
+  `GRANTS_GOV_ROWS` (5000) records.
+- `extract`: the full daily XML database extract — every posted and
+  forecasted opportunity (~82k records, ~75 MB zip → ~300 MB XML), no cap.
+
+The extract is published every morning at
+`https://prod-grants-gov-chatbot.s3.amazonaws.com/extracts/GrantsDBExtractYYYYMMDDv2.zip`.
+`grants_data/download_extract.py` finds the newest available day (falling back
+up to `GRANTS_GOV_EXTRACT_LOOKBACK_DAYS`), streams the zip into
+`grants_data/grants_xml_data/`, and unzips it; `grants_data/parse_extract.py`
+stream-parses the XML into the same record shape the JSON export produces, so
+all downstream filters work with either source.
+
+```bash
+# one-off: download, unzip, and parse today's full extract
+GRANTS_DATA_SOURCE=extract python -c "from grants_data.pipeline import onlyTheGoodStuff; onlyTheGoodStuff()"
+```
+
+# Grants.gov Document Checker
 
 Temporary document validation pipeline where applicants upload opportunity-specific files. Uploads land in an encrypted S3 bucket, a Lambda function validates them, and a DynamoDB entry tracks checklist status surfaced through the FastAPI backend and Next.js UI.
 
