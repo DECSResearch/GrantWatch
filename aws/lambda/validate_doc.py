@@ -5,7 +5,8 @@ import json
 import logging
 import os
 import re
-from typing import Dict, List
+from typing import Dict, List, Tuple
+from urllib.parse import unquote_plus
 
 import boto3
 import pdfplumber
@@ -25,18 +26,38 @@ _ENABLE_TEXTRACT = os.getenv("DOC_CHECKER_ENABLE_TEXTRACT", "false").lower() in 
 
 
 def handler(event, _context):
-    records = event.get("Records", [])
-    for record in records:
+    objects = _extract_object_events(event)
+    if not objects:
+        logger.warning("Event contained no recognizable S3 object references: %s", json.dumps(event)[:1000])
+    processed = 0
+    for bucket, key in objects:
         try:
-            _process_record(record)
+            _process_object(bucket, key)
+            processed += 1
         except Exception as exc:  # pylint: disable=broad-except
-            logger.exception("Failed to process record: %s", exc)
-    return {"processed": len(records)}
+            logger.exception("Failed to process s3://%s/%s: %s", bucket, key, exc)
+    return {"processed": processed}
 
 
-def _process_record(record: Dict) -> None:
-    bucket = record["s3"]["bucket"]["name"]
-    key = record["s3"]["object"]["key"]
+def _extract_object_events(event: Dict) -> List[Tuple[str, str]]:
+    """Yield (bucket, key) pairs from EventBridge or legacy S3 notification events."""
+    detail = event.get("detail") or {}
+    if detail.get("bucket") and detail.get("object"):
+        # EventBridge "Object Created" event; keys are NOT URL-encoded here
+        return [(detail["bucket"]["name"], detail["object"]["key"])]
+
+    pairs: List[Tuple[str, str]] = []
+    for record in event.get("Records", []):
+        s3_info = record.get("s3") or {}
+        bucket = (s3_info.get("bucket") or {}).get("name")
+        key = (s3_info.get("object") or {}).get("key")
+        if bucket and key:
+            # S3 notification keys ARE URL-encoded
+            pairs.append((bucket, unquote_plus(key)))
+    return pairs
+
+
+def _process_object(bucket: str, key: str) -> None:
     submission_id, requirement_id, filename = _parse_key(key)
     if not submission_id:
         logger.warning("Skipping key without submission id: %s", key)
@@ -70,7 +91,11 @@ def _process_record(record: Dict) -> None:
 
     head = s3.head_object(Bucket=bucket, Key=key)
     size_bytes = head.get("ContentLength", 0)
-    content_type = head.get("ContentType") or submission.get("files", {}).get(requirement_id, {}).get("content_type") or "application/octet-stream"
+    stored_file = submission.get("files", {}).get(requirement_id, {})
+    content_type = head.get("ContentType") or stored_file.get("content_type") or "application/octet-stream"
+    # The S3 key segment is "<timestamp>-<sanitized-name>"; validate the
+    # original filename the client declared, not the mangled key.
+    original_filename = stored_file.get("filename") or filename
 
     status = "valid"
     messages: List[str] = []
@@ -79,9 +104,9 @@ def _process_record(record: Dict) -> None:
     max_bytes = int(requirement.get("max_mb", settings.default_max_mb)) * 1024 * 1024
     max_pages = int(requirement.get("max_pages", settings.default_max_pages))
 
-    if regex and not re.match(regex, filename):
+    if regex and not re.match(regex, original_filename):
         status = "invalid"
-        messages.append(f"Filename '{filename}' does not match required pattern")
+        messages.append(f"Filename '{original_filename}' does not match required pattern")
 
     if allowed_types and content_type not in allowed_types:
         status = "invalid"
@@ -93,9 +118,11 @@ def _process_record(record: Dict) -> None:
 
     page_count = None
     extracted_text = ""
-    is_pdf = filename.lower().endswith(".pdf") or content_type == "application/pdf"
+    is_pdf = original_filename.lower().endswith(".pdf") or content_type == "application/pdf"
 
-    if is_pdf:
+    if is_pdf and size_bytes > max_bytes:
+        messages.append("Content checks skipped because the file exceeds the size limit")
+    elif is_pdf:
         obj = s3.get_object(Bucket=bucket, Key=key)
         data = obj["Body"].read()
         try:
@@ -152,9 +179,25 @@ def _recalculate_overall(submission_id: str) -> None:
 
     files = record.get("files", {})
     statuses = [data.get("status", "pending") for data in files.values()]
+
+    required_ids: List[str] = []
+    opportunity_id = record.get("opportunity_id")
+    if opportunity_id:
+        try:
+            manifest = get_manifest(opportunity_id)
+            required_ids = [
+                doc.get("id")
+                for doc in manifest.get("documents", [])
+                if doc.get("id") and doc.get("required", True)
+            ]
+        except ManifestNotFoundError:
+            required_ids = []
+
+    missing_required = [req_id for req_id in required_ids if req_id not in files]
+
     if any(status in {"invalid", "error"} for status in statuses):
         overall = "needs_review"
-    elif statuses and all(status == "valid" for status in statuses):
+    elif statuses and all(status == "valid" for status in statuses) and not missing_required:
         overall = "passed"
     else:
         overall = "pending"

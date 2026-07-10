@@ -81,6 +81,8 @@ def create_upload_url(payload: UploadUrlPayload) -> UploadUrlResponse:
             content_type=payload.contentType,
             opportunity_id=payload.opportunity_id,
         )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except ManifestNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Manifest not found for opportunity: {exc}") from exc
     except RuntimeError as exc:

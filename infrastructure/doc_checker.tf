@@ -73,10 +73,19 @@ resource "aws_s3_bucket_lifecycle_configuration" "grant_doc_checker" {
     id     = "expire-temp-objects"
     status = "Enabled"
 
+    filter {}
+
     expiration {
       days = 2
     }
   }
+}
+
+# Without this, S3 never publishes events to EventBridge and the
+# object-created rule below can never fire.
+resource "aws_s3_bucket_notification" "grant_doc_checker" {
+  bucket      = aws_s3_bucket.grant_doc_checker.id
+  eventbridge = true
 }
 
 resource "aws_s3_bucket_cors_configuration" "grant_doc_checker" {
@@ -177,7 +186,7 @@ resource "aws_iam_role_policy" "lambda_policy" {
       },
       {
         Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:HeadObject"]
+        Action   = ["s3:GetObject"]
         Resource = "${aws_s3_bucket.grant_doc_checker.arn}/*"
       },
       {

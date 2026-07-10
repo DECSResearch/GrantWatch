@@ -23,6 +23,7 @@ settings = get_settings()
 _dynamodb = boto3.resource("dynamodb", region_name=settings.region_name) if settings.table_name else None
 _s3 = boto3.client("s3", region_name=settings.region_name) if settings.bucket_name else None
 _slug_pattern = re.compile(r"[^A-Za-z0-9_.-]+")
+_requirement_id_pattern = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 def _table():
@@ -113,7 +114,9 @@ def update_submission(submission_id: str, updates: Dict[str, Any]) -> None:
         set_expr.append(f"{placeholder} = {value_placeholder}")
 
     set_expr.append("updated_at = :updated")
-    set_expr.append("ttl = :ttl")
+    # "ttl" is a DynamoDB reserved word and must be aliased
+    set_expr.append("#ttl = :ttl")
+    attr_names["#ttl"] = "ttl"
 
     table.update_item(
         Key={"submission_id": submission_id},
@@ -132,6 +135,11 @@ def generate_presigned_upload(
 ) -> Dict[str, Any]:
     if not _s3 or not settings.bucket_name:
         raise RuntimeError("DOC_CHECKER_BUCKET is not configured")
+
+    if not _requirement_id_pattern.match(requirement_id):
+        raise ValueError(
+            "requirement_id may only contain letters, digits, hyphens, and underscores"
+        )
 
     submission = ensure_submission(submission_id, opportunity_id)
     manifest = None
@@ -168,8 +176,8 @@ def generate_presigned_upload(
     table = _table()
     table.update_item(
         Key={"submission_id": submission["submission_id"]},
-        UpdateExpression="SET files.#req = :file, overall = if_not_exists(overall, :pending), ttl = :ttl, updated_at = :updated",
-        ExpressionAttributeNames={"#req": requirement_id},
+        UpdateExpression="SET files.#req = :file, overall = if_not_exists(overall, :pending), #ttl = :ttl, updated_at = :updated",
+        ExpressionAttributeNames={"#req": requirement_id, "#ttl": "ttl"},
         ExpressionAttributeValues={
             ":file": placeholder,
             ":pending": "pending",
@@ -232,8 +240,8 @@ def update_file_status(
     table = _table()
     now = _now_iso()
     ttl = _ttl_epoch()
-    expr = "SET files.#req.#status = :status, files.#req.#messages = :messages, updated_at = :updated, ttl = :ttl"
-    attr_names = {"#req": requirement_id, "#status": "status", "#messages": "messages"}
+    expr = "SET files.#req.#status = :status, files.#req.#messages = :messages, updated_at = :updated, #ttl = :ttl"
+    attr_names = {"#req": requirement_id, "#status": "status", "#messages": "messages", "#ttl": "ttl"}
     attr_values = {":status": status, ":messages": messages or [], ":updated": now, ":ttl": ttl}
 
     if extra:
