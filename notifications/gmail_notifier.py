@@ -28,14 +28,24 @@ def _load_credentials() -> Credentials | None:
         logger("error", f"Gmail token file not found at {path}")
         return None
 
-    creds = Credentials.from_authorized_user_file(str(path), scopes=_SCOPES)
+    try:
+        creds = Credentials.from_authorized_user_file(str(path), scopes=_SCOPES)
+    except Exception as exc:
+        logger("error", f"Gmail token file at {path} is unreadable or malformed: {exc}")
+        return None
+
     if creds.expired and creds.refresh_token:
         try:
             creds.refresh(Request())
-            path.write_text(creds.to_json(), encoding="utf-8")
-        except Exception as exc:  # pragma: no cover - network/IO heavy
+        except Exception as exc:  # pragma: no cover - network heavy
             logger("error", f"Failed to refresh Gmail token: {exc}")
             return None
+        # Persisting the refreshed token is best-effort; the in-memory
+        # credentials are valid even if the write fails.
+        try:
+            path.write_text(creds.to_json(), encoding="utf-8")
+        except OSError as exc:
+            logger("warning", f"Could not persist refreshed Gmail token: {exc}")
 
     if not creds.valid:
         logger("error", "Loaded Gmail credentials are invalid; cannot send email")
