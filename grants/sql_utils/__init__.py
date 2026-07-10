@@ -1,4 +1,5 @@
 import os
+from contextlib import contextmanager
 from typing import Any, Dict, Iterable, List, Tuple, Optional
 
 import psycopg2
@@ -65,6 +66,21 @@ def get_connection():
     return psycopg2.connect(**_connection_kwargs())
 
 
+@contextmanager
+def db_connection():
+    """Connection that commits/rolls back like ``with conn`` but also closes.
+
+    psycopg2's ``with conn`` only ends the transaction; without an explicit
+    close every serverless request leaks a TLS connection to the database.
+    """
+    conn = get_connection()
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
+
 
 def _normalise(value: str) -> str:
     return value.strip().lower()
@@ -104,7 +120,7 @@ def available_subscription_fields(limit: int = 200) -> List[Tuple[str, str]]:
         LIMIT %s;
     """
 
-    with get_connection() as conn, conn.cursor() as cur:
+    with db_connection() as conn, conn.cursor() as cur:
         cur.execute(query, (limit,))
         return [(row[0], row[1]) for row in cur.fetchall()]
 
@@ -123,7 +139,7 @@ def add_subscription(email: str, field: str) -> bool:
         DO UPDATE SET created_at = NOW();
     """
 
-    with get_connection() as conn, conn.cursor() as cur:
+    with db_connection() as conn, conn.cursor() as cur:
         cur.execute(query, (email_clean, field_clean))
         return cur.rowcount > 0
 
@@ -140,7 +156,7 @@ def get_subscribers_for_fields(fields: Iterable[str]) -> Dict[str, List[str]]:
         WHERE field = ANY(%s);
     """
 
-    with get_connection() as conn, conn.cursor() as cur:
+    with db_connection() as conn, conn.cursor() as cur:
         cur.execute(query, (list(normalised),))
         rows = cur.fetchall()
 
@@ -166,6 +182,6 @@ def fetch_upcoming(stage=None, days=30):
 
     query += " ORDER BY close_date;"
 
-    with get_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+    with db_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(query, params)
         return cur.fetchall()

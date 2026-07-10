@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List
 
 from notifications.gmail_notifier import send_grant_notification
-from grants.sql_utils import get_connection, get_subscribers_for_fields
+from grants.sql_utils import db_connection, get_subscribers_for_fields
 
 from logs.status_logger import logger
 
@@ -201,7 +201,7 @@ def load_grants_from_records(records: Iterable[Dict[str, Any]]) -> int:
     field_grants: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     field_labels: Dict[str, str] = {}
 
-    with get_connection() as conn, conn.cursor() as cur:
+    with db_connection() as conn, conn.cursor() as cur:
         for grant in records:
             record = _legacy_to_record(grant)
             opp_id = record.get("OPPORTUNITY_NUMBER")
@@ -225,7 +225,17 @@ def load_grants_from_records(records: Iterable[Dict[str, Any]]) -> int:
                                     opportunity_category, funding_categories,
                                     post_date, close_date, archive_date, description)
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                ON CONFLICT (opp_id) DO NOTHING;
+                ON CONFLICT (opp_id) DO UPDATE SET
+                    title = EXCLUDED.title,
+                    stage = EXCLUDED.stage,
+                    opportunity_status = EXCLUDED.opportunity_status,
+                    opportunity_category = EXCLUDED.opportunity_category,
+                    funding_categories = EXCLUDED.funding_categories,
+                    post_date = EXCLUDED.post_date,
+                    close_date = EXCLUDED.close_date,
+                    archive_date = EXCLUDED.archive_date,
+                    description = EXCLUDED.description
+                RETURNING (xmax = 0) AS is_new;
                 """,
                 (
                     opp_id,
@@ -240,8 +250,10 @@ def load_grants_from_records(records: Iterable[Dict[str, Any]]) -> int:
                     description,
                 ),
             )
-            if cur.rowcount:
-                inserted += cur.rowcount
+            row = cur.fetchone()
+            is_new = bool(row and row[0])
+            if is_new:
+                inserted += 1
                 for key, label in _extract_fields(opportunity_category, funding_categories):
                     field_labels.setdefault(key, label)
                     field_grants[key].append(
