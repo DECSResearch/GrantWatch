@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -9,10 +10,12 @@ from typing import Dict, List, Tuple
 from grants.data.loader import load_grants_from_records
 
 from grants_data.date_filter_data import date_filter_json_data
+from grants_data.download_extract import gen_extract
 from grants_data.download_json import gen_grants
 from grants_data.filter_with_forecast import filter_forecasted_data
 from grants_data.get_file_path import get_latest_file_path
 from grants_data.get_json_data import process_json_data
+from grants_data.parse_extract import process_extract_xml
 from grants_data.keyword_filter_data import filter_grants_by_keywords
 from llm_utils.gpt_summarizer import description_summarizer
 from llm_utils.keywords_gen import keyword_extractor
@@ -87,12 +90,27 @@ def _sort_key(record: Dict[str, object]) -> Tuple[datetime, str]:
     return _parse_sort_date(record.get("POSTED_DATE")), str(record.get("OPPORTUNITY_NUMBER", ""))
 
 
-def onlyTheGoodStuff() -> Tuple[bool, List[Dict[str, object]]]:
-    success = gen_grants()
-    if not success:
+def _load_source_records() -> List[Dict[str, object]]:
+    """Fetch raw records from the configured source.
+
+    ``GRANTS_DATA_SOURCE=extract`` downloads and parses the full daily XML
+    database extract (every opportunity, no row cap); the default ``export``
+    keeps the existing search_export JSON flow.
+    """
+    source = os.getenv("GRANTS_DATA_SOURCE", "export").strip().lower()
+
+    if source == "extract":
+        if not gen_extract():
+            logger("error", "Failed to download the XML database extract.")
+            return []
+        return process_extract_xml(gen_extract.last_extract_path)
+
+    if source != "export":
+        logger("warning", f"Unknown GRANTS_DATA_SOURCE '{source}'; falling back to 'export'")
+
+    if not gen_grants():
         logger("error", "Failed to generate grants data.")
-        onlyTheGoodStuff.last_csv_path = None  # type: ignore[attr-defined]
-        return success, []
+        return []
 
     latest_file_path = getattr(gen_grants, "last_download_path", None)
     if latest_file_path is None:
@@ -100,10 +118,13 @@ def onlyTheGoodStuff() -> Tuple[bool, List[Dict[str, object]]]:
 
     if latest_file_path is None:
         logger("error", "No latest file path found.")
-        onlyTheGoodStuff.last_csv_path = None  # type: ignore[attr-defined]
-        return False, []
+        return []
 
-    whole_json_data = process_json_data(latest_file_path)
+    return process_json_data(latest_file_path)
+
+
+def onlyTheGoodStuff() -> Tuple[bool, List[Dict[str, object]]]:
+    whole_json_data = _load_source_records()
     length_initial = len(whole_json_data)
     if length_initial == 0:
         logger("error", "Failed to process JSON data.")
