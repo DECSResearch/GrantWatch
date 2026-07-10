@@ -6,7 +6,6 @@ import time
 import uuid
 from decimal import Decimal
 from typing import Any, Dict, Optional
-from urllib.parse import quote
 
 import boto3
 from botocore.exceptions import ClientError
@@ -33,7 +32,7 @@ def _table():
 
 
 def _now_iso() -> str:
-    return dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0, tzinfo=None).isoformat() + "Z"
 
 
 def _ttl_epoch() -> int:

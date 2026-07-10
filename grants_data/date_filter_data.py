@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
 from logs.status_logger import logger
@@ -34,7 +34,8 @@ def date_filter_json_data(records: List[Dict[str, object]]) -> List[Dict[str, ob
     except ValueError:
         logger("warning", "Invalid GRANTS_GOV_LOOKBACK_DAYS; defaulting to 90")
         lookback_days = 90
-    cutoff = datetime.utcnow() - timedelta(days=lookback_days)
+    # Naive UTC so it stays comparable with the naive parsed record dates.
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=lookback_days)
 
     filtered: List[Dict[str, object]] = []
     for record in records:

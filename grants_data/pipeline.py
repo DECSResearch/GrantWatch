@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import csv
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -47,7 +47,7 @@ def _serialise_value(value: object) -> str:
 
 def _write_csv(records: List[Dict[str, object]]) -> Path:
     destination_dir = _ensure_csv_dir()
-    timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     destination = destination_dir / f"grants_{timestamp}.csv"
 
     fieldnames = [

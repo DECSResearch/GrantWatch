@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -84,7 +84,7 @@ def _build_payload(rows: int) -> Dict[str, Any]:
 
 def _write_output(records: list[dict[str, Any]]) -> Path:
     _DATA_DIR.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     destination = _DATA_DIR / f"grants_{timestamp}.json"
     with destination.open("w", encoding="utf-8") as fp:
         json.dump(records, fp, ensure_ascii=False, indent=2)
