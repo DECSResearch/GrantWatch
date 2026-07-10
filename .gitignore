@@ -189,3 +189,6 @@ aws/dist/
 grants_data/grants_xml_data/
 grants_data/grants_json_data/
 grants_data/grants_csv_data/
+
+# TypeScript incremental build artifact
+tsconfig.tsbuildinfo
