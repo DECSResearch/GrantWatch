@@ -17,7 +17,7 @@ load_dotenv()
 from doc_checker.config import get_settings
 from .document_checker_routes import router as document_checker_router
 
-from sql_utils import add_subscription, available_subscription_fields, get_connection
+from grants.sql_utils import add_subscription, available_subscription_fields, get_connection
 
 settings = get_settings()
 
@@ -216,13 +216,73 @@ INDEX_HTML = """
         border: 1px dashed rgba(148, 163, 184, 0.35);
         color: #94a3b8;
       }
+      .results-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+        color: #94a3b8;
+        font-size: 0.95rem;
+      }
+      .results-head strong {
+        color: #f1f5f9;
+        font-size: 1.05rem;
+      }
+      .link-button, .read-more {
+        background: none;
+        border: none;
+        box-shadow: none;
+        color: #38bdf8;
+        cursor: pointer;
+        font-size: 0.9rem;
+        font-weight: 500;
+        padding: 0;
+        justify-self: start;
+      }
+      .link-button:hover, .read-more:hover {
+        box-shadow: none;
+        transform: none;
+        color: #7dd3fc;
+        text-decoration: underline;
+      }
+      .card h2 a {
+        color: inherit;
+        text-decoration: none;
+      }
+      .card h2 a:hover {
+        color: #7dd3fc;
+        text-decoration: underline;
+      }
+      .badges {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+      .badge {
+        border-radius: 999px;
+        padding: 0.25rem 0.75rem;
+        font-size: 0.78rem;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+      }
+      .badge.stage { background: rgba(56, 189, 248, 0.16); color: #7dd3fc; }
+      .badge.due-soon { background: rgba(248, 113, 113, 0.18); color: #fca5a5; }
+      .badge.due-month { background: rgba(250, 204, 21, 0.16); color: #fde047; }
+      .badge.due-later { background: rgba(74, 222, 128, 0.15); color: #86efac; }
+      .badge.due-none { background: rgba(148, 163, 184, 0.18); color: #cbd5e1; }
+      .description {
+        color: #cbd5f5;
+        line-height: 1.55;
+        margin: 0;
+      }
     </style>
   </head>
   <body>
     <main class=\"page\">
       <header>
-        <h1>GrantWatch Filter</h1>
-        <p>Quickly explore Concept and Full proposals by due date.</p>
+        <h1>GrantWatch</h1>
+        <p>Browse posted federal funding opportunities. Filter by proposal stage and due date &mdash; results update as you change filters.</p>
       </header>
       <section class=\"filters\">
         <label>
@@ -263,11 +323,20 @@ INDEX_HTML = """
         <p class=\"feedback\" id=\"subscriptionFeedback\" role=\"status\" aria-live=\"polite\"></p>
       </section>
 
+      <div class=\"results-head\">
+        <span id=\"resultCount\" role=\"status\" aria-live=\"polite\"></span>
+        <button type=\"button\" id=\"clearBtn\" class=\"link-button\">Clear filters</button>
+      </div>
       <section class=\"results\" id=\"results\"></section>
     </main>
     <script>
       const resultsEl = document.getElementById('results');
       const submitBtn = document.getElementById('submitBtn');
+      const resultCountEl = document.getElementById('resultCount');
+      const clearBtn = document.getElementById('clearBtn');
+      const stageEl = document.getElementById('stage');
+      const dueFromEl = document.getElementById('dueFrom');
+      const dueToEl = document.getElementById('dueTo');
 
       const subscriptionForm = document.getElementById('subscriptionForm');
       const subscriptionEmail = document.getElementById('subscriptionEmail');
@@ -275,31 +344,160 @@ INDEX_HTML = """
       const subscriptionFeedback = document.getElementById('subscriptionFeedback');
       const subscriptionSubmit = document.getElementById('subscriptionSubmit');
 
+      function parseDateOnly(value) {
+        if (!value) return null;
+        const parts = String(value).slice(0, 10).split('-').map(Number);
+        if (parts.length !== 3 || parts.some(Number.isNaN)) return null;
+        return new Date(parts[0], parts[1] - 1, parts[2]);
+      }
+
       function formatDate(value) {
-        if (!value) return 'N/A';
-        const date = new Date(value);
+        const date = parseDateOnly(value);
+        if (!date) return 'N/A';
         return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
       }
 
+      function stripHtml(value) {
+        if (!value) return '';
+        const doc = new DOMParser().parseFromString(value, 'text/html');
+        return (doc.body.textContent || '').replace(/[\\s]+/g, ' ').trim();
+      }
+
+      function dueBadge(closeDate) {
+        const badge = document.createElement('span');
+        badge.className = 'badge';
+        const date = parseDateOnly(closeDate);
+        if (!date) {
+          badge.classList.add('due-none');
+          badge.textContent = 'No deadline listed';
+          return badge;
+        }
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const days = Math.round((date - today) / 86400000);
+        if (days < 0) {
+          badge.classList.add('due-none');
+          badge.textContent = `Closed ${formatDate(closeDate)}`;
+        } else if (days === 0) {
+          badge.classList.add('due-soon');
+          badge.textContent = 'Due today';
+        } else if (days <= 7) {
+          badge.classList.add('due-soon');
+          badge.textContent = `Due in ${days} day${days === 1 ? '' : 's'}`;
+        } else if (days <= 30) {
+          badge.classList.add('due-month');
+          badge.textContent = `Due in ${days} days`;
+        } else {
+          badge.classList.add('due-later');
+          badge.textContent = `Due ${formatDate(closeDate)}`;
+        }
+        return badge;
+      }
+
+      function buildCard(grant) {
+        const card = document.createElement('article');
+        card.className = 'card';
+
+        const title = document.createElement('h2');
+        const link = document.createElement('a');
+        link.textContent = grant.title || 'Untitled opportunity';
+        link.href = `https://www.grants.gov/search-grants?query=${encodeURIComponent(grant.opp_id || grant.title || '')}`;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.title = 'Open on Grants.gov';
+        title.appendChild(link);
+        card.appendChild(title);
+
+        const badges = document.createElement('div');
+        badges.className = 'badges';
+        badges.appendChild(dueBadge(grant.close_date));
+        if (grant.stage) {
+          const stageBadge = document.createElement('span');
+          stageBadge.className = 'badge stage';
+          stageBadge.textContent = grant.stage === 'concept' ? 'Concept stage' : 'Full proposal';
+          badges.appendChild(stageBadge);
+        }
+        card.appendChild(badges);
+
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        const metaItems = [
+          ['Posted', formatDate(grant.post_date)],
+          ['Closes', formatDate(grant.close_date)],
+          ['ID', grant.opp_id || 'N/A'],
+        ];
+        if (grant.opportunity_category) metaItems.push(['Category', grant.opportunity_category]);
+        metaItems.forEach(item => {
+          const span = document.createElement('span');
+          const strong = document.createElement('strong');
+          strong.textContent = item[0] + ': ';
+          span.appendChild(strong);
+          span.appendChild(document.createTextNode(item[1]));
+          meta.appendChild(span);
+        });
+        card.appendChild(meta);
+
+        if (grant.funding_categories) {
+          const fields = document.createElement('p');
+          fields.className = 'description';
+          const strong = document.createElement('strong');
+          strong.textContent = 'Fields: ';
+          fields.appendChild(strong);
+          fields.appendChild(document.createTextNode(grant.funding_categories));
+          card.appendChild(fields);
+        }
+
+        const fullText = stripHtml(grant.description) || 'No description provided.';
+        const desc = document.createElement('p');
+        desc.className = 'description';
+        const LIMIT = 320;
+        if (fullText.length > LIMIT) {
+          const short = fullText.slice(0, LIMIT).trimEnd() + '…';
+          desc.textContent = short;
+          card.appendChild(desc);
+          const toggle = document.createElement('button');
+          toggle.type = 'button';
+          toggle.className = 'read-more';
+          toggle.textContent = 'Read more';
+          let expanded = false;
+          toggle.addEventListener('click', () => {
+            expanded = !expanded;
+            desc.textContent = expanded ? fullText : short;
+            toggle.textContent = expanded ? 'Show less' : 'Read more';
+          });
+          card.appendChild(toggle);
+        } else {
+          desc.textContent = fullText;
+          card.appendChild(desc);
+        }
+
+        return card;
+      }
+
+      function setResultCount(text, count) {
+        if (!resultCountEl) return;
+        resultCountEl.innerHTML = '';
+        if (count !== undefined) {
+          const strong = document.createElement('strong');
+          strong.textContent = count >= 200 ? '200+' : String(count);
+          resultCountEl.appendChild(strong);
+          resultCountEl.appendChild(document.createTextNode(count === 1 ? ' grant found' : ' grants found'));
+        } else {
+          resultCountEl.textContent = text || '';
+        }
+      }
+
       function renderGrants(grants) {
+        resultsEl.innerHTML = '';
+        setResultCount('', grants.length);
         if (!grants.length) {
-          resultsEl.innerHTML = '<div class="empty">No grants found for the selected filters.</div>';
+          const empty = document.createElement('div');
+          empty.className = 'empty';
+          empty.textContent = 'No grants match these filters. Try widening the date range or clearing filters.';
+          resultsEl.appendChild(empty);
           return;
         }
-        resultsEl.innerHTML = grants.map(grant => `
-          <article class=\"card\">
-            <h2>${grant.title}</h2>
-            <div class=\"meta\">
-              <span><strong>Stage:</strong> ${grant.stage}</span>
-              <span><strong>Status:</strong> ${grant.opportunity_status}</span>
-              <span><strong>Due:</strong> ${formatDate(grant.close_date)}</span>
-              <span><strong>Posted:</strong> ${formatDate(grant.post_date)}</span>
-              ${grant.opportunity_category ? `<span><strong>Category:</strong> ${grant.opportunity_category}</span>` : ''}
-            </div>
-            ${grant.funding_categories ? `<p><strong>Fields:</strong> ${grant.funding_categories}</p>` : ''}
-            <p>${grant.description || 'No description provided.'}</p>
-          </article>
-        `).join('');
+        grants.forEach(grant => resultsEl.appendChild(buildCard(grant)));
       }
 
       function setSubscriptionFeedback(state, message) {
@@ -353,10 +551,8 @@ INDEX_HTML = """
 
       async function fetchGrants() {
         if (submitBtn) submitBtn.disabled = true;
+        setResultCount('Searching...');
         resultsEl.innerHTML = '<div class="empty">Loading results...</div>';
-        const stageEl = document.getElementById('stage');
-        const dueFromEl = document.getElementById('dueFrom');
-        const dueToEl = document.getElementById('dueTo');
         const stage = stageEl ? stageEl.value : '';
         const dueFrom = dueFromEl ? dueFromEl.value : '';
         const dueTo = dueToEl ? dueToEl.value : '';
@@ -374,10 +570,28 @@ INDEX_HTML = """
           renderGrants(payload.results || []);
         } catch (error) {
           console.error(error);
-          resultsEl.innerHTML = `<div class="error">Failed to load grants. ${error.message}</div>`;
+          setResultCount('');
+          resultsEl.innerHTML = '';
+          const failure = document.createElement('div');
+          failure.className = 'error';
+          failure.textContent = `Failed to load grants. ${error.message}`;
+          const retry = document.createElement('button');
+          retry.type = 'button';
+          retry.className = 'link-button';
+          retry.textContent = 'Try again';
+          retry.addEventListener('click', fetchGrants);
+          failure.appendChild(document.createElement('br'));
+          failure.appendChild(retry);
+          resultsEl.appendChild(failure);
         } finally {
           if (submitBtn) submitBtn.disabled = false;
         }
+      }
+
+      let fetchTimer = null;
+      function scheduleFetch() {
+        clearTimeout(fetchTimer);
+        fetchTimer = setTimeout(fetchGrants, 250);
       }
 
       async function handleSubscription(event) {
@@ -437,6 +651,19 @@ INDEX_HTML = """
       if (submitBtn) {
         submitBtn.addEventListener('click', fetchGrants);
       }
+
+      if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+          if (stageEl) stageEl.value = '';
+          if (dueFromEl) dueFromEl.value = '';
+          if (dueToEl) dueToEl.value = '';
+          fetchGrants();
+        });
+      }
+
+      [stageEl, dueFromEl, dueToEl].forEach(el => {
+        if (el) el.addEventListener('change', scheduleFetch);
+      });
 
       window.addEventListener('DOMContentLoaded', () => {
         loadSubscriptionFields();
