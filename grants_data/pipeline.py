@@ -15,6 +15,7 @@ from grants_data.download_json import gen_grants
 from grants_data.filter_with_forecast import filter_forecasted_data
 from grants_data.get_file_path import get_latest_file_path
 from grants_data.get_json_data import process_json_data
+from grants_data.normalize import normalize_records
 from grants_data.parse_extract import process_extract_xml
 from grants_data.keyword_filter_data import filter_grants_by_keywords
 from llm_utils.gpt_summarizer import description_summarizer
@@ -124,7 +125,7 @@ def _load_source_records() -> List[Dict[str, object]]:
 
 
 def onlyTheGoodStuff() -> Tuple[bool, List[Dict[str, object]]]:
-    whole_json_data = _load_source_records()
+    whole_json_data = normalize_records(_load_source_records())
     length_initial = len(whole_json_data)
     if length_initial == 0:
         logger("error", "Failed to process JSON data.")

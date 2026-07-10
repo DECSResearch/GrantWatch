@@ -3,13 +3,14 @@ from __future__ import annotations
 
 from typing import Dict, List
 
+from grants_data.normalize import strip_html
 from logs.status_logger import logger
 
 _MAX_SUMMARY_LENGTH = 320
 
 
 def _summarise_text(text: str) -> str:
-    cleaned = " ".join(text.split())
+    cleaned = " ".join(strip_html(text).split())
     if len(cleaned) <= _MAX_SUMMARY_LENGTH:
         return cleaned
     return f"{cleaned[:_MAX_SUMMARY_LENGTH].rstrip()}..."

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, List
 
+from grants_data.normalize import strip_html
 from logs.status_logger import logger
 
 
@@ -17,7 +18,7 @@ def filter_grants_by_keywords(
     filtered: List[Dict[str, object]] = []
 
     for record in records:
-        haystack = str(record.get(field, "")).lower()
+        haystack = strip_html(record.get(field, "")).lower()
         matches = [original for lowered, original in keyword_map.items() if lowered in haystack]
         if len(matches) >= threshold:
             enriched = dict(record)
