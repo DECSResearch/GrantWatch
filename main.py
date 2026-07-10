@@ -7,7 +7,7 @@ load_dotenv()
 
 from grants_data.pipeline import onlyTheGoodStuff
 from notifications.gmail_notifier import notify_grant_release
-from grants.sql_utils import fetch_upcoming
+from grants.sql_utils import ensure_schema, fetch_upcoming
 
 
 def _print_upcoming(stage: str, days: int) -> None:
@@ -26,6 +26,11 @@ def _print_upcoming(stage: str, days: int) -> None:
 
 
 def main() -> None:
+    try:
+        ensure_schema()
+    except Exception as exc:
+        print(f"Warning: could not verify database schema: {exc}")
+
     success, filtered_grants = onlyTheGoodStuff()
     if not success:
         print("Pipeline failed; check logs for details.")

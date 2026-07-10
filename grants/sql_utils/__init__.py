@@ -1,9 +1,12 @@
 import os
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple, Optional
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
+
+_SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
 
 
 _DSN_ENV_VARS = (
@@ -80,6 +83,13 @@ def db_connection():
     finally:
         conn.close()
 
+
+
+def ensure_schema() -> None:
+    """Apply schema.sql (fully idempotent) so fresh databases just work."""
+    sql = _SCHEMA_PATH.read_text(encoding="utf-8")
+    with db_connection() as conn, conn.cursor() as cur:
+        cur.execute(sql)
 
 
 def _normalise(value: str) -> str:
