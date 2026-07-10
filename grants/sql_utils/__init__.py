@@ -18,15 +18,20 @@ _DSN_ENV_VARS = (
 
 
 def _env(name: str, default: str) -> str:
+    # Strip whitespace: env vars pasted into dashboards (e.g. Vercel) often
+    # carry a trailing newline, which Postgres rejects inside DSN values.
     value = os.getenv(name)
+    if value is None:
+        return default
+    value = value.strip()
     return value if value else default
 
 
 def _first_env(*names: str) -> Optional[str]:
     for name in names:
         value = os.getenv(name)
-        if value:
-            return value
+        if value and value.strip():
+            return value.strip()
     return None
 
 
@@ -41,7 +46,7 @@ def _connection_kwargs() -> Dict[str, Any]:
         "user": _env("POSTGRES_USER", _env("PGUSER", "your_user")),
         "password": _env("POSTGRES_PASSWORD", _env("PGPASSWORD", "your_password")),
         "host": host,
-        "port": int(os.getenv("POSTGRES_PORT") or os.getenv("PGPORT") or "5432"),
+        "port": int(_env("POSTGRES_PORT", _env("PGPORT", "5432"))),
     }
 
     sslmode = os.getenv("POSTGRES_SSLMODE") or os.getenv("PGSSLMODE")
