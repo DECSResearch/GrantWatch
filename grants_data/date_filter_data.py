@@ -29,12 +29,17 @@ def _parse_date(value: str | None) -> datetime | None:
 
 def date_filter_json_data(records: List[Dict[str, object]]) -> List[Dict[str, object]]:
     """Keep grants posted within the configured lookback window."""
-    lookback_days = int(os.getenv("GRANTS_GOV_LOOKBACK_DAYS", "90"))
+    try:
+        lookback_days = int((os.getenv("GRANTS_GOV_LOOKBACK_DAYS") or "90").strip())
+    except ValueError:
+        logger("warning", "Invalid GRANTS_GOV_LOOKBACK_DAYS; defaulting to 90")
+        lookback_days = 90
     cutoff = datetime.utcnow() - timedelta(days=lookback_days)
 
     filtered: List[Dict[str, object]] = []
     for record in records:
-        posted = _parse_date(str(record.get("POSTED_DATE", "")))
+        raw_posted = record.get("POSTED_DATE")
+        posted = _parse_date(str(raw_posted)) if raw_posted not in (None, "") else None
         if posted and posted >= cutoff:
             filtered.append(record)
 

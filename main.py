@@ -27,7 +27,11 @@ def _print_upcoming(stage: str, days: int) -> None:
 
 def main() -> None:
     success, filtered_grants = onlyTheGoodStuff()
-    if success:
+    if not success:
+        print("Pipeline failed; check logs for details.")
+        return
+
+    if filtered_grants:
         csv_path = getattr(onlyTheGoodStuff, "last_csv_path", None)
         message = f"Pipeline complete. Filtered {len(filtered_grants)} grants."
         if csv_path:
@@ -38,8 +42,7 @@ def main() -> None:
         except Exception as exc:
             print(f"Failed to dispatch email notification: {exc}")
     else:
-        print("Pipeline failed; check logs for details.")
-        return
+        print("Pipeline complete. No grants matched the filters today.")
 
     print("Concept proposals due soon:")
     _print_upcoming(stage="concept", days=30)

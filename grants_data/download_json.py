@@ -14,7 +14,19 @@ from logs.status_logger import logger
 
 _DEFAULT_EXPORT_URL = "https://micro.grants.gov/rest/opportunities/search_export_Mark2"
 _DATA_DIR = Path(__file__).resolve().parent / "grants_json_data"
-_TIMEOUT = int(os.getenv("GRANTS_GOV_TIMEOUT", "60"))
+
+
+def _int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return int(raw.strip())
+    except ValueError:
+        return default
+
+
+_TIMEOUT = _int_env("GRANTS_GOV_TIMEOUT", 60)
 _DEFAULT_ROWS = 5000
 _DEFAULT_SORT = "openDate|desc"
 _DEFAULT_STATUSES = "forecasted|posted"

@@ -138,7 +138,7 @@ def onlyTheGoodStuff() -> Tuple[bool, List[Dict[str, object]]]:
     if len(date_sorted_data) == 0:
         logger("warning", "No data found after date filtering.")
         onlyTheGoodStuff.last_csv_path = None  # type: ignore[attr-defined]
-        return False, []
+        return True, []
 
     keywords, threshold, forecast = keyword_extractor()
     if keywords is None or len(keywords) == 0:
@@ -152,7 +152,7 @@ def onlyTheGoodStuff() -> Tuple[bool, List[Dict[str, object]]]:
         if len(status_sorted_data) == 0:
             logger("info", "No data found after status filtering.")
             onlyTheGoodStuff.last_csv_path = None  # type: ignore[attr-defined]
-            return False, []
+            return True, []
     else:
         logger("info", "Forecast is set to True. Keeping all data.")
         status_sorted_data = date_sorted_data
@@ -166,7 +166,7 @@ def onlyTheGoodStuff() -> Tuple[bool, List[Dict[str, object]]]:
     if len(keyword_json_data) == 0:
         logger("warning", "No data found after keyword filtering.")
         onlyTheGoodStuff.last_csv_path = None  # type: ignore[attr-defined]
-        return False, []
+        return True, []
     logger("info", f"Filtered keyword length: {len(keyword_json_data)}")
 
     summarized_json_data = description_summarizer(keyword_json_data)
