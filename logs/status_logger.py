@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Dict
 
@@ -35,7 +36,9 @@ def _configure_logger() -> logging.Logger:
 
     try:
         _log_file.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(_log_file, encoding="utf-8")
+        file_handler = RotatingFileHandler(
+            _log_file, encoding="utf-8", maxBytes=5 * 1024 * 1024, backupCount=3
+        )
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
     except OSError:

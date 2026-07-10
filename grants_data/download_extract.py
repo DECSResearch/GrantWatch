@@ -19,6 +19,7 @@ from typing import Optional
 
 import requests
 
+from grants_data.retention import prune_old_files
 from logs.status_logger import logger
 
 _DEFAULT_EXTRACT_URL_TEMPLATE = (
@@ -114,6 +115,9 @@ def gen_extract(keep_zip: bool = False) -> bool:
 
     if not keep_zip:
         zip_path.unlink(missing_ok=True)
+
+    # The XML runs ~300 MB per day; keep only the two most recent.
+    prune_old_files(_DATA_DIR, "GrantsDBExtract*.xml", keep=2)
 
     logger("info", f"Extracted XML to {xml_path} ({xml_path.stat().st_size / (1024 * 1024):.1f} MB)")
     gen_extract.last_extract_path = xml_path  # type: ignore[attr-defined]

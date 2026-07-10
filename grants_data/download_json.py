@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 
 import requests
 
+from grants_data.retention import keep_limit, prune_old_files
 from logs.status_logger import logger
 
 _DEFAULT_EXPORT_URL = "https://micro.grants.gov/rest/opportunities/search_export_Mark2"
@@ -87,6 +88,7 @@ def _write_output(records: list[dict[str, Any]]) -> Path:
     destination = _DATA_DIR / f"grants_{timestamp}.json"
     with destination.open("w", encoding="utf-8") as fp:
         json.dump(records, fp, ensure_ascii=False, indent=2)
+    prune_old_files(_DATA_DIR, "grants_*.json", keep_limit())
     return destination
 
 

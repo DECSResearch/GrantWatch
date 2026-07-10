@@ -17,6 +17,7 @@ from grants_data.get_file_path import get_latest_file_path
 from grants_data.get_json_data import process_json_data
 from grants_data.normalize import normalize_records
 from grants_data.parse_extract import process_extract_xml
+from grants_data.retention import keep_limit, prune_old_files
 from grants_data.keyword_filter_data import filter_grants_by_keywords
 from llm_utils.gpt_summarizer import description_summarizer
 from llm_utils.keywords_gen import keyword_extractor
@@ -72,6 +73,7 @@ def _write_csv(records: List[Dict[str, object]]) -> Path:
             writer.writerow({field: _serialise_value(record.get(field)) for field in fieldnames})
 
     logger("info", f"Wrote filtered grants to {destination}")
+    prune_old_files(destination_dir, "grants_*.csv", keep_limit())
     return destination
 
 
