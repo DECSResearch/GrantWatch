@@ -186,3 +186,6 @@ config/*.json
 node_modules/
 .next/
 aws/dist/
+
+# Grants.gov daily XML extract downloads (large generated data)
+grants_data/grants_xml_data/
