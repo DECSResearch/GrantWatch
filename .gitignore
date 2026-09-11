@@ -192,3 +192,4 @@ grants_data/grants_csv_data/
 
 # TypeScript incremental build artifact
 tsconfig.tsbuildinfo
+grants_data/cache/
