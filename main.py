@@ -25,7 +25,8 @@ def _print_upcoming(stage: str, days: int) -> None:
         print(f"{row['title']} | Due: {row['close_date']}")
 
 
-def main() -> None:
+def main() -> int:
+    """Run the pipeline; return a process exit code so schedulers see failures."""
     try:
         ensure_schema()
     except Exception as exc:
@@ -34,7 +35,7 @@ def main() -> None:
     success, filtered_grants = onlyTheGoodStuff()
     if not success:
         print("Pipeline failed; check logs for details.")
-        return
+        return 1
 
     if filtered_grants:
         csv_path = getattr(onlyTheGoodStuff, "last_csv_path", None)
@@ -54,7 +55,8 @@ def main() -> None:
 
     print("\nFull proposals due soon:")
     _print_upcoming(stage="full", days=60)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
