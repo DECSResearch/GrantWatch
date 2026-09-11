@@ -24,6 +24,35 @@ all downstream filters work with either source.
 GRANTS_DATA_SOURCE=extract python -c "from grants_data.pipeline import onlyTheGoodStuff; onlyTheGoodStuff()"
 ```
 
+## Scheduled runs
+
+`.github/workflows/pipeline.yml` runs `python main.py` every day at 12:00 UTC
+(and on demand from the Actions tab) using the `extract` source. Configure it
+under **Settings > Secrets and variables > Actions**:
+
+| Kind     | Name                      | Purpose                                                         |
+|----------|---------------------------|-----------------------------------------------------------------|
+| Secret   | `POSTGRES_URL`            | Required. Production Postgres DSN; the run fails without it.    |
+| Secret   | `GMAIL_TOKEN_JSON`        | Optional. Contents of the Gmail OAuth `token.json`.             |
+| Variable | `GMAIL_NOTIFY_RECIPIENTS` | Optional. Comma-separated recipients for the release email.     |
+| Variable | `GMAIL_SENDER_EMAIL`      | Optional. Defaults to the first recipient.                      |
+| Variable | `GRANTS_KEYWORDS`         | Optional. Overrides the default keyword list.                   |
+| Variable | `GRANTS_INCLUDE_FORECAST` | Optional. `true` keeps forecasted opportunities.                |
+| Variable | `GRANTS_GOV_LOOKBACK_DAYS`| Optional. Defaults to 90.                                       |
+
+Each run uploads the generated CSV and `logs/grantwatch.log` as a workflow
+artifact, and `main.py` exits non-zero when the pipeline fails so the run
+shows up red.
+
+## Deploying the web app
+
+Vercel is not linked to this GitHub repository, so pushing to `main` does not
+deploy. After merging changes to `src/web/` or `api/`, run:
+
+```bash
+npx vercel --prod
+```
+
 # Grants.gov Document Checker
 
 Temporary document validation pipeline where applicants upload opportunity-specific files. Uploads land in an encrypted S3 bucket, a Lambda function validates them, and a DynamoDB entry tracks checklist status surfaced through the FastAPI backend and Next.js UI.
