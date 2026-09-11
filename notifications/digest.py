@@ -116,7 +116,9 @@ def merge_items(*groups: Iterable[DigestItem]) -> List[DigestItem]:
     return list(merged.values())
 
 
-def _relevant(item: DigestItem, min_score: int) -> bool:
+def _relevant(item: DigestItem, min_score: int, scoring_active: bool) -> bool:
+    if not scoring_active:
+        return True  # nothing has a score yet: list every keyword match
     return item.watched or (item.score is not None and item.score >= min_score)
 
 
@@ -190,10 +192,13 @@ def build_digest(
     horizons: Sequence[int],
     min_score: int,
     profile_line: str = "",
+    max_new: int = 30,
+    max_per_bucket: int = 40,
 ) -> Optional[Digest]:
     """Return the digest, or None when there is nothing worth sending."""
     horizons = sorted({int(h) for h in horizons if int(h) > 0}) or [7, 30, 60, 90]
-    relevant = [item for item in items if _relevant(item, min_score)]
+    scoring_active = any(item.score is not None for item in items)
+    relevant = [item for item in items if _relevant(item, min_score, scoring_active)]
 
     new_items = sorted(
         (item for item in relevant if item.is_new),
@@ -233,23 +238,32 @@ def build_digest(
     text_lines.append("")
     html_sections: List[str] = []
 
-    def section(title: str, members: List[DigestItem]) -> None:
+    def section(title: str, members: List[DigestItem], cap: int) -> None:
+        shown, hidden = members[:cap], max(0, len(members) - cap)
         text_lines.append(f"{title} ({len(members)})")
         text_lines.append("")
-        for item in members:
+        for item in shown:
             text_lines.extend(_text_entry(item, today))
-        rows = "".join(_html_entry(item, today) for item in members)
+        if hidden:
+            text_lines.append(f"  and {hidden} more in the dashboard.")
+            text_lines.append("")
+        rows = "".join(_html_entry(item, today) for item in shown)
+        more = f'<p style="font-family:Public Sans,Helvetica,Arial,sans-serif;font-size:13px;color:#5b6660;margin:8px 0 0">and {hidden} more in the dashboard.</p>' if hidden else ""
         html_sections.append(
             f'<h2 style="font-family:Public Sans,Helvetica,Arial,sans-serif;font-size:17px;font-weight:600;color:#1e5a44;margin:28px 0 4px">{html.escape(title)} <span style="color:#5b6660;font-weight:400">({len(members)})</span></h2>'
-            f'<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse">{rows}</table>'
+            f'<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse">{rows}</table>{more}'
         )
 
     if new_items:
-        section("New this run", new_items)
+        section("New this run", new_items, max_new)
     for label, members in buckets:
-        section(label, members)
+        section(label, members, max_per_bucket)
 
-    text_lines.append(f"Scores are relative to the research profile; grants below {min_score}/5 are left out unless tracked.")
+    if scoring_active:
+        footnote = f"Scores are relative to the research profile; grants below {min_score}/5 are left out unless tracked."
+    else:
+        footnote = "No relevance scores yet, so every keyword match is listed. Fill in the research profile and set GRANTS_LLM_MODEL to rank them."
+    text_lines.append(footnote)
     text = "\n".join(text_lines).rstrip() + "\n"
 
     html_doc = (
@@ -259,7 +273,7 @@ def build_digest(
         + (f" &#183; {html.escape(profile_line)}" if profile_line else "")
         + "</div>"
         + "".join(html_sections)
-        + f'<p style="font-family:Public Sans,Helvetica,Arial,sans-serif;font-size:12px;color:#5b6660;margin-top:28px">Scores are relative to the research profile; grants below {min_score}/5 are left out unless tracked.</p>'
+        + f'<p style="font-family:Public Sans,Helvetica,Arial,sans-serif;font-size:12px;color:#5b6660;margin-top:28px">{html.escape(footnote)}</p>'
         "</div>"
     )
     return Digest(subject=subject, text=text, html=html_doc, new_count=len(new_items), deadline_count=deadline_count)

@@ -80,3 +80,19 @@ class TestFromRecord:
         item = DigestItem.from_record(record, is_new=True)
         assert item.close_date == date(2026, 10, 1) and item.forecasted and item.score == 4
         assert item.days_left(TODAY) == 20
+
+
+class TestWithoutScores:
+    def test_lists_keyword_matches_when_nothing_is_scored(self):
+        items = [_item("A", 3, score=None), _item("B", 20, score=None)]
+        digest = build_digest(items, today=TODAY, horizons=[7, 30], min_score=4)
+        assert digest is not None
+        assert "Grant A" in digest.text and "Grant B" in digest.text
+        assert "No relevance scores yet" in digest.text
+
+    def test_caps_long_sections(self):
+        items = [_item(f"N{i}", 100 + i, score=5, is_new=True) for i in range(35)]
+        digest = build_digest(items, today=TODAY, horizons=[7, 30], min_score=4, max_new=30)
+        assert digest.new_count == 35
+        assert digest.text.count("- [5/5]") == 30
+        assert "and 5 more in the dashboard." in digest.text and "and 5 more in the dashboard." in digest.html
