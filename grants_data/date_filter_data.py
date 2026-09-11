@@ -23,7 +23,6 @@ def _parse_date(value: str | None) -> datetime | None:
             return datetime.strptime(value, fmt)
         except ValueError:
             continue
-    logger("warning", f"Unable to parse date '{value}'")
     return None
 
 
@@ -38,12 +37,28 @@ def date_filter_json_data(records: List[Dict[str, object]]) -> List[Dict[str, ob
     cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=lookback_days)
 
     filtered: List[Dict[str, object]] = []
+    unparseable = 0
+    example: object = None
     for record in records:
         raw_posted = record.get("POSTED_DATE")
-        posted = _parse_date(str(raw_posted)) if raw_posted not in (None, "") else None
-        if posted and posted >= cutoff:
+        if raw_posted in (None, ""):
+            continue
+        posted = _parse_date(str(raw_posted))
+        if posted is None:
+            unparseable += 1
+            if example is None:
+                example = raw_posted
+            continue
+        if posted >= cutoff:
             filtered.append(record)
 
+    # One aggregated line instead of a warning per record: a single bad
+    # extract used to add hundreds of identical lines to the log.
+    if unparseable:
+        logger(
+            "warning",
+            f"Skipped {unparseable} record(s) with unparseable POSTED_DATE (e.g. '{example}')",
+        )
     logger(
         "info",
         f"Filtered grants by date: kept {len(filtered)} of {len(records)} within {lookback_days} days"
