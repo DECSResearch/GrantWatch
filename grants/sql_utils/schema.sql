@@ -52,3 +52,10 @@ ALTER TABLE grants ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP;
 
 CREATE INDEX IF NOT EXISTS idx_grants_relevance_score ON grants(relevance_score);
 CREATE INDEX IF NOT EXISTS idx_grants_relevance_profile ON grants(relevance_profile);
+
+-- Grants the group has decided to pursue; their deadlines are always surfaced.
+CREATE TABLE IF NOT EXISTS grant_watchlist (
+    opp_id TEXT PRIMARY KEY,
+    note TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import os
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Iterable, List, Sequence
@@ -58,8 +59,13 @@ def _normalise_recipients(recipients: Iterable[str]) -> List[str]:
     return [recipient.strip() for recipient in recipients if recipient and recipient.strip()]
 
 
-def _build_message(sender: str, to: Sequence[str], subject: str, body: str) -> dict[str, str]:
-    mime = MIMEText(body, "plain", "utf-8")
+def _build_message(sender: str, to: Sequence[str], subject: str, body: str, html: str | None = None) -> dict[str, str]:
+    if html:
+        mime: MIMEText | MIMEMultipart = MIMEMultipart("alternative")
+        mime.attach(MIMEText(body, "plain", "utf-8"))
+        mime.attach(MIMEText(html, "html", "utf-8"))
+    else:
+        mime = MIMEText(body, "plain", "utf-8")
     mime["To"] = ", ".join(to)
     mime["From"] = sender
     mime["Subject"] = subject
@@ -67,7 +73,7 @@ def _build_message(sender: str, to: Sequence[str], subject: str, body: str) -> d
     return {"raw": raw}
 
 
-def send_grant_notification(subject: str, body: str, recipients: Iterable[str]) -> bool:
+def send_grant_notification(subject: str, body: str, recipients: Iterable[str], html: str | None = None) -> bool:
     """Send a Gmail notification; returns True if the message was dispatched."""
     recipients_list = _normalise_recipients(recipients)
     if not recipients_list:
@@ -82,7 +88,7 @@ def send_grant_notification(subject: str, body: str, recipients: Iterable[str]) 
 
     try:
         service = build("gmail", "v1", credentials=creds, cache_discovery=False)
-        message = _build_message(sender, recipients_list, subject, body)
+        message = _build_message(sender, recipients_list, subject, body, html)
         service.users().messages().send(userId="me", body=message).execute()
         logger("info", f"Sent Gmail notification to {', '.join(recipients_list)}")
         return True
@@ -94,37 +100,14 @@ def send_grant_notification(subject: str, body: str, recipients: Iterable[str]) 
     return False
 
 
-def notify_grant_release(grants: Sequence[dict[str, object]], csv_path: str | None) -> None:
-    recipients_env = os.getenv("GMAIL_NOTIFY_RECIPIENTS", "")
-    recipients = _normalise_recipients(recipients_env.split(","))
+def digest_recipients() -> List[str]:
+    return _normalise_recipients(os.getenv("GMAIL_NOTIFY_RECIPIENTS", "").split(","))
+
+
+def send_digest(subject: str, text: str, html: str | None = None) -> bool:
+    """Email the deadline digest to GMAIL_NOTIFY_RECIPIENTS; False when not configured or failed."""
+    recipients = digest_recipients()
     if not recipients:
         logger("info", "GMAIL_NOTIFY_RECIPIENTS not configured; no email will be sent")
-        return
-
-    if not grants:
-        logger("info", "No grants to include in email notification; skipping")
-        return
-
-    top_grants = grants[:5]
-    lines = [
-        "New Grants.gov opportunities that match your filters:",
-        "",
-    ]
-    for grant in top_grants:
-        title = str(grant.get("OPPORTUNITY_TITLE", "Untitled"))
-        close_date = grant.get("CLOSE_DATE") or "N/A"
-        agency = grant.get("AGENCY") or "Unknown agency"
-        url = grant.get("OPPORTUNITY_URL") or ""
-        line = f"- {title} | Close: {close_date} | Agency: {agency}"
-        if url:
-            line += f"\n  {url}"
-        lines.append(line)
-        lines.append("")
-
-    if csv_path:
-        lines.append(f"Full export: {csv_path}")
-
-    subject = os.getenv("GMAIL_SUBJECT", "GrantWatch: new opportunities posted")
-    body = "\n".join(lines).strip()
-
-    send_grant_notification(subject, body, recipients)
+        return False
+    return send_grant_notification(subject, text, recipients, html)
