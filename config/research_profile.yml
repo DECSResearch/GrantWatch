@@ -4,6 +4,9 @@
 # file, so be concrete: name your methods, application domains, the kinds of
 # programs you can realistically apply to, and anything you never want to see.
 # Scoring stays off until `summary` is filled in.
+#
+# This repository is public. To keep the description private, copy this
+# file to research_profile.local.yml (ignored by git); it takes precedence.
 
 summary: >
   REPLACE ME. Two to five sentences describing the research program, its

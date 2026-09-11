@@ -12,6 +12,9 @@ import yaml
 from logs.status_logger import logger
 
 _DEFAULT_PATH = Path(__file__).resolve().parents[1] / "config" / "research_profile.yml"
+# A git-ignored copy wins over the committed template, so a public repo never
+# has to carry the group's actual research description.
+_LOCAL_PATH = _DEFAULT_PATH.with_name("research_profile.local.yml")
 _PLACEHOLDER = "REPLACE ME"
 _DEFAULT_KEYWORDS = ["research", "education", "innovation", "technology", "infrastructure"]
 _DEFAULT_HORIZONS = [7, 30, 60, 90]
@@ -94,12 +97,22 @@ def _env(name: str) -> Optional[str]:
 def load_profile(path: str | os.PathLike[str] | None = None) -> Profile:
     """Load the YAML profile; environment variables override individual fields.
 
-    ``GRANTS_PROFILE_FILE`` picks the file. ``GRANTS_KEYWORDS``,
+    ``GRANTS_PROFILE_FILE`` picks the file; otherwise a git-ignored
+    ``research_profile.local.yml`` next to the template is used when present.
+    ``GRANTS_PROFILE_SUMMARY`` and ``GRANTS_PROFILE_INSTITUTION`` override the
+    text fields (handy on Vercel or GitHub Actions). ``GRANTS_KEYWORDS``,
     ``GRANTS_KEYWORD_THRESHOLD``, ``GRANTS_INCLUDE_FORECAST`` and
     ``GRANTS_MIN_SCORE`` override the matching keys so the scheduled workflow
     can tune a run without editing the file.
     """
-    location = Path(path or _env("GRANTS_PROFILE_FILE") or _DEFAULT_PATH)
+    if path:
+        location = Path(path)
+    elif _env("GRANTS_PROFILE_FILE"):
+        location = Path(_env("GRANTS_PROFILE_FILE"))  # type: ignore[arg-type]
+    elif _LOCAL_PATH.exists():
+        location = _LOCAL_PATH
+    else:
+        location = _DEFAULT_PATH
     raw: Dict[str, Any] = {}
     if location.exists():
         try:
@@ -117,8 +130,8 @@ def load_profile(path: str | os.PathLike[str] | None = None) -> Profile:
     horizons = sorted({h for h in (_as_int(v, 0) for v in _as_list(raw.get("deadline_horizons"))) if h > 0})
 
     profile = Profile(
-        summary=str(raw.get("summary") or "").strip(),
-        institution=str(raw.get("institution") or "").strip(),
+        summary=(_env("GRANTS_PROFILE_SUMMARY") or str(raw.get("summary") or "")).strip(),
+        institution=(_env("GRANTS_PROFILE_INSTITUTION") or str(raw.get("institution") or "")).strip(),
         applicant_type=str(raw.get("applicant_type") or "").strip(),
         keywords=keywords,
         keyword_threshold=max(0, _as_int(_env("GRANTS_KEYWORD_THRESHOLD") or raw.get("keyword_threshold"), 1)),

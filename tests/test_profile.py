@@ -81,3 +81,24 @@ class TestKeywordExtractor:
     def test_reads_profile(self):
         profile = Profile(summary="s", keywords=["k1", "k2"], keyword_threshold=2, include_forecasted=False)
         assert keyword_extractor(profile) == (["k1", "k2"], 2, False)
+
+
+class TestPrivateOverrides:
+    def test_local_file_beats_template(self, tmp_path, monkeypatch):
+        from grants import profile as mod
+
+        template = tmp_path / "research_profile.yml"
+        template.write_text("summary: REPLACE ME\nkeywords: [a]\n", encoding="utf-8")
+        local = tmp_path / "research_profile.local.yml"
+        local.write_text("summary: Real work.\nkeywords: [b]\n", encoding="utf-8")
+        monkeypatch.setattr(mod, "_DEFAULT_PATH", template)
+        monkeypatch.setattr(mod, "_LOCAL_PATH", local)
+        monkeypatch.delenv("GRANTS_PROFILE_FILE", raising=False)
+        loaded = load_profile()
+        assert loaded.source == local and loaded.is_configured and loaded.keywords == ["b"]
+
+    def test_env_summary_configures_without_a_file(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("GRANTS_PROFILE_SUMMARY", "Grid resilience research.")
+        monkeypatch.setenv("GRANTS_PROFILE_INSTITUTION", "UND")
+        loaded = load_profile(tmp_path / "missing.yml")
+        assert loaded.is_configured and loaded.institution == "UND"
