@@ -22,6 +22,11 @@ _KEY_FALLBACKS = {
     "AGENCY": ("AGENCY_NAME", "AGENCY_CODE"),
     "OPPORTUNITY_URL": ("OPPORTUNITY_NUMBER_LINK", "LINK_TO_ADDITIONAL_INFORMATION"),
     "FUNDING_CATEGORIES": ("CATEGORY_OF_FUNDING_ACTIVITY",),
+    # The JSON export keeps a forecasted opportunity's estimated dates in
+    # separate fields; the XML extract already folds them in.
+    "POSTED_DATE": ("ESTIMATED_POST_DATE",),
+    "CLOSE_DATE": ("ESTIMATED_APPLICATION_DUE_DATE",),
+    "ADDITIONAL_INFORMATION_ON_ELIGIBILITY": ("ELIGIBLE_APPLICANTS",),
 }
 
 

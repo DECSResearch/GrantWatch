@@ -11,7 +11,7 @@ from grants.data.loader import LoadSummary, load_grants_from_records
 from grants.profile import Profile, load_profile
 from grants.sql_utils import fetch_relevance
 
-from grants_data.date_filter_data import date_filter_json_data
+from grants_data.date_filter_data import date_filter_json_data, drop_closed_grants
 from grants_data.download_extract import gen_extract
 from grants_data.download_json import gen_grants
 from grants_data.filter_with_forecast import filter_forecasted_data
@@ -112,11 +112,11 @@ def _sort_key(record: Dict[str, object]) -> Tuple[datetime, int, str]:
 def _load_source_records() -> List[Dict[str, object]]:
     """Fetch raw records from the configured source.
 
-    ``GRANTS_DATA_SOURCE=extract`` downloads and parses the full daily XML
-    database extract (every opportunity, no row cap); the default ``export``
-    keeps the existing search_export JSON flow.
+    The default ``extract`` downloads and parses the full daily XML database
+    extract (every opportunity, no row cap); ``GRANTS_DATA_SOURCE=export``
+    uses the search_export JSON endpoint, capped at ``GRANTS_GOV_ROWS`` rows.
     """
-    source = os.getenv("GRANTS_DATA_SOURCE", "export").strip().lower()
+    source = os.getenv("GRANTS_DATA_SOURCE", "extract").strip().lower()
 
     if source == "extract":
         if not gen_extract():
@@ -181,7 +181,7 @@ def onlyTheGoodStuff() -> Tuple[bool, List[Dict[str, object]]]:
         logger("error", "Failed to process JSON data.")
         return _finish(False, [])
 
-    date_sorted_data = date_filter_json_data(whole_json_data)
+    date_sorted_data = drop_closed_grants(date_filter_json_data(whole_json_data))
     if len(date_sorted_data) == 0:
         logger("warning", "No data found after date filtering.")
         return _finish(True, [])

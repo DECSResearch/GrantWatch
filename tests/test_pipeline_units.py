@@ -38,6 +38,15 @@ class TestNormalizeRecords:
         assert out["OPPORTUNITY_URL"].endswith("/360670")
         assert out["FUNDING_CATEGORIES"] == "Community Development"
 
+    def test_forecasted_export_dates_fall_back_to_estimates(self):
+        records = [{"OPPORTUNITY_STATUS": "Forecasted", "POSTED_DATE": None, "CLOSE_DATE": None,
+                    "ESTIMATED_POST_DATE": "10/01/2026", "ESTIMATED_APPLICATION_DUE_DATE": "12/01/2026",
+                    "ELIGIBLE_APPLICANTS": "State governments"}]
+        out = normalize_records(records)[0]
+        assert out["POSTED_DATE"] == "10/01/2026"
+        assert out["CLOSE_DATE"] == "12/01/2026"
+        assert out["ADDITIONAL_INFORMATION_ON_ELIGIBILITY"] == "State governments"
+
     def test_does_not_clobber_existing_canonical_values(self):
         records = [{"AGENCY": "Existing", "AGENCY_NAME": "Alias"}]
         assert normalize_records(records)[0]["AGENCY"] == "Existing"
@@ -108,3 +117,19 @@ class TestSummarizer:
     def test_short_description_kept_verbatim(self):
         out = description_summarizer([{"FUNDING_DESCRIPTION": "Short text."}])
         assert out[0]["SUMMARY"] == "Short text."
+
+
+class TestDropClosed:
+    def test_past_deadlines_dropped_and_undated_kept(self):
+        from datetime import date
+        from grants_data.date_filter_data import drop_closed_grants
+
+        records = [
+            {"OPPORTUNITY_NUMBER": "PAST", "CLOSE_DATE": "09/01/2026"},
+            {"OPPORTUNITY_NUMBER": "TODAY", "CLOSE_DATE": "09/11/2026"},
+            {"OPPORTUNITY_NUMBER": "FUTURE", "CLOSE_DATE": "2026-10-01"},
+            {"OPPORTUNITY_NUMBER": "NONE", "CLOSE_DATE": None},
+            {"OPPORTUNITY_NUMBER": "BAD", "CLOSE_DATE": "soon"},
+        ]
+        kept = [r["OPPORTUNITY_NUMBER"] for r in drop_closed_grants(records, today=date(2026, 9, 11))]
+        assert kept == ["TODAY", "FUTURE", "NONE", "BAD"]
