@@ -7,15 +7,20 @@ or a hosted endpoint. Configuration comes from the environment:
     GRANTS_LLM_BASE_URL          default http://localhost:11434/v1
     GRANTS_LLM_MODEL             required; scoring is skipped when empty
     GRANTS_LLM_API_KEY           default "ollama" (vLLM with --api-key needs the real one)
-    GRANTS_LLM_BATCH_SIZE        grants per request, default 4
+    GRANTS_LLM_BATCH_SIZE        grants per request, default 3
     GRANTS_LLM_WORKERS           concurrent requests, default 2
     GRANTS_LLM_TIMEOUT           seconds per request, default 180
-    GRANTS_LLM_MAX_CHARS         description characters sent per grant, default 4000
+    GRANTS_LLM_MAX_CHARS         description characters sent per grant, default 3000
+    GRANTS_LLM_MAX_TOKENS        completion tokens per request, default max(2048, 400 * batch)
     GRANTS_RELEVANCE_MAX_PER_RUN grants scored per run, default 400 (soonest deadlines first)
 
 Local models are not always strict about output formats, so the parser
-tolerates reasoning tags, code fences, and partially answered batches; a
-grant that comes back unscored is simply tried again on the next run.
+tolerates reasoning tags, code fences, and partially answered batches, and a
+batch whose output cannot be parsed is retried with a looser response format
+before it is given up on; a grant that stays unscored is tried again on the
+next run. Keep the server's context window comfortably above the prompt
+(Ollama: OLLAMA_CONTEXT_LENGTH=8192 or a Modelfile num_ctx), or the system
+prompt is silently truncated away.
 """
 from __future__ import annotations
 
@@ -123,11 +128,18 @@ class LLMSettings:
     base_url: str = "http://localhost:11434/v1"
     model: str = ""
     api_key: str = "ollama"
-    batch_size: int = 4
+    batch_size: int = 3
     workers: int = 2
     timeout: float = 180.0
-    max_chars: int = 4000
+    max_chars: int = 3000
     max_per_run: int = 400
+    max_tokens: int = 0  # 0 = automatic
+
+    def completion_tokens(self, batch_len: int) -> int:
+        if self.max_tokens > 0:
+            return self.max_tokens
+        # Reasoning models spend tokens thinking before the JSON; leave room.
+        return max(2048, 400 * batch_len)
 
     @classmethod
     def from_env(cls) -> "LLMSettings":
@@ -140,6 +152,7 @@ class LLMSettings:
             timeout=float(_env_int("GRANTS_LLM_TIMEOUT", int(cls.timeout))),
             max_chars=_env_int("GRANTS_LLM_MAX_CHARS", cls.max_chars, minimum=200),
             max_per_run=_env_int("GRANTS_RELEVANCE_MAX_PER_RUN", cls.max_per_run),
+            max_tokens=_env_int("GRANTS_LLM_MAX_TOKENS", 0, minimum=0),
         )
 
     @property
@@ -279,39 +292,54 @@ class RelevanceScorer:
         blocks = "\n\n---\n\n".join(_record_block(record, self.settings.max_chars) for record in batch)
         return f"Score these {len(batch)} opportunities. Return JSON only.\n\n{blocks}"
 
-    def _complete(self, batch: Sequence[Dict[str, Any]]) -> str:
+    def _current_format(self) -> int:
+        with self._lock:
+            return self._format_index
+
+    def _advance_format(self, index: int, why: str) -> bool:
+        """Move every later request to the next response format; False when none is left."""
+        with self._lock:
+            if self._format_index > index:
+                return True  # another thread already moved on; just retry
+            if index + 1 >= len(_RESPONSE_FORMATS):
+                return False
+            self._format_index = index + 1
+        logger("warning", f"Switching response format after {why}; now using {_RESPONSE_FORMATS[index + 1] or 'free text'}")
+        return True
+
+    def _complete(self, batch: Sequence[Dict[str, Any]], index: int) -> str:
         messages = [
             {"role": "system", "content": self._system_prompt()},
             {"role": "user", "content": self._user_prompt(batch)},
         ]
-        while True:
-            with self._lock:
-                index = self._format_index
-            response_format = _RESPONSE_FORMATS[index]
-            kwargs: Dict[str, Any] = {
-                "model": self.settings.model,
-                "messages": messages,
-                "temperature": 0,
-                "max_tokens": 300 * len(batch) + 200,
-            }
-            if response_format is not None:
-                kwargs["response_format"] = response_format
-            try:
-                response = self.client.chat.completions.create(**kwargs)
-            except BadRequestError as exc:
-                if index + 1 >= len(_RESPONSE_FORMATS):
-                    raise
-                with self._lock:
-                    if self._format_index == index:
-                        self._format_index = index + 1
-                        logger("warning", f"Model rejected response_format {response_format!r}; falling back ({exc.message[:120]})")
-                continue
-            return response.choices[0].message.content or ""
+        response_format = _RESPONSE_FORMATS[index]
+        kwargs: Dict[str, Any] = {
+            "model": self.settings.model,
+            "messages": messages,
+            "temperature": 0,
+            "max_tokens": self.settings.completion_tokens(len(batch)),
+        }
+        if response_format is not None:
+            kwargs["response_format"] = response_format
+        response = self.client.chat.completions.create(**kwargs)
+        return response.choices[0].message.content or ""
 
     def score_batch(self, batch: Sequence[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         expected = [str(record.get("OPPORTUNITY_NUMBER")) for record in batch]
-        text = self._complete(batch)
-        return parse_scores(text, expected)
+        while True:
+            index = self._current_format()
+            try:
+                text = self._complete(batch, index)
+            except BadRequestError as exc:
+                if self._advance_format(index, f"the server rejected the request ({exc.message[:120]})"):
+                    continue
+                raise
+            try:
+                return parse_scores(text, expected)
+            except ValueError as exc:
+                if self._advance_format(index, f"unparseable output ({exc})"):
+                    continue
+                raise
 
 
 def score_records(

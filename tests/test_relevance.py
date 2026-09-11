@@ -15,6 +15,10 @@ PROFILE = Profile(summary="Wind-energy forecasting and grid resilience.", instit
 SETTINGS = LLMSettings(model="test-model", batch_size=2, workers=1, max_per_run=10)
 
 
+def _nums(kwargs):
+    return _numbers_in(kwargs)
+
+
 class FakeCompletions:
     def __init__(self, responder):
         self.responder = responder
@@ -122,16 +126,30 @@ class TestScoreRecords:
         assert out.deferred == 2 and out.scored == 1
         assert _numbers_in(client.completions.calls[0]) == ["SOON"]
 
-    def test_unparseable_batch_is_skipped_not_fatal(self):
-        calls = {"n": 0}
-
+    def test_unparseable_output_retries_with_looser_format(self):
         def responder(kwargs):
-            calls["n"] += 1
-            return "garbage" if calls["n"] == 1 else _echo_scores()(kwargs)
+            fmt = (kwargs.get("response_format") or {}).get("type")
+            return "not json at all" if fmt == "json_schema" else _echo_scores()(kwargs)
+
+        client = FakeClient(responder)
+        out = score_records(_records("A", "B"), PROFILE, settings=SETTINGS, client=client)
+        assert out.scored == 2 and out.failed == 0
+        formats = [(c.get("response_format") or {}).get("type") for c in client.completions.calls]
+        assert formats == ["json_schema", "json_object"]
+
+    def test_persistently_unparseable_batch_is_skipped_not_fatal(self):
+        def responder(kwargs):
+            return "garbage" if "A" in _nums(kwargs) else _echo_scores()(kwargs)
 
         client = FakeClient(responder)
         out = score_records(_records("A", "B", "C"), PROFILE, settings=SETTINGS, client=client)
         assert out.scored == 1 and out.failed == 2
+        assert len(client.completions.calls) == 4  # three formats for [A, B], one for [C]
+
+    def test_completion_tokens_leave_room_for_reasoning(self):
+        assert LLMSettings(model="m", batch_size=3).completion_tokens(3) == 2048
+        assert LLMSettings(model="m").completion_tokens(10) == 4000
+        assert LLMSettings(model="m", max_tokens=777).completion_tokens(10) == 777
 
     def test_falls_back_when_json_schema_rejected(self, monkeypatch):
         class FakeBadRequest(Exception):
