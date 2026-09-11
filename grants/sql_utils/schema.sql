@@ -33,3 +33,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_email_field
 
 CREATE INDEX IF NOT EXISTS idx_subscriptions_field
     ON grant_subscriptions (field);
+
+-- Relevance scoring, provenance, and the fields the UI and digest show.
+ALTER TABLE grants ADD COLUMN IF NOT EXISTS agency TEXT;
+ALTER TABLE grants ADD COLUMN IF NOT EXISTS agency_code TEXT;
+ALTER TABLE grants ADD COLUMN IF NOT EXISTS url TEXT;
+ALTER TABLE grants ADD COLUMN IF NOT EXISTS summary TEXT;
+ALTER TABLE grants ADD COLUMN IF NOT EXISTS matched_keywords TEXT;
+ALTER TABLE grants ADD COLUMN IF NOT EXISTS award_ceiling NUMERIC;
+ALTER TABLE grants ADD COLUMN IF NOT EXISTS estimated_total_funding NUMERIC;
+ALTER TABLE grants ADD COLUMN IF NOT EXISTS relevance_score SMALLINT;
+ALTER TABLE grants ADD COLUMN IF NOT EXISTS relevance_reason TEXT;
+ALTER TABLE grants ADD COLUMN IF NOT EXISTS relevance_model TEXT;
+ALTER TABLE grants ADD COLUMN IF NOT EXISTS relevance_profile TEXT;
+ALTER TABLE grants ADD COLUMN IF NOT EXISTS relevance_scored_at TIMESTAMP;
+ALTER TABLE grants ADD COLUMN IF NOT EXISTS first_seen_at TIMESTAMP NOT NULL DEFAULT NOW();
+ALTER TABLE grants ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP;
+
+CREATE INDEX IF NOT EXISTS idx_grants_relevance_score ON grants(relevance_score);
+CREATE INDEX IF NOT EXISTS idx_grants_relevance_profile ON grants(relevance_profile);

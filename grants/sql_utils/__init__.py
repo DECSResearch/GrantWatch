@@ -66,7 +66,9 @@ def _connection_kwargs() -> Dict[str, Any]:
 
 
 def get_connection():
-    return psycopg2.connect(**_connection_kwargs())
+    # A short connect timeout keeps an unreachable database from hanging a run.
+    timeout = int(_env("POSTGRES_CONNECT_TIMEOUT", "10"))
+    return psycopg2.connect(**_connection_kwargs(), connect_timeout=timeout)
 
 
 @contextmanager
@@ -175,6 +177,28 @@ def get_subscribers_for_fields(fields: Iterable[str]) -> Dict[str, List[str]]:
         subscribers.setdefault(field, []).append(email)
     return subscribers
 
+
+
+def fetch_relevance(profile_fingerprint: str) -> Dict[str, Dict[str, Any]]:
+    """Scores already stored for this profile, keyed by opportunity number."""
+    query = """
+        SELECT opp_id, relevance_score, relevance_reason, summary, relevance_model, relevance_scored_at
+        FROM grants
+        WHERE relevance_profile = %s AND relevance_score IS NOT NULL;
+    """
+    with db_connection() as conn, conn.cursor() as cur:
+        cur.execute(query, (profile_fingerprint,))
+        rows = cur.fetchall()
+    return {
+        opp_id: {
+            "score": score,
+            "reason": reason or "",
+            "summary": summary or "",
+            "model": model or "",
+            "scored_at": scored_at.isoformat() if scored_at else None,
+        }
+        for opp_id, score, reason, summary, model, scored_at in rows
+    }
 
 
 def fetch_upcoming(stage=None, days=30):
