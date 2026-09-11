@@ -85,6 +85,8 @@
   }
   .filters input[type="search"] { min-width: 240px; }
   .filters input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--spruce); margin: 0; }
+  .clear { background: none; border: 0; padding: 0 0 8px; color: var(--spruce); font: inherit; font-size: 14px; cursor: pointer; }
+  .days.today b { font-size: 15px; }
   .count { margin-left: auto; color: var(--mist); font-size: 14px; padding-bottom: 8px; font-variant-numeric: tabular-nums; }
 
   /* Groups and rows */
@@ -181,8 +183,16 @@
     <label>Closing within
       <select id="closingWithin"></select>
     </label>
+    <label>Stage
+      <select id="stage">
+        <option value="">Any</option>
+        <option value="concept">Concept or letter of intent</option>
+        <option value="full">Full proposal</option>
+      </select>
+    </label>
     <label class="check"><input type="checkbox" id="forecasted" checked> Show forecasted</label>
     <label class="check"><input type="checkbox" id="watchedOnly"> Only tracked</label>
+    <button type="button" class="clear" id="clear">Clear filters</button>
     <span class="count" id="count" role="status" aria-live="polite"></span>
   </section>
 
@@ -206,7 +216,7 @@
   const els = {
     status: $("status"), profileLine: $("profileLine"), notice: $("notice"), strip: $("strip"),
     horizonHint: $("horizonHint"), q: $("q"), minScore: $("minScore"), closingWithin: $("closingWithin"),
-    forecasted: $("forecasted"), watchedOnly: $("watchedOnly"), count: $("count"), results: $("results"),
+    forecasted: $("forecasted"), watchedOnly: $("watchedOnly"), stage: $("stage"), clear: $("clear"), count: $("count"), results: $("results"),
     subForm: $("subForm"), subEmail: $("subEmail"), subField: $("subField"), subSubmit: $("subSubmit"), subFeedback: $("subFeedback"),
   };
 
@@ -227,12 +237,16 @@
 
   function setupFilters() {
     const p = state.profile || {};
+    const scored = (p.data && p.data.scored) || 0;
     const scoreOptions = [{ value: 0, label: "Any" }, { value: 3, label: "3 of 5" }, { value: 4, label: "4 of 5" }, { value: 5, label: "5 of 5" }];
-    fillSelect(els.minScore, scoreOptions, p.configured ? (p.min_score ?? 4) : 0);
+    fillSelect(els.minScore, scoreOptions, (p.configured || scored > 0) ? (p.min_score ?? 4) : 0);
     const windows = [...new Set([...state.horizons, 180])].sort((a, b) => a - b).map((d) => ({ value: d, label: `${d} days` }));
     windows.push({ value: "", label: "Any date" });
     fillSelect(els.closingWithin, windows, state.horizons[state.horizons.length - 1]);
     els.forecasted.checked = p.include_forecasted !== false;
+    els.watchedOnly.checked = false;
+    els.stage.value = "";
+    els.q.value = "";
   }
 
   async function loadProfile() {
@@ -253,10 +267,11 @@
     } else {
       els.status.textContent = "Database unavailable.";
     }
+    const scoredCount = (d && d.scored) || 0;
     if (p.configured && p.summary) {
       els.profileLine.textContent = `Scored for: ${p.summary}${p.summary.endsWith(".") ? "" : "."}`;
       els.profileLine.hidden = false;
-    } else {
+    } else if (scoredCount === 0) {
       els.notice.innerHTML = "Relevance scoring is off. Fill in the summary in <code>config/research_profile.yml</code> and set a model to see fit scores and reasons.";
       els.notice.hidden = false;
     }
@@ -268,6 +283,7 @@
     if (els.q.value.trim()) q.set("q", els.q.value.trim());
     if (els.minScore.value && Number(els.minScore.value) > 0) q.set("min_score", els.minScore.value);
     if (els.closingWithin.value) q.set("closing_within", els.closingWithin.value);
+    if (els.stage.value) q.set("stage", els.stage.value);
     q.set("include_forecasted", els.forecasted.checked ? "true" : "false");
     if (els.watchedOnly.checked) q.set("watched_only", "true");
     q.set("limit", "500");
@@ -320,6 +336,7 @@
 
   function daysCell(g) {
     if (g.days_left === null || g.days_left === undefined) return `<div class="days none"><b>none</b></div>`;
+    if (g.days_left === 0) return `<div class="days urgent today"><b>today</b><small>closes${g.forecasted ? ", est." : ""}</small></div>`;
     const cls = g.days_left <= 7 ? "urgent" : g.days_left <= 30 ? "soon" : "";
     const word = g.days_left === 1 ? "day" : "days";
     return `<div class="days ${cls}"><b>${g.days_left}</b><small>${g.days_left < 0 ? "days ago" : word}${g.forecasted ? ", est." : ""}</small></div>`;
@@ -479,7 +496,8 @@
   let timer = null;
   const debounced = () => { clearTimeout(timer); timer = setTimeout(loadGrants, 250); };
   els.q.addEventListener("input", debounced);
-  [els.minScore, els.closingWithin, els.forecasted, els.watchedOnly].forEach((el) => el.addEventListener("change", loadGrants));
+  [els.minScore, els.closingWithin, els.forecasted, els.watchedOnly, els.stage].forEach((el) => el.addEventListener("change", loadGrants));
+  els.clear.addEventListener("click", () => { setupFilters(); loadGrants(); });
   els.results.addEventListener("click", (event) => {
     const track = event.target.closest("[data-track]");
     if (track) return toggleTrack(track);

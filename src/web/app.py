@@ -133,7 +133,7 @@ def get_grants(
     return {"results": results, "count": len(results)}
 
 
-@app.get("/api/grants/{opp_id}")
+@app.get("/api/grants/{opp_id:path}")
 def grant_detail(opp_id: str) -> Dict[str, Any]:
     try:
         grant = get_grant(opp_id)
@@ -169,7 +169,7 @@ def watch(payload: WatchPayload) -> Dict[str, Any]:
     return {"opp_id": opp_id, "watched": True}
 
 
-@app.delete("/api/watchlist/{opp_id}")
+@app.delete("/api/watchlist/{opp_id:path}")
 def unwatch(opp_id: str) -> Dict[str, Any]:
     try:
         removed = remove_from_watchlist(opp_id)
