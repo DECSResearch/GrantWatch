@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Dict, List
 
 from logs.status_logger import logger
@@ -24,6 +24,23 @@ def _parse_date(value: str | None) -> datetime | None:
         except ValueError:
             continue
     return None
+
+
+def drop_closed_grants(records: List[Dict[str, object]], today: date | None = None) -> List[Dict[str, object]]:
+    """Remove grants whose deadline has already passed; keep those with no date."""
+    today = today or datetime.now(timezone.utc).date()
+    kept: List[Dict[str, object]] = []
+    dropped = 0
+    for record in records:
+        raw_close = record.get("CLOSE_DATE")
+        close = _parse_date(str(raw_close)) if raw_close not in (None, "") else None
+        if close is not None and close.date() < today:
+            dropped += 1
+            continue
+        kept.append(record)
+    if dropped:
+        logger("info", f"Dropped {dropped} grant(s) whose deadline already passed")
+    return kept
 
 
 def date_filter_json_data(records: List[Dict[str, object]]) -> List[Dict[str, object]]:

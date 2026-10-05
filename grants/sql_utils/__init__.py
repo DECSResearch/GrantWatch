@@ -66,7 +66,9 @@ def _connection_kwargs() -> Dict[str, Any]:
 
 
 def get_connection():
-    return psycopg2.connect(**_connection_kwargs())
+    # A short connect timeout keeps an unreachable database from hanging a run.
+    timeout = int(_env("POSTGRES_CONNECT_TIMEOUT", "10"))
+    return psycopg2.connect(**_connection_kwargs(), connect_timeout=timeout)
 
 
 @contextmanager
@@ -177,21 +179,102 @@ def get_subscribers_for_fields(fields: Iterable[str]) -> Dict[str, List[str]]:
 
 
 
-def fetch_upcoming(stage=None, days=30):
+def fetch_relevance(profile_fingerprint: str) -> Dict[str, Dict[str, Any]]:
+    """Scores already stored for this profile, keyed by opportunity number."""
     query = """
-        SELECT opp_id, title, stage, close_date, opportunity_status
+        SELECT opp_id, relevance_score, relevance_reason, summary, relevance_model, relevance_scored_at
         FROM grants
-        WHERE opportunity_status = 'Posted'
-          AND close_date BETWEEN NOW() AND NOW() + %s::interval
+        WHERE relevance_profile = %s AND relevance_score IS NOT NULL;
     """
-    params = [f'{days} days']
+    with db_connection() as conn, conn.cursor() as cur:
+        cur.execute(query, (profile_fingerprint,))
+        rows = cur.fetchall()
+    return {
+        opp_id: {
+            "score": score,
+            "reason": reason or "",
+            "summary": summary or "",
+            "model": model or "",
+            "scored_at": scored_at.isoformat() if scored_at else None,
+        }
+        for opp_id, score, reason, summary, model, scored_at in rows
+    }
 
+
+def fetch_upcoming(
+    days: int = 30,
+    *,
+    min_score: Optional[int] = None,
+    include_forecasted: bool = True,
+    include_watched: bool = True,
+    stage: Optional[str] = None,
+    limit: int = 500,
+) -> List[Dict[str, Any]]:
+    """Grants closing within ``days`` that clear ``min_score`` or are on the watchlist."""
+    conditions = [
+        "g.close_date >= CURRENT_DATE",
+        "g.close_date < CURRENT_DATE + (%s || ' days')::interval",
+    ]
+    params: List[Any] = [int(days)]
+
+    if not include_forecasted:
+        conditions.append("g.opportunity_status <> 'Forecasted'")
     if stage:
-        query += " AND stage = %s"
+        conditions.append("g.stage = %s")
         params.append(stage)
+    if min_score is not None:
+        if include_watched:
+            conditions.append("(g.relevance_score >= %s OR w.opp_id IS NOT NULL)")
+        else:
+            conditions.append("g.relevance_score >= %s")
+        params.append(int(min_score))
 
-    query += " ORDER BY close_date;"
+    query = f"""
+        SELECT g.opp_id, g.title, g.stage, g.agency, g.agency_code, g.url,
+               g.opportunity_status, g.post_date, g.close_date,
+               g.relevance_score, g.relevance_reason, g.summary,
+               g.first_seen_at, (w.opp_id IS NOT NULL) AS watched, w.note AS watch_note
+        FROM grants g
+        LEFT JOIN grant_watchlist w ON w.opp_id = g.opp_id
+        WHERE {" AND ".join(conditions)}
+        ORDER BY g.close_date, g.relevance_score DESC NULLS LAST, g.title
+        LIMIT %s;
+    """
+    params.append(int(limit))
 
     with db_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(query, params)
-        return cur.fetchall()
+        return [dict(row) for row in cur.fetchall()]
+
+
+def add_to_watchlist(opp_id: str, note: Optional[str] = None) -> bool:
+    key = (opp_id or "").strip()
+    if not key:
+        raise ValueError("opp_id is required")
+    query = """
+        INSERT INTO grant_watchlist (opp_id, note)
+        VALUES (%s, %s)
+        ON CONFLICT (opp_id) DO UPDATE SET note = COALESCE(EXCLUDED.note, grant_watchlist.note);
+    """
+    with db_connection() as conn, conn.cursor() as cur:
+        cur.execute(query, (key, (note or "").strip() or None))
+        return cur.rowcount > 0
+
+
+def remove_from_watchlist(opp_id: str) -> bool:
+    with db_connection() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM grant_watchlist WHERE opp_id = %s;", ((opp_id or "").strip(),))
+        return cur.rowcount > 0
+
+
+def list_watchlist() -> List[Dict[str, Any]]:
+    query = """
+        SELECT w.opp_id, w.note, w.created_at, g.title, g.agency, g.url,
+               g.close_date, g.opportunity_status, g.relevance_score
+        FROM grant_watchlist w
+        LEFT JOIN grants g ON g.opp_id = w.opp_id
+        ORDER BY g.close_date NULLS LAST, w.created_at;
+    """
+    with db_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(query)
+        return [dict(row) for row in cur.fetchall()]

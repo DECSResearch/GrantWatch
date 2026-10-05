@@ -22,7 +22,14 @@ jobs:
       # Optional: contents of the Gmail OAuth token.json; without it the run
       # still filters and loads grants but skips the email.
       GMAIL_TOKEN_JSON: ${{ secrets.GMAIL_TOKEN_JSON }}
-      # Optional tuning via repository variables (empty means "use the code default").
+      # Relevance scoring needs an OpenAI-compatible server the runner can reach.
+      # A model on a laptop is not reachable from GitHub; for Ollama or vLLM at
+      # home, schedule scripts/run_daily.sh locally instead (see README).
+      GRANTS_LLM_BASE_URL: ${{ secrets.GRANTS_LLM_BASE_URL }}
+      GRANTS_LLM_API_KEY: ${{ secrets.GRANTS_LLM_API_KEY }}
+      GRANTS_LLM_MODEL: ${{ vars.GRANTS_LLM_MODEL }}
+      # Optional tuning via repository variables (empty means "use the profile").
+      GRANTS_MIN_SCORE: ${{ vars.GRANTS_MIN_SCORE }}
       GRANTS_KEYWORDS: ${{ vars.GRANTS_KEYWORDS }}
       GRANTS_INCLUDE_FORECAST: ${{ vars.GRANTS_INCLUDE_FORECAST }}
       GRANTS_GOV_LOOKBACK_DAYS: ${{ vars.GRANTS_GOV_LOOKBACK_DAYS }}

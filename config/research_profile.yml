@@ -1,0 +1,49 @@
+# Research profile for GrantWatch.
+#
+# The daily pipeline scores every new Grants.gov opportunity against this
+# file, so be concrete: name your methods, application domains, the kinds of
+# programs you can realistically apply to, and anything you never want to see.
+# Scoring stays off until `summary` is filled in.
+#
+# This repository is public. To keep the description private, copy this
+# file to research_profile.local.yml (ignored by git); it takes precedence.
+
+summary: >
+  REPLACE ME. Two to five sentences describing the research program, its
+  methods, and its application areas. For example: "We build machine-learning
+  models for power-grid resilience and wind-energy forecasting in the northern
+  Great Plains, with a secondary line in data-driven precision agriculture.
+  We are a university group eligible for NSF, DOE, USDA, and NIH programs and
+  regularly partner with tribal colleges and rural utilities."
+
+# Who is applying. The scorer uses this to judge eligibility and program fit.
+institution: University of North Dakota
+applicant_type: public university
+
+# Cheap pre-filter applied before any model call. A record must mention at
+# least `keyword_threshold` of these words (whole-word, case-insensitive).
+# Set keyword_threshold to 0 to send everything in the date window to the
+# scorer: it costs more but misses nothing.
+keywords:
+  - research
+  - education
+  - innovation
+  - technology
+  - infrastructure
+keyword_threshold: 1
+
+# Agencies to always skip, matched as a prefix of the Grants.gov agency code
+# ("NSF", "DOE", "HHS-NIH", "USDA-NIFA") or a case-insensitive substring of
+# the agency name. Leave empty to keep everything.
+agencies_exclude: []
+
+# Opportunities below this score stay in the database and CSV, but are left
+# out of the email digest and hidden by default in the web UI.
+min_score_to_notify: 4
+
+# Deadline windows, in days, used by the digest and the UI groupings.
+deadline_horizons: [7, 30, 60, 90]
+
+# Forecasted opportunities carry estimated dates and no final synopsis yet.
+# They are the earliest warning of a deadline, so keep them on.
+include_forecasted: true

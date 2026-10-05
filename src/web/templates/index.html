@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GrantWatch</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    color-scheme: light dark;
+    --paper: #f7f8f6;
+    --well: #ffffff;
+    --ink: #15221c;
+    --mist: #5b6660;
+    --fog: #d6dbd7;
+    --spruce: #1e5a44;
+    --spruce-soft: #dfeae4;
+    --signal: #b3261e;
+    --ochre: #8a5a00;
+    --font: "Public Sans", system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0f1613;
+      --well: #16201b;
+      --ink: #e6eae7;
+      --mist: #97a39d;
+      --fog: #2a3630;
+      --spruce: #6fbf9a;
+      --spruce-soft: #1c2f27;
+      --signal: #f08a7e;
+      --ochre: #e0b45e;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--paper); }
+  body {
+    margin: 0;
+    font-family: var(--font);
+    font-size: 16px;
+    line-height: 1.5;
+    color: var(--ink);
+    background: var(--paper);
+  }
+  a { color: var(--spruce); }
+  :focus-visible { outline: 2px solid var(--spruce); outline-offset: 2px; }
+  .page { max-width: 1040px; margin: 0 auto; padding: 36px 20px 72px; }
+
+  header h1 { font-size: 26px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+  .status { margin: 4px 0 0; color: var(--mist); font-size: 15px; }
+  .profile-line { margin: 14px 0 0; max-width: 72ch; }
+  .notice { margin: 14px 0 0; padding: 12px 14px; border-left: 3px solid var(--ochre); background: var(--well); font-size: 15px; }
+  .notice code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; }
+
+  /* Horizon strip */
+  .horizon { margin-top: 34px; }
+  .horizon-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .horizon-head h2 { font-size: 17px; font-weight: 600; margin: 0; }
+  .horizon-head span { color: var(--mist); font-size: 14px; }
+  .strip { position: relative; height: 72px; margin-top: 10px; border-bottom: 1px solid var(--ink); }
+  .strip .tick { position: absolute; bottom: 0; width: 1px; height: 8px; background: var(--ink); }
+  .strip .tick-label { position: absolute; top: calc(100% + 6px); transform: translateX(-50%); font-size: 12px; color: var(--mist); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .strip .tick-label.first { transform: none; }
+  .strip .tick-label.last { transform: translateX(-100%); }
+  .strip .band { position: absolute; bottom: 0; top: 0; background: var(--spruce-soft); opacity: 0.55; }
+  .marker {
+    position: absolute; bottom: 0; width: 6px; margin-left: -3px;
+    background: var(--spruce); border: 0; padding: 0; cursor: pointer; border-radius: 1px 1px 0 0;
+  }
+  .marker.forecast { background: transparent; border: 1.5px solid var(--spruce); border-bottom: 0; }
+  .marker.watched::after { content: ""; position: absolute; left: 50%; top: -9px; width: 6px; height: 6px; margin-left: -3px; border-radius: 50%; background: var(--ochre); }
+  .marker:hover, .marker:focus-visible { background: var(--ochre); border-color: var(--ochre); }
+  .strip-axis { height: 22px; }
+  .strip-empty { position: absolute; left: 0; right: 0; top: 24px; text-align: center; color: var(--mist); font-size: 14px; }
+
+  /* Filters */
+  .filters { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: end; margin-top: 30px; padding-bottom: 14px; border-bottom: 1px solid var(--fog); }
+  .filters label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--mist); }
+  .filters .check { flex-direction: row; align-items: center; gap: 6px; padding-bottom: 8px; color: var(--ink); font-size: 14px; }
+  .filters input[type="search"], .filters select {
+    font: inherit; font-size: 15px; color: var(--ink); background: var(--well);
+    border: 1px solid var(--fog); border-radius: 4px; padding: 7px 10px; min-width: 150px;
+  }
+  .filters input[type="search"] { min-width: 240px; }
+  .filters input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--spruce); margin: 0; }
+  .clear { background: none; border: 0; padding: 0 0 8px; color: var(--spruce); font: inherit; font-size: 14px; cursor: pointer; }
+  .days.today b { font-size: 15px; }
+  .count { margin-left: auto; color: var(--mist); font-size: 14px; padding-bottom: 8px; font-variant-numeric: tabular-nums; }
+
+  /* Groups and rows */
+  .group { margin-top: 30px; }
+  .group h2 { font-size: 17px; font-weight: 600; color: var(--spruce); margin: 0 0 4px; }
+  .group h2 span { color: var(--mist); font-weight: 400; }
+  .row {
+    display: grid; grid-template-columns: 76px 1fr 120px 96px; gap: 8px 16px; align-items: start;
+    padding: 14px 0; border-top: 1px solid var(--fog);
+  }
+  .row:last-child { border-bottom: 1px solid var(--fog); }
+  .row.flash { background: var(--spruce-soft); }
+  @media (prefers-reduced-motion: no-preference) { .row { transition: background 600ms ease; } }
+  .days { font-variant-numeric: tabular-nums; line-height: 1.15; padding-top: 2px; }
+  .days b { display: block; font-size: 20px; font-weight: 600; }
+  .days small { font-size: 12px; color: var(--mist); }
+  .days.urgent b { color: var(--signal); }
+  .days.soon b { color: var(--ochre); }
+  .days.none b { color: var(--mist); font-weight: 400; font-size: 15px; }
+  .main { min-width: 0; }
+  .title { font-size: 16px; font-weight: 600; margin: 0; }
+  .title a { color: var(--ink); text-decoration: none; }
+  .title a:hover { color: var(--spruce); text-decoration: underline; }
+  .meta { margin: 2px 0 0; font-size: 14px; color: var(--mist); }
+  .why { margin: 6px 0 0; font-size: 14px; max-width: 78ch; }
+  .why.summary { color: var(--mist); }
+  .more { background: none; border: 0; padding: 0; margin-top: 4px; color: var(--spruce); font: inherit; font-size: 13px; cursor: pointer; }
+  .detail { margin-top: 10px; padding: 12px 14px; background: var(--well); border: 1px solid var(--fog); border-radius: 4px; font-size: 14px; max-width: 78ch; }
+  .detail dl { margin: 0 0 10px; display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; }
+  .detail dt { color: var(--mist); }
+  .detail dd { margin: 0; }
+  .detail p { margin: 0; white-space: pre-line; }
+  .score { display: flex; flex-direction: column; gap: 3px; padding-top: 6px; font-size: 12px; color: var(--mist); font-variant-numeric: tabular-nums; }
+  .squares { display: flex; gap: 3px; }
+  .squares i { display: block; width: 10px; height: 10px; background: var(--fog); border-radius: 1px; }
+  .squares i.on { background: var(--spruce); }
+  .track {
+    font: inherit; font-size: 13px; font-weight: 600; padding: 6px 0; width: 100%;
+    border: 1px solid var(--spruce); border-radius: 4px; background: transparent; color: var(--spruce); cursor: pointer;
+  }
+  .track.on { background: var(--spruce); color: var(--paper); }
+  .track:disabled { opacity: 0.6; cursor: wait; }
+  .empty, .error { margin-top: 30px; padding: 26px 0; border-top: 1px solid var(--fog); border-bottom: 1px solid var(--fog); color: var(--mist); }
+  .error { color: var(--signal); }
+
+  /* Subscriptions */
+  .subscribe { margin-top: 56px; padding-top: 22px; border-top: 1px solid var(--ink); max-width: 72ch; }
+  .subscribe h2 { font-size: 17px; font-weight: 600; margin: 0; }
+  .subscribe p { margin: 4px 0 12px; color: var(--mist); font-size: 15px; }
+  .subscribe form { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+  .subscribe label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--mist); }
+  .subscribe input, .subscribe select { font: inherit; font-size: 15px; color: var(--ink); background: var(--well); border: 1px solid var(--fog); border-radius: 4px; padding: 7px 10px; min-width: 220px; }
+  .subscribe button { font: inherit; font-size: 14px; font-weight: 600; padding: 8px 16px; border: 0; border-radius: 4px; background: var(--spruce); color: var(--paper); cursor: pointer; }
+  .subscribe button:disabled { opacity: 0.6; cursor: wait; }
+  .feedback { min-height: 22px; margin-top: 8px; font-size: 14px; color: var(--mist); }
+  .feedback.ok { color: var(--spruce); }
+  .feedback.bad { color: var(--signal); }
+
+  @media (max-width: 640px) {
+    .page { padding: 24px 16px 56px; }
+    .row { grid-template-columns: 64px 1fr; }
+    .score { grid-column: 2; flex-direction: row; align-items: center; gap: 8px; padding-top: 0; }
+    .track { grid-column: 2; width: auto; padding: 6px 14px; justify-self: start; }
+    .filters input[type="search"] { min-width: 100%; }
+    .count { margin-left: 0; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <h1>GrantWatch</h1>
+    <p class="status" id="status">Loading…</p>
+    <p class="profile-line" id="profileLine" hidden></p>
+    <div class="notice" id="notice" hidden></div>
+  </header>
+
+  <section class="horizon" aria-labelledby="horizonTitle">
+    <div class="horizon-head">
+      <h2 id="horizonTitle">Deadlines ahead</h2>
+      <span id="horizonHint">Each bar is a grant; taller means a better fit. Hollow bars are estimated dates.</span>
+    </div>
+    <div class="strip" id="strip" role="img" aria-label="Timeline of upcoming deadlines"></div>
+    <div class="strip-axis"></div>
+  </section>
+
+  <section class="filters" aria-label="Filters">
+    <label>Search
+      <input type="search" id="q" placeholder="Title, agency, or opportunity number" autocomplete="off">
+    </label>
+    <label>Relevance at least
+      <select id="minScore"></select>
+    </label>
+    <label>Closing within
+      <select id="closingWithin"></select>
+    </label>
+    <label>Stage
+      <select id="stage">
+        <option value="">Any</option>
+        <option value="concept">Concept or letter of intent</option>
+        <option value="full">Full proposal</option>
+      </select>
+    </label>
+    <label class="check"><input type="checkbox" id="forecasted" checked> Show forecasted</label>
+    <label class="check"><input type="checkbox" id="watchedOnly"> Only tracked</label>
+    <button type="button" class="clear" id="clear">Clear filters</button>
+    <span class="count" id="count" role="status" aria-live="polite"></span>
+  </section>
+
+  <div id="results"></div>
+
+  <section class="subscribe" aria-labelledby="subTitle">
+    <h2 id="subTitle">Email alerts by category</h2>
+    <p>Get a message when a new grant is posted in a funding category, separate from the daily digest.</p>
+    <form id="subForm">
+      <label>Email <input type="email" id="subEmail" required placeholder="you@und.edu" autocomplete="email"></label>
+      <label>Category <select id="subField" required></select></label>
+      <button type="submit" id="subSubmit">Subscribe</button>
+    </form>
+    <p class="feedback" id="subFeedback" role="status" aria-live="polite"></p>
+  </section>
+</div>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const els = {
+    status: $("status"), profileLine: $("profileLine"), notice: $("notice"), strip: $("strip"),
+    horizonHint: $("horizonHint"), q: $("q"), minScore: $("minScore"), closingWithin: $("closingWithin"),
+    forecasted: $("forecasted"), watchedOnly: $("watchedOnly"), stage: $("stage"), clear: $("clear"), count: $("count"), results: $("results"),
+    subForm: $("subForm"), subEmail: $("subEmail"), subField: $("subField"), subSubmit: $("subSubmit"), subFeedback: $("subFeedback"),
+  };
+
+  const state = { profile: null, horizons: [7, 30, 60, 90], grants: [], busy: false };
+
+  const fmtDate = (iso) => {
+    if (!iso) return "no date";
+    const d = new Date(iso);
+    return isNaN(d) ? iso : d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  };
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+  function fillSelect(select, options, value) {
+    select.innerHTML = options.map((o) => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join("");
+    select.value = String(value);
+  }
+
+  function setupFilters() {
+    const p = state.profile || {};
+    const scored = (p.data && p.data.scored) || 0;
+    const scoreOptions = [{ value: 0, label: "Any" }, { value: 3, label: "3 of 5" }, { value: 4, label: "4 of 5" }, { value: 5, label: "5 of 5" }];
+    fillSelect(els.minScore, scoreOptions, (p.configured || scored > 0) ? (p.min_score ?? 4) : 0);
+    const windows = [...new Set([...state.horizons, 180])].sort((a, b) => a - b).map((d) => ({ value: d, label: `${d} days` }));
+    windows.push({ value: "", label: "Any date" });
+    fillSelect(els.closingWithin, windows, state.horizons[state.horizons.length - 1]);
+    els.forecasted.checked = p.include_forecasted !== false;
+    els.watchedOnly.checked = false;
+    els.stage.value = "";
+    els.q.value = "";
+  }
+
+  async function loadProfile() {
+    try {
+      const res = await fetch("/api/profile", { headers: { Accept: "application/json" } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      state.profile = await res.json();
+    } catch (err) {
+      state.profile = { configured: false };
+    }
+    const p = state.profile;
+    if (Array.isArray(p.horizons) && p.horizons.length) state.horizons = p.horizons.map(Number);
+    const d = p.data;
+    if (d && d.data_as_of) {
+      els.status.textContent = `Data as of ${fmtDate(d.data_as_of)}. ${plural(d.open, "open grant")}, ${d.scored} scored, ${d.watched} tracked.`;
+    } else if (d) {
+      els.status.textContent = "No pipeline run recorded yet.";
+    } else {
+      els.status.textContent = "Database unavailable.";
+    }
+    const scoredCount = (d && d.scored) || 0;
+    if (p.configured && p.summary) {
+      els.profileLine.textContent = `Scored for: ${p.summary}${p.summary.endsWith(".") ? "" : "."}`;
+      els.profileLine.hidden = false;
+    } else if (scoredCount === 0) {
+      els.notice.innerHTML = "Relevance scoring is off. Fill in the summary in <code>config/research_profile.yml</code> and set a model to see fit scores and reasons.";
+      els.notice.hidden = false;
+    }
+    setupFilters();
+  }
+
+  function params() {
+    const q = new URLSearchParams();
+    if (els.q.value.trim()) q.set("q", els.q.value.trim());
+    if (els.minScore.value && Number(els.minScore.value) > 0) q.set("min_score", els.minScore.value);
+    if (els.closingWithin.value) q.set("closing_within", els.closingWithin.value);
+    if (els.stage.value) q.set("stage", els.stage.value);
+    q.set("include_forecasted", els.forecasted.checked ? "true" : "false");
+    if (els.watchedOnly.checked) q.set("watched_only", "true");
+    q.set("limit", "500");
+    return q;
+  }
+
+  async function loadGrants() {
+    els.count.textContent = "Loading…";
+    try {
+      const res = await fetch(`/api/grants?${params()}`, { headers: { Accept: "application/json" } });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`);
+      state.grants = body.results || [];
+      render();
+    } catch (err) {
+      state.grants = [];
+      els.results.innerHTML = `<p class="error">Couldn't load grants: ${esc(err.message)}. The database may be offline.</p>`;
+      els.count.textContent = "";
+      renderStrip();
+    }
+  }
+
+  function bucketOf(days) {
+    if (days === null || days === undefined) return "none";
+    if (days < 0) return "closed";
+    for (const h of state.horizons) if (days <= h) return h;
+    return "later";
+  }
+
+  function groups() {
+    const map = new Map();
+    for (const g of state.grants) {
+      const key = bucketOf(g.days_left);
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(g);
+    }
+    const order = [...state.horizons, "later", "none", "closed"];
+    let lower = 0;
+    return order.filter((k) => map.has(k)).map((k) => {
+      let label;
+      if (typeof k === "number") {
+        label = lower === 0 ? `Closes within ${k} days` : `Closes in ${lower + 1} to ${k} days`;
+        lower = k;
+      } else {
+        label = { later: `Closes after ${state.horizons[state.horizons.length - 1]} days`, none: "No deadline listed", closed: "Already closed" }[k];
+      }
+      return { key: k, label, items: map.get(k) };
+    });
+  }
+
+  function daysCell(g) {
+    if (g.days_left === null || g.days_left === undefined) return `<div class="days none"><b>none</b></div>`;
+    if (g.days_left === 0) return `<div class="days urgent today"><b>today</b><small>closes${g.forecasted ? ", est." : ""}</small></div>`;
+    const cls = g.days_left <= 7 ? "urgent" : g.days_left <= 30 ? "soon" : "";
+    const word = g.days_left === 1 ? "day" : "days";
+    return `<div class="days ${cls}"><b>${g.days_left}</b><small>${g.days_left < 0 ? "days ago" : word}${g.forecasted ? ", est." : ""}</small></div>`;
+  }
+
+  function scoreCell(g) {
+    const s = g.relevance_score;
+    const squares = [0, 1, 2, 3, 4].map((i) => `<i class="${s !== null && s !== undefined && i < s ? "on" : ""}"></i>`).join("");
+    return `<div class="score"><div class="squares" aria-hidden="true">${squares}</div><span>${s === null || s === undefined ? "unscored" : `${s} of 5`}</span></div>`;
+  }
+
+  function rowHtml(g) {
+    const meta = [g.agency || "Unknown agency"];
+    if (g.close_date) meta.push(`closes ${fmtDate(g.close_date)}${g.forecasted ? " (estimated)" : ""}`);
+    if (g.award_ceiling) meta.push(`up to $${Number(g.award_ceiling).toLocaleString()}`);
+    const why = g.relevance_reason ? `<p class="why">${esc(g.relevance_reason)}</p>` : g.summary ? `<p class="why summary">${esc(g.summary)}</p>` : "";
+    const title = g.url ? `<a href="${esc(g.url)}" target="_blank" rel="noopener">${esc(g.title)}</a>` : esc(g.title);
+    return `<article class="row" id="row-${esc(g.opp_id)}" data-id="${esc(g.opp_id)}">
+      ${daysCell(g)}
+      <div class="main">
+        <h3 class="title">${title}</h3>
+        <p class="meta">${esc(meta.join(", "))}</p>
+        ${why}
+        <button type="button" class="more" data-more="${esc(g.opp_id)}" aria-expanded="false">Details</button>
+        <div class="detail" data-detail="${esc(g.opp_id)}" hidden></div>
+      </div>
+      ${scoreCell(g)}
+      <button type="button" class="track ${g.watched ? "on" : ""}" data-track="${esc(g.opp_id)}" aria-pressed="${g.watched ? "true" : "false"}">${g.watched ? "Tracked" : "Track"}</button>
+    </article>`;
+  }
+
+  function render() {
+    const gs = groups();
+    els.count.textContent = plural(state.grants.length, "grant");
+    if (!state.grants.length) {
+      els.results.innerHTML = `<p class="empty">Nothing matches. Widen the closing window, lower the relevance bar, or clear the search.</p>`;
+    } else {
+      els.results.innerHTML = gs.map((grp) => `<section class="group"><h2>${esc(grp.label)} <span>(${grp.items.length})</span></h2>${grp.items.map(rowHtml).join("")}</section>`).join("");
+    }
+    renderStrip();
+  }
+
+  function renderStrip() {
+    const max = state.horizons[state.horizons.length - 1];
+    const pct = (d) => `${Math.min(100, Math.max(0, (d / max) * 100))}%`;
+    const ticks = [0, ...state.horizons].map((d, i, arr) => {
+      const cls = i === 0 ? "first" : i === arr.length - 1 ? "last" : "";
+      return `<span class="tick" style="left:${pct(d)}"></span><span class="tick-label ${cls}" style="left:${pct(d)}">${d === 0 ? "today" : `${d} days`}</span>`;
+    }).join("");
+    const first = state.horizons[0];
+    const band = `<span class="band" style="left:0;width:${pct(first)}"></span>`;
+    const inRange = state.grants.filter((g) => g.days_left !== null && g.days_left !== undefined && g.days_left >= 0 && g.days_left <= max);
+    const markers = inRange.map((g) => {
+      const s = g.relevance_score;
+      const h = s === null || s === undefined ? 12 : 12 + s * 10;
+      const cls = `marker${g.forecasted ? " forecast" : ""}${g.watched ? " watched" : ""}`;
+      const label = `${g.title} (${g.agency || "agency unknown"}), ${plural(g.days_left, "day")} left`;
+      return `<button type="button" class="${cls}" style="left:${pct(g.days_left)};height:${h}px" data-jump="${esc(g.opp_id)}" title="${esc(label)}" aria-label="${esc(label)}"></button>`;
+    }).join("");
+    const empty = inRange.length ? "" : `<span class="strip-empty">No deadlines in the next ${max} days for the current filters.</span>`;
+    els.strip.innerHTML = band + ticks + markers + empty;
+  }
+
+  async function toggleTrack(button) {
+    const id = button.dataset.track;
+    const on = button.classList.contains("on");
+    button.disabled = true;
+    try {
+      const res = on
+        ? await fetch(`/api/watchlist/${encodeURIComponent(id)}`, { method: "DELETE" })
+        : await fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ opp_id: id }) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const g = state.grants.find((x) => x.opp_id === id);
+      if (g) g.watched = !on;
+      button.classList.toggle("on", !on);
+      button.setAttribute("aria-pressed", String(!on));
+      button.textContent = on ? "Track" : "Tracked";
+      renderStrip();
+    } catch (err) {
+      button.textContent = "Try again";
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function toggleDetail(button) {
+    const id = button.dataset.more;
+    const box = els.results.querySelector(`[data-detail="${CSS.escape(id)}"]`);
+    if (!box) return;
+    const open = !box.hidden;
+    if (open) { box.hidden = true; button.setAttribute("aria-expanded", "false"); button.textContent = "Details"; return; }
+    button.textContent = "Loading…";
+    try {
+      const res = await fetch(`/api/grants/${encodeURIComponent(id)}`, { headers: { Accept: "application/json" } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const g = await res.json();
+      const rows = [
+        ["Opportunity", g.opp_id], ["Status", g.opportunity_status], ["Posted", fmtDate(g.post_date)],
+        ["Closes", g.close_date ? fmtDate(g.close_date) : "no date"], ["Categories", g.funding_categories],
+        ["Award ceiling", g.award_ceiling ? `$${Number(g.award_ceiling).toLocaleString()}` : ""],
+        ["Program funding", g.estimated_total_funding ? `$${Number(g.estimated_total_funding).toLocaleString()}` : ""],
+        ["Matched keywords", g.matched_keywords], ["Scored by", g.relevance_model],
+      ].filter(([, v]) => v);
+      box.innerHTML = `<dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl><p>${esc(g.description || "No description in the extract.")}</p>`;
+      box.hidden = false;
+      button.setAttribute("aria-expanded", "true");
+      button.textContent = "Hide details";
+    } catch (err) {
+      box.innerHTML = `<p>Couldn't load details: ${esc(err.message)}</p>`;
+      box.hidden = false;
+      button.textContent = "Hide details";
+    }
+  }
+
+  function jumpTo(id) {
+    const row = document.getElementById(`row-${id}`);
+    if (!row) return;
+    row.scrollIntoView({ block: "center", behavior: "smooth" });
+    row.classList.add("flash");
+    setTimeout(() => row.classList.remove("flash"), 1400);
+  }
+
+  async function loadSubscriptionFields() {
+    try {
+      const res = await fetch("/api/subscription-fields", { headers: { Accept: "application/json" } });
+      if (!res.ok) throw new Error();
+      const body = await res.json();
+      fillSelect(els.subField, (body.fields || []).map((f) => ({ value: f.key, label: f.label })), (body.fields || [{}])[0].key || "");
+    } catch (err) {
+      fillSelect(els.subField, [{ value: "", label: "Categories unavailable" }], "");
+    }
+  }
+
+  async function subscribe(event) {
+    event.preventDefault();
+    els.subSubmit.disabled = true;
+    els.subFeedback.className = "feedback";
+    els.subFeedback.textContent = "Saving…";
+    try {
+      const res = await fetch("/api/subscriptions", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: els.subEmail.value.trim(), field: els.subField.value }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`);
+      els.subFeedback.className = "feedback ok";
+      els.subFeedback.textContent = `Subscribed to ${body.field.label}.`;
+      els.subForm.reset();
+    } catch (err) {
+      els.subFeedback.className = "feedback bad";
+      els.subFeedback.textContent = `Couldn't subscribe: ${err.message}`;
+    } finally {
+      els.subSubmit.disabled = false;
+    }
+  }
+
+  let timer = null;
+  const debounced = () => { clearTimeout(timer); timer = setTimeout(loadGrants, 250); };
+  els.q.addEventListener("input", debounced);
+  [els.minScore, els.closingWithin, els.forecasted, els.watchedOnly, els.stage].forEach((el) => el.addEventListener("change", loadGrants));
+  els.clear.addEventListener("click", () => { setupFilters(); loadGrants(); });
+  els.results.addEventListener("click", (event) => {
+    const track = event.target.closest("[data-track]");
+    if (track) return toggleTrack(track);
+    const more = event.target.closest("[data-more]");
+    if (more) return toggleDetail(more);
+  });
+  els.strip.addEventListener("click", (event) => {
+    const marker = event.target.closest("[data-jump]");
+    if (marker) jumpTo(marker.dataset.jump);
+  });
+  els.subForm.addEventListener("submit", subscribe);
+
+  loadProfile().then(() => { loadGrants(); loadSubscriptionFields(); });
+})();
+</script>
+</body>
+</html>

@@ -1,53 +1,141 @@
 ﻿# GrantWatch
 
-## Grants Data Pipeline
+GrantWatch watches Grants.gov for funding a research group can actually
+pursue and makes sure no deadline slips. A daily pipeline scores every new
+opportunity against a written research profile, a deadline-first digest goes
+out by email, a dashboard shows what closes when, and an MCP server lets
+Claude answer questions about the same data.
 
-`grants_data/pipeline.py` downloads Grants.gov opportunities, filters them by
-date/status/keywords, summarizes descriptions with an LLM, writes a CSV, and
-loads Postgres. Two data sources are supported via `GRANTS_DATA_SOURCE`:
+## How it fits together
 
-- `export` (default): the search_export JSON endpoint, capped at
-  `GRANTS_GOV_ROWS` (5000) records.
-- `extract`: the full daily XML database extract — every posted and
-  forecasted opportunity (~82k records, ~75 MB zip → ~300 MB XML), no cap.
+1. `config/research_profile.yml` describes the research program, the keyword
+   pre-filter, agencies to skip, the score below which a grant is not worth an
+   email, and the deadline horizons.
+2. `python main.py` downloads the daily Grants.gov extract (about 83,000
+   records), keeps opportunities posted in the last 90 days, drops excluded
+   agencies, applies the keyword pre-filter, scores what is new with an
+   OpenAI-compatible model, writes a CSV, upserts Postgres, and prints and
+   emails the digest.
+3. The dashboard (`src/web/app.py`, deployed on Vercel) reads Postgres: a
+   90-day timeline, grants grouped by deadline, relevance scores with the
+   model's reason, and a Track button for grants the group intends to pursue.
+4. `mcp_server/server.py` exposes the same queries to Claude Code or Claude
+   Desktop.
 
-The extract is published every morning at
-`https://prod-grants-gov-chatbot.s3.amazonaws.com/extracts/GrantsDBExtractYYYYMMDDv2.zip`.
-`grants_data/download_extract.py` finds the newest available day (falling back
-up to `GRANTS_GOV_EXTRACT_LOOKBACK_DAYS`), streams the zip into
-`grants_data/grants_xml_data/`, and unzips it; `grants_data/parse_extract.py`
-stream-parses the XML into the same record shape the JSON export produces, so
-all downstream filters work with either source.
+## Setup
 
 ```bash
-# one-off: download, unzip, and parse today's full extract
-GRANTS_DATA_SOURCE=extract python -c "from grants_data.pipeline import onlyTheGoodStuff; onlyTheGoodStuff()"
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env            # fill in POSTGRES_URL (or the POSTGRES_* parts)
 ```
+
+Then edit `config/research_profile.yml`: replace the `summary` with two to
+five sentences about the group's research. Scoring stays off until that is
+done, and everything else still works without it.
+
+### Relevance scoring with Ollama or vLLM
+
+Scoring talks to any server that speaks the OpenAI chat-completions protocol.
+Set these in `.env`:
+
+| Server | `GRANTS_LLM_BASE_URL` | `GRANTS_LLM_MODEL` | `GRANTS_LLM_API_KEY` |
+|--------|-----------------------|--------------------|----------------------|
+| Ollama | `http://localhost:11434/v1` | the model you pulled, e.g. the name shown by `ollama list` | `ollama` (ignored) |
+| vLLM   | `http://host:8000/v1` | the served model name | the value passed to `--api-key`, if any |
+
+The scorer asks for a 0 to 5 fit score, a one-sentence summary, and a
+one-sentence reason per grant, batched `GRANTS_LLM_BATCH_SIZE` at a time with
+`GRANTS_LLM_WORKERS` concurrent requests. It requests JSON-schema output,
+falls back to plain JSON mode and then to free text if the server rejects
+those, and tolerates reasoning tags and code fences. Scores are cached per
+profile in the database and in `grants_data/cache/`, so each run only scores
+grants it has not seen; the first run is capped by
+`GRANTS_RELEVANCE_MAX_PER_RUN` (soonest deadlines first) and catches up on
+later runs. Changing the profile summary rescores everything.
+
+### Running it
+
+```bash
+GRANTS_DATA_SOURCE=extract python main.py
+```
+
+The digest is printed to the console, and emailed when
+`GMAIL_NOTIFY_RECIPIENTS` and `GMAIL_TOKEN_FILE` are set (create the token
+with `scripts/generate_gmail_token.py`). It leads with grants that are new
+and score at least `min_score_to_notify`, then lists every relevant or
+tracked grant closing inside each horizon with days left. Forecasted
+opportunities are marked as estimated.
+
+### Dashboard
+
+```bash
+uvicorn web.app:app --app-dir src --reload   # http://localhost:8000
+```
+
+API: `GET /api/grants` (`q`, `min_score`, `closing_within`,
+`include_forecasted`, `watched_only`, `limit`), `GET /api/grants/{id}`,
+`GET|POST /api/watchlist`, `DELETE /api/watchlist/{id}`, `GET /api/profile`,
+plus the category subscription endpoints.
+
+### MCP server
+
+Register it once from the repository root, then ask Claude things like
+"what closes this month that fits my grid work" or "track the second one":
+
+```bash
+pip install -r mcp_server/requirements.txt
+claude mcp add grantwatch -e POSTGRES_URL="$POSTGRES_URL" -- \
+  "$PWD/.venv/bin/python" "$PWD/mcp_server/server.py"
+```
+
+For Claude Desktop, add the same command to `claude_desktop_config.json`
+under `mcpServers`. Tools: `search_grants`, `upcoming_deadlines`,
+`grant_details`, `track_grant`, `untrack_grant`, `tracked_grants`,
+`research_profile`.
 
 ## Scheduled runs
 
-`.github/workflows/pipeline.yml` runs `python main.py` every day at 12:00 UTC
-(and on demand from the Actions tab) using the `extract` source. Configure it
-under **Settings > Secrets and variables > Actions**:
+Pick one of the two.
 
-| Kind     | Name                      | Purpose                                                         |
-|----------|---------------------------|-----------------------------------------------------------------|
-| Secret   | `POSTGRES_URL`            | Required. Production Postgres DSN; the run fails without it.    |
-| Secret   | `GMAIL_TOKEN_JSON`        | Optional. Contents of the Gmail OAuth `token.json`.             |
-| Variable | `GMAIL_NOTIFY_RECIPIENTS` | Optional. Comma-separated recipients for the release email.     |
-| Variable | `GMAIL_SENDER_EMAIL`      | Optional. Defaults to the first recipient.                      |
-| Variable | `GRANTS_KEYWORDS`         | Optional. Overrides the default keyword list.                   |
-| Variable | `GRANTS_INCLUDE_FORECAST` | Optional. `true` keeps forecasted opportunities.                |
-| Variable | `GRANTS_GOV_LOOKBACK_DAYS`| Optional. Defaults to 90.                                       |
+**On this Mac (recommended when the model runs locally).** The job runs at
+07:30, after the extract is published, and catches up after sleep:
 
-Each run uploads the generated CSV and `logs/grantwatch.log` as a workflow
-artifact, and `main.py` exits non-zero when the pipeline fails so the run
-shows up red.
+```bash
+scripts/install_launchd.sh
+launchctl start com.grantwatch.daily     # run once now; output in logs/daily.log
+```
+
+On Linux, add `30 7 * * * /path/to/GrantWatch/scripts/run_daily.sh` to
+`crontab -e`.
+
+**On GitHub Actions.** `.github/workflows/pipeline.yml` runs daily at 12:00
+UTC and on demand. A model on a laptop is not reachable from a runner, so
+either point `GRANTS_LLM_BASE_URL` at a server GitHub can reach or leave
+scoring to local runs; unscored grants still load and the digest still sends
+tracked deadlines. Configure under **Settings > Secrets and variables > Actions**:
+
+| Kind     | Name                      | Purpose                                                        |
+|----------|---------------------------|----------------------------------------------------------------|
+| Secret   | `POSTGRES_URL`            | Required. Production Postgres DSN; the run fails without it.   |
+| Secret   | `GMAIL_TOKEN_JSON`        | Optional. Contents of the Gmail OAuth `token.json`.            |
+| Secret   | `GRANTS_LLM_BASE_URL`     | Optional. OpenAI-compatible endpoint reachable from GitHub.    |
+| Secret   | `GRANTS_LLM_API_KEY`      | Optional. Key for that endpoint.                               |
+| Variable | `GRANTS_LLM_MODEL`        | Optional. Model name; scoring is off when empty.               |
+| Variable | `GMAIL_NOTIFY_RECIPIENTS` | Optional. Comma-separated digest recipients.                   |
+| Variable | `GMAIL_SENDER_EMAIL`      | Optional. Defaults to the first recipient.                     |
+| Variable | `GRANTS_KEYWORDS`         | Optional. Overrides the profile's keyword list.                |
+| Variable | `GRANTS_MIN_SCORE`        | Optional. Overrides the profile's notification threshold.      |
+| Variable | `GRANTS_INCLUDE_FORECAST` | Optional. `false` drops forecasted opportunities.              |
+| Variable | `GRANTS_GOV_LOOKBACK_DAYS`| Optional. Defaults to 90.                                      |
+
+Each run uploads the CSV and `logs/grantwatch.log` as a workflow artifact,
+and `main.py` exits non-zero when the pipeline fails so the run shows up red.
 
 ## Deploying the web app
 
-Vercel is not linked to this GitHub repository, so pushing to `main` does not
-deploy. After merging changes to `src/web/` or `api/`, run:
+Vercel is not linked to this GitHub repository, so pushing does not deploy.
+After changing `src/web/` or `api/`, run:
 
 ```bash
 npx vercel --prod
