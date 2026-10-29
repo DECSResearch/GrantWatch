@@ -26,30 +26,51 @@ def _parse_date(value: str | None) -> datetime | None:
     return None
 
 
+def _passed(record: Dict[str, object], field: str, today: date) -> bool:
+    raw = record.get(field)
+    parsed = _parse_date(str(raw)) if raw not in (None, "") else None
+    return parsed is not None and parsed.date() < today
+
+
 def drop_closed_grants(records: List[Dict[str, object]], today: date | None = None) -> List[Dict[str, object]]:
-    """Remove grants whose deadline has already passed; keep those with no date."""
+    """Remove grants nobody can apply to any more; keep those with no dates.
+
+    A grant is closed once its close date has passed, and also once its
+    archive date has: Grants.gov stops taking applications at the archive
+    date even when the close date is later, which is true of most old
+    records whose close date looks open.
+    """
     today = today or datetime.now(timezone.utc).date()
     kept: List[Dict[str, object]] = []
-    dropped = 0
+    closed = archived = 0
     for record in records:
-        raw_close = record.get("CLOSE_DATE")
-        close = _parse_date(str(raw_close)) if raw_close not in (None, "") else None
-        if close is not None and close.date() < today:
-            dropped += 1
-            continue
-        kept.append(record)
-    if dropped:
-        logger("info", f"Dropped {dropped} grant(s) whose deadline already passed")
+        if _passed(record, "CLOSE_DATE", today):
+            closed += 1
+        elif _passed(record, "ARCHIVE_DATE", today):
+            archived += 1
+        else:
+            kept.append(record)
+    if closed or archived:
+        logger("info", f"Dropped {closed} grant(s) past their deadline and {archived} already archived")
     return kept
 
 
 def date_filter_json_data(records: List[Dict[str, object]]) -> List[Dict[str, object]]:
-    """Keep grants posted within the configured lookback window."""
+    """Keep grants posted within GRANTS_GOV_LOOKBACK_DAYS, when that is set.
+
+    Off by default: long-running solicitations (most of NSF) were posted
+    years ago and are still open, so a posted-date window hides them and
+    stops refreshing their deadlines. drop_closed_grants decides what is open.
+    """
+    raw = (os.getenv("GRANTS_GOV_LOOKBACK_DAYS") or "").strip()
     try:
-        lookback_days = int((os.getenv("GRANTS_GOV_LOOKBACK_DAYS") or "90").strip())
+        lookback_days = int(raw) if raw else 0
     except ValueError:
-        logger("warning", "Invalid GRANTS_GOV_LOOKBACK_DAYS; defaulting to 90")
-        lookback_days = 90
+        logger("warning", f"Invalid GRANTS_GOV_LOOKBACK_DAYS '{raw}'; keeping every posting date")
+        lookback_days = 0
+    if lookback_days <= 0:
+        logger("info", f"No posted-date window; keeping all {len(records)} records for the open-grant filter")
+        return list(records)
     # Naive UTC so it stays comparable with the naive parsed record dates.
     cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=lookback_days)
 

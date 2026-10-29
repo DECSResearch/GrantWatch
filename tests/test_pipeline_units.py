@@ -77,6 +77,12 @@ class TestDateFilter:
         monkeypatch.setenv("GRANTS_GOV_LOOKBACK_DAYS", "ninety")
         assert date_filter_json_data([]) == []
 
+    def test_no_window_by_default(self, monkeypatch):
+        # Long-running solicitations were posted years ago and are still open.
+        monkeypatch.delenv("GRANTS_GOV_LOOKBACK_DAYS", raising=False)
+        records = [{"POSTED_DATE": "01/01/2010"}, {"POSTED_DATE": None}]
+        assert date_filter_json_data(records) == records
+
 
 class TestKeywordFilter:
     def test_matches_ignore_html_markup(self):
@@ -133,3 +139,16 @@ class TestDropClosed:
         ]
         kept = [r["OPPORTUNITY_NUMBER"] for r in drop_closed_grants(records, today=date(2026, 9, 11))]
         assert kept == ["TODAY", "FUTURE", "NONE", "BAD"]
+
+    def test_archived_grants_dropped_even_with_a_later_close_date(self):
+        from datetime import date
+        from grants_data.date_filter_data import drop_closed_grants
+
+        records = [
+            {"OPPORTUNITY_NUMBER": "ARCHIVED", "CLOSE_DATE": "12/01/2026", "ARCHIVE_DATE": "09/01/2026"},
+            {"OPPORTUNITY_NUMBER": "OPEN", "CLOSE_DATE": "12/01/2026", "ARCHIVE_DATE": "01/01/2027"},
+            {"OPPORTUNITY_NUMBER": "ROLLING", "CLOSE_DATE": None, "ARCHIVE_DATE": None},
+        ]
+        kept = [r["OPPORTUNITY_NUMBER"] for r in drop_closed_grants(records, today=date(2026, 9, 11))]
+        assert kept == ["OPEN", "ROLLING"]
+

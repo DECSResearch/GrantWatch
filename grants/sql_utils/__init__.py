@@ -179,6 +179,36 @@ def get_subscribers_for_fields(fields: Iterable[str]) -> Dict[str, List[str]]:
 
 
 
+# How long a grant may be missing from the extract before it counts as
+# withdrawn. Measured from the newest load, not from today, so a few days of
+# failed downloads do not hide everything.
+_STALE_AFTER = "3 days"
+
+
+def listed_sql(alias: str = "g") -> str:
+    """SQL condition for a grant that was in a recent extract."""
+    return (
+        f"({alias}.last_seen_at IS NULL OR {alias}.last_seen_at >="
+        f" (SELECT MAX(last_seen_at) FROM grants) - INTERVAL '{_STALE_AFTER}')"
+    )
+
+
+def open_grant_sql(alias: str = "g") -> str:
+    """SQL condition for a grant someone can still apply to.
+
+    Not past its close date, not archived (Grants.gov stops taking
+    applications at the archive date even when the close date is later), and
+    still present in a recent extract. Every query that lists open grants uses
+    this so the dashboard, MCP server and email agree.
+    """
+    a = alias
+    return (
+        f"({a}.close_date IS NULL OR {a}.close_date >= CURRENT_DATE)"
+        f" AND ({a}.archive_date IS NULL OR {a}.archive_date >= CURRENT_DATE)"
+        f" AND {listed_sql(a)}"
+    )
+
+
 def fetch_relevance(profile_fingerprint: str) -> Dict[str, Dict[str, Any]]:
     """Scores already stored for this profile, keyed by opportunity number."""
     query = """
@@ -212,7 +242,8 @@ def fetch_upcoming(
 ) -> List[Dict[str, Any]]:
     """Grants closing within ``days`` that clear ``min_score`` or are on the watchlist."""
     conditions = [
-        "g.close_date >= CURRENT_DATE",
+        open_grant_sql("g"),
+        "g.close_date IS NOT NULL",
         "g.close_date < CURRENT_DATE + (%s || ' days')::interval",
     ]
     params: List[Any] = [int(days)]
