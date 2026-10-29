@@ -27,7 +27,10 @@ class FakeCompletions:
     def create(self, **kwargs):
         self.calls.append(kwargs)
         content = self.responder(kwargs)
-        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
+        finish = "stop"
+        if isinstance(content, tuple):
+            content, finish = content
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content), finish_reason=finish)])
 
 
 class FakeClient:
@@ -145,6 +148,25 @@ class TestScoreRecords:
         out = score_records(_records("A", "B", "C"), PROFILE, settings=SETTINGS, client=client)
         assert out.scored == 1 and out.failed == 2
         assert len(client.completions.calls) == 4  # three formats for [A, B], one for [C]
+
+    def test_token_limit_stops_scoring_instead_of_changing_format(self):
+        # A reasoning model that thinks past max_tokens returns empty content.
+        client = FakeClient(lambda kwargs: ("", "length"))
+        out = score_records(_records("A", "B", "C", "D"), PROFILE, settings=SETTINGS, client=client)
+        assert out.scored == 0 and out.failed == 4
+        assert len(client.completions.calls) == 1  # no format fallback, no further batches
+        assert client.completions.calls[0]["response_format"]["type"] == "json_schema"
+
+    def test_extra_body_is_sent(self, monkeypatch):
+        monkeypatch.setenv("GRANTS_LLM_MODEL", "m")
+        monkeypatch.setenv("GRANTS_LLM_EXTRA_BODY", '{"chat_template_kwargs": {"enable_thinking": false}}')
+        settings = LLMSettings.from_env()
+        assert settings.extra_body == {"chat_template_kwargs": {"enable_thinking": False}}
+        client = FakeClient(_echo_scores())
+        score_records(_records("A"), PROFILE, settings=settings, client=client)
+        assert client.completions.calls[0]["extra_body"] == {"chat_template_kwargs": {"enable_thinking": False}}
+        monkeypatch.setenv("GRANTS_LLM_EXTRA_BODY", "not json")
+        assert LLMSettings.from_env().extra_body == {}
 
     def test_completion_tokens_leave_room_for_reasoning(self):
         assert LLMSettings(model="m", batch_size=3).completion_tokens(3) == 2048
