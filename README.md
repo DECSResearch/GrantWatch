@@ -170,6 +170,12 @@ On Linux, add `30 7 * * * /path/to/GrantWatch/scripts/run_daily.sh` to
 `crontab -e`. `main.py` exits non-zero when ingest or any email failed, and
 rerunning it the same day never sends anything twice.
 
+## Running on the lab cluster
+
+GrantWatch can run on the lab's k3s cluster: Postgres, the dashboard on port
+30810, and the daily job as a CronJob, deployed with Ansible the same way as
+`c2sr-testbed-llm-orchestrator`. See [k8s/README.md](k8s/README.md).
+
 ## Deploying the web app
 
 Vercel is not linked to this GitHub repository, so pushing does not deploy.
