@@ -117,7 +117,7 @@ def _eligible(grants: List[GrantState], person: Recipient, config: NotifySetting
     return [g for g in open_now if not g.watched and g.score is not None and g.score >= threshold and g.opp_id not in announced]
 
 
-@settings(max_examples=300, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@settings(deadline=None, suppress_health_check=[HealthCheck.too_slow])  # example count from the profile in conftest.py
 @given(scenarios())
 def test_email_service_properties(scenario):
     sims, people, days, failures, reruns, config = scenario
@@ -208,7 +208,7 @@ def test_email_service_properties(scenario):
 _TEXT = st.text(alphabet=st.characters(codec="utf-8", exclude_categories=["Cs", "Cc"]), max_size=400)
 
 
-@settings(max_examples=60, deadline=None)
+@settings(max_examples=max(20, settings.default.max_examples // 5), deadline=None)
 @given(
     titles=st.lists(_TEXT, min_size=1, max_size=300),
     reason=_TEXT,

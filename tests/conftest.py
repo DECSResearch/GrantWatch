@@ -2,12 +2,20 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from pathlib import Path
 
 import pytest
+from hypothesis import settings
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# Property tests run 300 simulated scenarios by default; for a deeper sweep
+# run `HYPOTHESIS_PROFILE=long pytest tests/test_planner_properties.py`.
+settings.register_profile("default", max_examples=300)
+settings.register_profile("long", max_examples=2000)
+settings.load_profile(os.getenv("HYPOTHESIS_PROFILE", "default"))
 
 
 @pytest.fixture(scope="session", autouse=True)
