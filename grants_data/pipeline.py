@@ -223,7 +223,10 @@ def onlyTheGoodStuff() -> Tuple[bool, List[Dict[str, object]]]:
         summary: LoadSummary = load_grants_from_records(final_json_data)
         onlyTheGoodStuff.last_new_ids = summary.new_ids  # type: ignore[attr-defined]
     except Exception as exc:
+        # The email step reads from the database, so a run that could not
+        # load it has failed even though the CSV was written.
         logger("error", f"Failed to load data into the database: {exc}")
+        return _finish(False, final_json_data, csv_path)
 
     final_length = len(final_json_data)
     retained_pct = (final_length / length_initial) * 100 if length_initial else 0
