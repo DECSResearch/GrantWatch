@@ -47,6 +47,17 @@ Set these in `.env`:
 |--------|-----------------------|--------------------|----------------------|
 | Ollama | `http://localhost:11434/v1` | the model you pulled, e.g. the name shown by `ollama list` | `ollama` (ignored) |
 | vLLM   | `http://host:8000/v1` | the served model name | the value passed to `--api-key`, if any |
+| Open WebUI | `http://host:port/api` | the model id it lists, e.g. `qwen3.6-35b` | an API key from Settings > Account |
+
+Reasoning models such as Qwen 3.x think before answering, and with the
+default token budget they can run out before writing any JSON; scoring then
+stops with a message saying so. Either raise `GRANTS_LLM_MAX_TOKENS` (8192 is
+enough) or turn thinking off, which is about nine times faster with nearly
+the same scores:
+
+```bash
+GRANTS_LLM_EXTRA_BODY={"chat_template_kwargs": {"enable_thinking": false}}
+```
 
 The scorer asks for a 0 to 5 fit score, a one-sentence summary, and a
 one-sentence reason per grant, batched `GRANTS_LLM_BATCH_SIZE` at a time with

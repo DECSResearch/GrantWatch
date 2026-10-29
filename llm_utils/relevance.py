@@ -12,13 +12,19 @@ or a hosted endpoint. Configuration comes from the environment:
     GRANTS_LLM_TIMEOUT           seconds per request, default 180
     GRANTS_LLM_MAX_CHARS         description characters sent per grant, default 3000
     GRANTS_LLM_MAX_TOKENS        completion tokens per request, default max(2048, 400 * batch)
+    GRANTS_LLM_EXTRA_BODY        JSON merged into each request body, e.g. to turn off a
+                                 reasoning model's thinking on vLLM or Open WebUI:
+                                 {"chat_template_kwargs": {"enable_thinking": false}}
     GRANTS_RELEVANCE_MAX_PER_RUN grants scored per run, default 400 (soonest deadlines first)
 
 Local models are not always strict about output formats, so the parser
 tolerates reasoning tags, code fences, and partially answered batches, and a
 batch whose output cannot be parsed is retried with a looser response format
 before it is given up on; a grant that stays unscored is tried again on the
-next run. Keep the server's context window comfortably above the prompt
+next run. A reasoning model that spends the whole token budget thinking
+returns no answer; scoring then stops with a message naming the two fixes
+(more tokens, or thinking off) instead of retrying every batch. Keep the
+server's context window comfortably above the prompt
 (Ollama: OLLAMA_CONTEXT_LENGTH=8192 or a Modelfile num_ctx), or the system
 prompt is silently truncated away.
 """
@@ -31,7 +37,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from openai import (
     APIConnectionError,
@@ -123,6 +129,25 @@ def _env_int(name: str, default: int, minimum: int = 1) -> int:
         return default
 
 
+def _env_json(name: str) -> Dict[str, Any]:
+    raw = _env(name)
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        logger("warning", f"{name} is not valid JSON; ignoring it")
+        return {}
+    if not isinstance(value, dict):
+        logger("warning", f"{name} must be a JSON object; ignoring it")
+        return {}
+    return value
+
+
+class OutputTruncated(ValueError):
+    """The model hit the completion-token limit before writing an answer."""
+
+
 @dataclass
 class LLMSettings:
     base_url: str = "http://localhost:11434/v1"
@@ -134,6 +159,7 @@ class LLMSettings:
     max_chars: int = 3000
     max_per_run: int = 400
     max_tokens: int = 0  # 0 = automatic
+    extra_body: Dict[str, Any] = field(default_factory=dict)
 
     def completion_tokens(self, batch_len: int) -> int:
         if self.max_tokens > 0:
@@ -153,6 +179,7 @@ class LLMSettings:
             max_chars=_env_int("GRANTS_LLM_MAX_CHARS", cls.max_chars, minimum=200),
             max_per_run=_env_int("GRANTS_RELEVANCE_MAX_PER_RUN", cls.max_per_run),
             max_tokens=_env_int("GRANTS_LLM_MAX_TOKENS", 0, minimum=0),
+            extra_body=_env_json("GRANTS_LLM_EXTRA_BODY"),
         )
 
     @property
@@ -307,7 +334,7 @@ class RelevanceScorer:
         logger("warning", f"Switching response format after {why}; now using {_RESPONSE_FORMATS[index + 1] or 'free text'}")
         return True
 
-    def _complete(self, batch: Sequence[Dict[str, Any]], index: int) -> str:
+    def _complete(self, batch: Sequence[Dict[str, Any]], index: int) -> Tuple[str, Optional[str]]:
         messages = [
             {"role": "system", "content": self._system_prompt()},
             {"role": "user", "content": self._user_prompt(batch)},
@@ -321,15 +348,18 @@ class RelevanceScorer:
         }
         if response_format is not None:
             kwargs["response_format"] = response_format
+        if self.settings.extra_body:
+            kwargs["extra_body"] = self.settings.extra_body
         response = self.client.chat.completions.create(**kwargs)
-        return response.choices[0].message.content or ""
+        choice = response.choices[0]
+        return choice.message.content or "", getattr(choice, "finish_reason", None)
 
     def score_batch(self, batch: Sequence[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         expected = [str(record.get("OPPORTUNITY_NUMBER")) for record in batch]
         while True:
             index = self._current_format()
             try:
-                text = self._complete(batch, index)
+                text, finish = self._complete(batch, index)
             except BadRequestError as exc:
                 if self._advance_format(index, f"the server rejected the request ({exc.message[:120]})"):
                     continue
@@ -337,6 +367,13 @@ class RelevanceScorer:
             try:
                 return parse_scores(text, expected)
             except ValueError as exc:
+                if finish == "length":
+                    # Not a format problem: a looser format would be cut off the same way.
+                    raise OutputTruncated(
+                        f"the model used all {self.settings.completion_tokens(len(batch))} completion tokens before "
+                        "answering (a reasoning model thinking too long). Raise GRANTS_LLM_MAX_TOKENS, or turn "
+                        "thinking off with GRANTS_LLM_EXTRA_BODY='{\"chat_template_kwargs\": {\"enable_thinking\": false}}'"
+                    ) from exc
                 if self._advance_format(index, f"unparseable output ({exc})"):
                     continue
                 raise
@@ -397,6 +434,8 @@ def score_records(
             return scorer.score_batch(batch)
         except AuthenticationError as exc:
             scorer.abort_reason = f"authentication failed: {exc.message}"
+        except OutputTruncated as exc:
+            scorer.abort_reason = str(exc)  # every other batch would be cut off too
         except APIConnectionError as exc:
             scorer.abort_reason = f"cannot reach {settings.base_url}: {exc}"
         except RateLimitError as exc:
