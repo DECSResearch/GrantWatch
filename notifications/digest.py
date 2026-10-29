@@ -267,8 +267,8 @@ def _compose(plan: Plan, settings: NotifySettings, today: date, caps: Dict[str, 
     if plan.scoring_active:
         footnote = f"Scores are relative to the research profile. Grants below {plan.min_score}/5 are left out unless tracked."
     else:
-        footnote = ("Relevance scoring is not set up yet, so new grants are not announced. Until it is, this "
-                    "email covers tracked deadlines and the overview of keyword matches.")
+        footnote = ("These grants match the research keywords in the profile, most matches first. Set up "
+                    "relevance scoring to rank them by fit.")
     footer = [footnote, "Tracked grants get a reminder at each of these marks before they close: "
               + ", ".join(f"{d} days" for d in sorted(settings.reminder_days, reverse=True)) + "."]
     text.extend(footer)

@@ -91,8 +91,9 @@ next run, a rerun sends nothing twice, and two schedulers can both run (a
 lease in `notify_lock` keeps them from sending at the same moment). Emails
 are trimmed to stay under Gmail's ~102 KB clipping limit, carry a one-click
 unsubscribe link when `GRANTS_DASHBOARD_URL` is set, and go to each recipient
-separately. Until scoring is set up, no new grants are announced; reminders
-and the overview of keyword matches still go out.
+separately. Until scoring is set up, every new keyword match is announced,
+most keyword hits first, so the profile's `keywords` are what decide what
+you hear about; name your research fields there.
 
 Recipients live in the `recipients` table. `python main.py recipients
 add|remove|list` manages them, and addresses in `GRANTS_NOTIFY_RECIPIENTS`

@@ -73,13 +73,13 @@ class TestRender:
         email = _email([_grant("F", 10, score=4, forecasted=True)])
         assert "10 days left, estimated" in email.text
 
-    def test_without_scores_only_overview_and_reminders(self):
-        grants = [_grant("A", 3, score=None), _grant("B", 20, score=None)]
+    def test_without_scores_keyword_matches_are_announced(self):
+        grants = [_grant("FEW", 3, score=None, matches=1), _grant("MANY", 20, score=None, matches=3)]
         email = _email(grants)
-        assert "New grants that fit" not in email.text
-        assert "Grant A" in email.text and "Grant B" in email.text  # in the overview
-        assert "Relevance scoring is not set up yet" in email.text
-        assert email.subject.startswith("GrantWatch: the week ahead, 2 deadlines")
+        assert "New grants that fit (2)" in email.text
+        assert email.text.index("Grant MANY") < email.text.index("Grant FEW")  # most keyword hits first
+        assert "match the research keywords" in email.text
+        assert email.subject == "GrantWatch: 2 new"
 
     def test_trims_to_size_and_reports_only_what_fits(self):
         long = "Ünïcode ’quoted’ title " * 20

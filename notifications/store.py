@@ -150,6 +150,7 @@ class PostgresStore:
         query = f"""
             SELECT g.opp_id, g.title, g.agency, g.url, g.close_date, g.archive_date,
                    g.opportunity_status, g.relevance_score, g.relevance_reason, g.summary,
+                   g.matched_keywords,
                    (w.opp_id IS NOT NULL) AS watched, {listed_sql("g")} AS listed
             FROM grants g
             LEFT JOIN grant_watchlist w ON w.opp_id = g.opp_id
@@ -172,6 +173,7 @@ class PostgresStore:
                 summary=row["summary"] or "",
                 watched=bool(row["watched"]),
                 listed=bool(row["listed"]),
+                matches=len([k for k in (row["matched_keywords"] or "").split(";") if k.strip()]),
             )
             for row in rows
         ]

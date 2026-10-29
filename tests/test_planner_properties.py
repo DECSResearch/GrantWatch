@@ -8,8 +8,9 @@ read back as text. The properties are the spec:
 
 1. A grant is announced to a recipient at most once.
 2. Each run announces min(backlog, max_new) of the best unannounced
-   qualifying grants, so nothing qualifying is lost; repeated runs drain the
-   backlog and then go quiet.
+   qualifying grants (by score, or by keyword matches before anything is
+   scored), so nothing qualifying is lost; repeated runs drain the backlog
+   and then go quiet.
 3. A failed send records nothing.
 4. After a successful send every due reminder for a tracked grant is
    recorded, at most once per mark and deadline, and the recipient's latest
@@ -49,6 +50,7 @@ class SimGrant:
     move_day: Optional[int]
     move_by: int
     drop_day: Optional[int]
+    matches: int
 
     def on(self, day: int) -> GrantState:
         close = self.close
@@ -65,6 +67,7 @@ class SimGrant:
             reason="fits",
             watched=self.watched_from is not None and day >= self.watched_from,
             listed=self.drop_day is None or day < self.drop_day,
+            matches=self.matches,
         )
 
 
@@ -81,6 +84,7 @@ def sim_grant(index: int):
         move_day=maybe_day,
         move_by=st.integers(-20, 40),
         drop_day=st.one_of(st.none(), st.integers(1, 25)),
+        matches=st.integers(0, 5),
     )
 
 
@@ -109,7 +113,7 @@ def _eligible(grants: List[GrantState], person: Recipient, config: NotifySetting
     threshold = config.min_score if person.min_score is None else person.min_score
     open_now = [g for g in grants if g.is_open(today)]
     if not any(g.score is not None for g in open_now):
-        return []
+        return [g for g in open_now if not g.watched and g.opp_id not in announced]  # keyword matches
     return [g for g in open_now if not g.watched and g.score is not None and g.score >= threshold and g.opp_id not in announced]
 
 
@@ -150,7 +154,9 @@ def test_email_service_properties(scenario):
             if new_ids:
                 shown = [g for g in backlog[person.id] if g.opp_id in new_ids]
                 left = [g for g in backlog[person.id] if g.opp_id not in new_ids]
-                assert min(g.score for g in shown) >= max([g.score for g in left] or [0])
+                scored = any(g.score is not None for g in grants if g.is_open(today))
+                rank = (lambda g: g.score) if scored else (lambda g: g.matches)  # noqa: E731
+                assert min(rank(g) for g in shown) >= max([rank(g) for g in left] or [0])
             announced[person.id] |= set(new_ids)
 
             for opp in got.get(REMOVED_TITLE, []):  # 5

@@ -11,6 +11,8 @@ The rules:
   the recipient's threshold. Whether it was inserted today or a month ago
   does not matter, so a grant scored late (model down, per-run cap) is still
   announced. Tracked grants are not announced; the team already has them.
+  Until any grant has a score, every keyword match counts, ranked by how
+  many of the profile's keywords it mentions.
 * A tracked grant gets one reminder each time its deadline passes one of the
   reminder marks. A new deadline resets the reminders and is announced once.
 * A tracked grant that is archived early or drops out of the extract is
@@ -58,6 +60,7 @@ class GrantState:
     summary: str = ""
     watched: bool = False
     listed: bool = True  # present in a recent extract
+    matches: int = 0  # how many profile keywords it mentions
 
     def days_left(self, today: date) -> Optional[int]:
         return None if self.close_date is None else (self.close_date - today).days
@@ -210,7 +213,12 @@ def plan_email(
             if not g.watched and g.opp_id not in announced and g.score is not None and g.score >= min_score
         ]
         fresh.sort(key=lambda g: (-(g.score or 0), _date_key(g.close_date), g.title, g.opp_id))
-        plan.new = [Notice(NEW, g) for g in fresh]
+    else:
+        # No model yet: every grant in the database already matched the
+        # profile keywords, so announce those, most keyword hits first.
+        fresh = [g for g in open_grants if not g.watched and g.opp_id not in announced]
+        fresh.sort(key=lambda g: (-g.matches, _date_key(g.close_date), g.title, g.opp_id))
+    plan.new = [Notice(NEW, g) for g in fresh]
 
     plan.reminders.sort(key=lambda n: (_date_key(n.grant.close_date), n.grant.title, n.grant.opp_id))
     plan.changes.sort(key=lambda n: (_date_key(n.grant.close_date), n.grant.title, n.grant.opp_id))
