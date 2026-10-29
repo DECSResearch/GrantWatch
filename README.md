@@ -125,7 +125,7 @@ scores, moving deadlines and failed sends.
 ## Dashboard
 
 ```bash
-uvicorn web.app:app --app-dir src --reload   # http://localhost:8000
+PYTHONPATH=. uvicorn web.app:app --app-dir src --reload   # http://localhost:8000
 ```
 
 API: `GET /api/grants` (`q`, `min_score`, `closing_within`,
