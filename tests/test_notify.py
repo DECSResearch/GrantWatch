@@ -138,3 +138,25 @@ class TestRunNotify:
         store = MemoryStore([], [])
         run_notify(store=store, today=MONDAY, settings=QUIET)
         assert store.synced == ["a@und.edu", "b@und.edu"]
+
+
+class TestTestEmail:
+    def test_sends_through_the_outbox(self, monkeypatch, tmp_path, capsys):
+        import main
+
+        for name in ("GRANTS_EMAIL_TRANSPORT", "GRANTS_SMTP_HOST", "GMAIL_TOKEN_FILE", "GMAIL_TOKEN_JSON"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("GRANTS_EMAIL_OUTBOX", str(tmp_path))
+        monkeypatch.setenv("GRANTS_EMAIL_FROM", "GrantWatch <gw@example.org>")
+        assert main.main(["test-email", "me@und.edu"]) == 0
+        [sent] = list(tmp_path.glob("*.eml"))
+        assert b"Subject: GrantWatch test email" in sent.read_bytes()
+        assert "Handed to outbox" in capsys.readouterr().out
+
+    def test_no_transport_is_explained(self, monkeypatch, capsys):
+        import main
+
+        for name in ("GRANTS_EMAIL_TRANSPORT", "GRANTS_SMTP_HOST", "GMAIL_TOKEN_FILE", "GMAIL_TOKEN_JSON", "GRANTS_EMAIL_OUTBOX"):
+            monkeypatch.delenv(name, raising=False)
+        assert main.main(["test-email", "me@und.edu"]) == 1
+        assert "No email transport configured" in capsys.readouterr().out

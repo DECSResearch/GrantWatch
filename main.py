@@ -5,6 +5,7 @@
     python main.py notify           only send email (reminders still go out when ingest fails)
     python main.py notify --dry-run print what would be sent; sends and records nothing
     python main.py recipients list | add EMAIL [--name N] [--min-score S] | remove EMAIL
+    python main.py test-email EMAIL send one short message to check delivery
 """
 from __future__ import annotations
 
@@ -63,6 +64,32 @@ def recipients(args: argparse.Namespace) -> int:
     return 0
 
 
+def test_email(address: str) -> int:
+    """Send one short message and say exactly what happened."""
+    from notifications.transport import build_message, get_transport, sender_address
+
+    try:
+        transport = get_transport()
+    except ValueError as exc:
+        print(f"Email is misconfigured: {exc}")
+        return 1
+    if transport is None:
+        print("No email transport configured. Set GRANTS_SMTP_HOST (or GMAIL_TOKEN_FILE) in .env; see .env.example.")
+        return 1
+    sender = sender_address()
+    text = "This is a GrantWatch test email. If you can read it, GrantWatch notifications reach this address.\n"
+    message = build_message(sender, address, "GrantWatch test email", text, f"<p>{text.strip()}</p>")
+    try:
+        transport.send(message)
+    except Exception as exc:
+        print(f"Sending through {transport.name} failed: {exc}")
+        return 1
+    print(f"Handed to {transport.name} from {sender or 'the account default'} to {address}.")
+    print("If it has not arrived in a few minutes, check Junk and the Other tab, then the Microsoft 365")
+    print("quarantine at https://security.microsoft.com/quarantine (university mail often lands there).")
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="GrantWatch: Grants.gov opportunities and deadlines for the team.")
     sub = parser.add_subparsers(dest="command")
@@ -74,6 +101,8 @@ def _parser() -> argparse.ArgumentParser:
     people.add_argument("email", nargs="?")
     people.add_argument("--name")
     people.add_argument("--min-score", type=int, choices=range(0, 6), help="this person's threshold instead of the profile's")
+    test = sub.add_parser("test-email", help="send one short message to check that email gets through")
+    test.add_argument("address")
     return parser
 
 
@@ -84,6 +113,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return ingest()
     if args.command == "notify":
         return run_notify(dry_run=args.dry_run)
+    if args.command == "test-email":
+        return test_email(args.address)
     if args.command == "recipients":
         if args.action != "list" and not args.email:
             _parser().error(f"recipients {args.action} needs an email address")
