@@ -1,0 +1,30 @@
+---
+# Build the GrantWatch image on-host and import it into k3s containerd (no
+# registry), like c2sr-testbed-llm-orchestrator. Postgres is imported too, so
+# the node does not need to pull from Docker Hub.
+# Run on the lambda box: ansible-playbook ansible/build.yml
+- name: Build & import the GrantWatch images
+  hosts: lambda
+  gather_facts: false
+  vars:
+    image: "grantwatch:local"
+    postgres_image: "postgres:16-alpine"
+    repo_dir: "{{ playbook_dir }}/.."
+  tasks:
+    - name: docker build
+      ansible.builtin.command:
+        cmd: "docker build -t {{ image }} ."
+        chdir: "{{ repo_dir }}"
+      changed_when: true
+
+    - name: docker pull postgres
+      ansible.builtin.command: "docker pull {{ postgres_image }}"
+      changed_when: true
+
+    - name: export images to a tar
+      ansible.builtin.command: "docker save {{ image }} {{ postgres_image }} -o /tmp/grantwatch.tar"
+      changed_when: true
+
+    - name: import into k3s containerd
+      ansible.builtin.command: "k3s ctr images import /tmp/grantwatch.tar"
+      changed_when: true

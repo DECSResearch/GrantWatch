@@ -1,0 +1,69 @@
+---
+# Applies the k8s/ manifests and renders secrets from vault. Idempotent; re-run
+# after ansible/build.yml to roll out a new image.
+- name: The research profile exists
+  ansible.builtin.assert:
+    that: lookup('ansible.builtin.fileglob', profile_file) | length > 0
+    fail_msg: "Write {{ profile_file }} first (copy config/research_profile.yml and fill in summary and keywords)."
+  delegate_to: localhost
+
+- name: Namespace + ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    src: "{{ item }}"
+  loop:
+    - "{{ manifests_dir }}/namespace.yaml"
+    - "{{ manifests_dir }}/configmap.yaml"
+
+- name: Render secrets from vault (NOT secret.example.yaml)
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata: {name: "{{ item.name }}", namespace: "{{ namespace }}"}
+      type: Opaque
+      stringData: "{{ item.data }}"
+  loop:
+    - name: grantwatch-cred
+      data: >-
+        {{ {
+          'GRANTS_LLM_BASE_URL': llm_base_url,
+          'GRANTS_LLM_API_KEY': llm_api_key,
+          'POSTGRES_PASSWORD': db_password,
+          'POSTGRES_URL': 'postgresql://grantwatch:' ~ (db_password | urlencode) ~ '@grantwatch-db.' ~ namespace ~ '.svc:5432/grantwatch',
+          'GRANTS_SECRET_KEY': secret_key,
+          'GRANTS_DASHBOARD_URL': dashboard_url,
+          'GRANTS_NOTIFY_RECIPIENTS': notify_recipients | default(''),
+          'GRANTS_EMAIL_FROM': email_from | default(''),
+          'GRANTS_SMTP_HOST': smtp_host | default(''),
+          'GRANTS_SMTP_USER': smtp_user | default(''),
+          'GRANTS_SMTP_PASSWORD': smtp_password | default(''),
+        } | dict2items | rejectattr('value', 'equalto', '') | items2dict }}
+    - name: grantwatch-profile
+      data:
+        research_profile.local.yml: "{{ lookup('ansible.builtin.file', profile_file) }}"
+  no_log: true
+
+- name: Database, dashboard, daily CronJob
+  kubernetes.core.k8s:
+    state: present
+    namespace: "{{ namespace }}"
+    src: "{{ item }}"
+  loop:
+    - "{{ manifests_dir }}/postgres.yaml"
+    - "{{ manifests_dir }}/web.yaml"
+    - "{{ manifests_dir }}/cronjob-daily.yaml"
+
+- name: Restart the dashboard so it runs the newly imported image and settings
+  kubernetes.core.k8s:
+    state: patched
+    kind: Deployment
+    name: grantwatch-web
+    namespace: "{{ namespace }}"
+    definition:
+      spec:
+        template:
+          metadata:
+            annotations:
+              grantwatch/restarted-at: "{{ now(utc=true).isoformat() }}"

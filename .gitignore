@@ -194,3 +194,6 @@ grants_data/grants_csv_data/
 tsconfig.tsbuildinfo
 grants_data/cache/
 config/research_profile.local.yml
+
+# Vaulted deploy secrets (see ansible/secrets.example.yml)
+ansible/secrets.yml
