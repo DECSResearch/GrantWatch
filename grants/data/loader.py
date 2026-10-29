@@ -24,6 +24,12 @@ _DATE_FORMATS = [
 
 _SPLIT_PATTERN = re.compile(r"[;,/]+")
 _NUMERIC_JUNK = re.compile(r"[,$\s]")
+# Whole phrases only: a bare "loi" used to match "exploit" and "concept"
+# matched "conceptual", so most grants labelled concept were full proposals.
+_CONCEPT_RE = re.compile(
+    r"\b(concept (papers?|proposals?|notes?)|pre-?proposals?|letters? of intent|LOIs?|white papers?)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -35,8 +41,7 @@ class LoadSummary:
 
 def derive_stage(title: str, description: str) -> str:
     """Basic heuristic: mark concept vs full proposal."""
-    text = (title + " " + description).lower()
-    if any(word in text for word in ["concept", "pre-proposal", "preproposal", "letter of intent", "loi"]):
+    if _CONCEPT_RE.search(f"{title} {description}"):
         return "concept"
     return "full"
 

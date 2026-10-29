@@ -152,3 +152,12 @@ class TestDropClosed:
         kept = [r["OPPORTUNITY_NUMBER"] for r in drop_closed_grants(records, today=date(2026, 9, 11))]
         assert kept == ["OPEN", "ROLLING"]
 
+
+class TestStage:
+    def test_whole_phrases_only(self):
+        from grants.data.loader import derive_stage
+
+        assert derive_stage("Exploit detection for conceptual models", "") == "full"
+        assert derive_stage("Grid security", "A letter of intent is due in March.") == "concept"
+        assert derive_stage("Pre-proposals invited", "") == "concept"
+        assert derive_stage("Program", "Submit an LOI by email.") == "concept"
