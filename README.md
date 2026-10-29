@@ -1,24 +1,28 @@
 ﻿# GrantWatch
 
 GrantWatch watches Grants.gov for funding a research group can actually
-pursue and makes sure no deadline slips. A daily pipeline scores every new
-opportunity against a written research profile, a deadline-first digest goes
-out by email, a dashboard shows what closes when, and an MCP server lets
-Claude answer questions about the same data.
+pursue and makes sure no deadline slips. A daily pipeline scores every open
+opportunity against a written research profile, each team member is emailed
+about every grant that fits (once), tracked grants get deadline reminders, a
+dashboard shows what closes when, and an MCP server lets Claude answer
+questions about the same data.
 
 ## How it fits together
 
 1. `config/research_profile.yml` describes the research program, the keyword
    pre-filter, agencies to skip, the score below which a grant is not worth an
    email, and the deadline horizons.
-2. `python main.py` downloads the daily Grants.gov extract (about 83,000
-   records), keeps opportunities posted in the last 90 days, drops excluded
-   agencies, applies the keyword pre-filter, scores what is new with an
-   OpenAI-compatible model, writes a CSV, upserts Postgres, and prints and
-   emails the digest.
+2. `python main.py` runs two steps. **Ingest** downloads the daily Grants.gov
+   extract (about 83,000 records), keeps the ones still open (not past their
+   close date and not archived), drops excluded agencies, applies the keyword
+   pre-filter, scores what is unscored with an OpenAI-compatible model, writes
+   a CSV and upserts Postgres. **Notify** then emails each recipient whatever
+   they have not been told yet (see [Email](#email)). Notify runs even when
+   the download fails, and the run exits non-zero if either step failed.
 3. The dashboard (`src/web/app.py`, deployed on Vercel) reads Postgres: a
    90-day timeline, grants grouped by deadline, relevance scores with the
    model's reason, and a Track button for grants the group intends to pursue.
+   Team members sign in with an emailed link to track grants.
 4. `mcp_server/server.py` exposes the same queries to Claude Code or Claude
    Desktop.
 
@@ -57,17 +61,56 @@ later runs. Changing the profile summary rescores everything.
 ### Running it
 
 ```bash
-GRANTS_DATA_SOURCE=extract python main.py
+python main.py recipients add you@und.edu     # once per team member
+python main.py notify --dry-run               # print what would be sent
+python main.py                                # ingest, then email
 ```
 
-The digest is printed to the console, and emailed when
-`GMAIL_NOTIFY_RECIPIENTS` and `GMAIL_TOKEN_FILE` are set (create the token
-with `scripts/generate_gmail_token.py`). It leads with grants that are new
-and score at least `min_score_to_notify`, then lists every relevant or
-tracked grant closing inside each horizon with days left. Forecasted
-opportunities are marked as estimated.
+`python main.py ingest` and `python main.py notify` run one step each.
 
-### Dashboard
+## Email
+
+Each run sends a recipient one email, and only when there is something to
+say. It can hold:
+
+- **New grants that fit**: every open grant scored at or above
+  `min_score_to_notify` (or the recipient's own `--min-score`), announced
+  once. A grant scored days after it was first loaded is still announced. At
+  most `GRANTS_EMAIL_MAX_NEW` per email, best first; the rest follow in the
+  next ones.
+- **Deadline reminders** for tracked grants, once as each `reminder_days`
+  mark passes (30, 14, 7 and 2 days by default).
+- **Deadlines that moved** for tracked grants, and **tracked grants no longer
+  open** when one is archived early or drops out of the extract.
+- **The overview** of everything relevant by deadline horizon, on
+  `overview_day` (Monday by default).
+
+What each person has been told is kept in the `notifications` table and
+written only after the email went out, so a failed send is retried on the
+next run, a rerun sends nothing twice, and two schedulers can both run (a
+lease in `notify_lock` keeps them from sending at the same moment). Emails
+are trimmed to stay under Gmail's ~102 KB clipping limit, carry a one-click
+unsubscribe link when `GRANTS_DASHBOARD_URL` is set, and go to each recipient
+separately. Until scoring is set up, no new grants are announced; reminders
+and the overview of keyword matches still go out.
+
+Recipients live in the `recipients` table. `python main.py recipients
+add|remove|list` manages them, and addresses in `GRANTS_NOTIFY_RECIPIENTS`
+are added on every run without undoing anyone's unsubscribe.
+
+Pick how mail is sent in `.env` (see `.env.example`):
+
+| Transport | Settings | Notes |
+|-----------|----------|-------|
+| SMTP | `GRANTS_SMTP_HOST`, `GRANTS_SMTP_USER`, `GRANTS_SMTP_PASSWORD`, `GRANTS_EMAIL_FROM` | Gmail with an app password, Microsoft 365, AWS SES, Postmark. |
+| Gmail API | `GMAIL_TOKEN_FILE` (from `scripts/generate_gmail_token.py`) or `GMAIL_TOKEN_JSON` | Publish the OAuth app; tokens from an app in Testing mode expire after 7 days. |
+| Outbox | `GRANTS_EMAIL_OUTBOX=outbox` | Writes `.eml` files instead of sending; for trying it out. |
+
+The property tests in `tests/test_planner_properties.py` state these rules
+as invariants and check them over simulated weeks of daily runs with late
+scores, moving deadlines and failed sends.
+
+## Dashboard
 
 ```bash
 uvicorn web.app:app --app-dir src --reload   # http://localhost:8000
@@ -75,10 +118,17 @@ uvicorn web.app:app --app-dir src --reload   # http://localhost:8000
 
 API: `GET /api/grants` (`q`, `min_score`, `closing_within`,
 `include_forecasted`, `watched_only`, `limit`), `GET /api/grants/{id}`,
-`GET|POST /api/watchlist`, `DELETE /api/watchlist/{id}`, `GET /api/profile`,
-plus the category subscription endpoints.
+`GET /api/watchlist`, `GET /api/profile`, and for signed-in team members
+`POST /api/watchlist` and `DELETE /api/watchlist/{id}`. Sign-in:
+`POST /api/login` emails a link to a recipient, `GET /auth` sets the session,
+`GET /api/session`, `POST /api/logout`. `GET|POST /unsubscribe?token=` serves
+the links in the emails (a GET only asks; mail scanners fetch links).
 
-### MCP server
+Reading is open to anyone with the URL; changing the tracked list needs
+`GRANTS_SECRET_KEY` on the server and a sign-in. Without the key the
+dashboard is read-only.
+
+## MCP server
 
 Register it once from the repository root, then ask Claude things like
 "what closes this month that fits my grid work" or "track the second one":
@@ -96,7 +146,8 @@ under `mcpServers`. Tools: `search_grants`, `upcoming_deadlines`,
 
 ## Scheduled runs
 
-Pick one of the two.
+Either scheduler works, and both together are safe: the notifications table
+and the send lease keep anyone from hearing the same thing twice.
 
 **On this Mac (recommended when the model runs locally).** The job runs at
 07:30, after the extract is published, and catches up after sleep:
@@ -112,30 +163,40 @@ On Linux, add `30 7 * * * /path/to/GrantWatch/scripts/run_daily.sh` to
 **On GitHub Actions.** `.github/workflows/pipeline.yml` runs daily at 12:00
 UTC and on demand. A model on a laptop is not reachable from a runner, so
 either point `GRANTS_LLM_BASE_URL` at a server GitHub can reach or leave
-scoring to local runs; unscored grants still load and the digest still sends
-tracked deadlines. Configure under **Settings > Secrets and variables > Actions**:
+scoring to local runs; unscored grants still load and tracked deadlines are
+still emailed. Configure under **Settings > Secrets and variables > Actions**:
 
-| Kind     | Name                      | Purpose                                                        |
-|----------|---------------------------|----------------------------------------------------------------|
-| Secret   | `POSTGRES_URL`            | Required. Production Postgres DSN; the run fails without it.   |
-| Secret   | `GMAIL_TOKEN_JSON`        | Optional. Contents of the Gmail OAuth `token.json`.            |
-| Secret   | `GRANTS_LLM_BASE_URL`     | Optional. OpenAI-compatible endpoint reachable from GitHub.    |
-| Secret   | `GRANTS_LLM_API_KEY`      | Optional. Key for that endpoint.                               |
-| Variable | `GRANTS_LLM_MODEL`        | Optional. Model name; scoring is off when empty.               |
-| Variable | `GMAIL_NOTIFY_RECIPIENTS` | Optional. Comma-separated digest recipients.                   |
-| Variable | `GMAIL_SENDER_EMAIL`      | Optional. Defaults to the first recipient.                     |
-| Variable | `GRANTS_KEYWORDS`         | Optional. Overrides the profile's keyword list.                |
-| Variable | `GRANTS_MIN_SCORE`        | Optional. Overrides the profile's notification threshold.      |
-| Variable | `GRANTS_INCLUDE_FORECAST` | Optional. `false` drops forecasted opportunities.              |
-| Variable | `GRANTS_GOV_LOOKBACK_DAYS`| Optional. Defaults to 90.                                      |
+| Kind     | Name                        | Purpose                                                          |
+|----------|-----------------------------|------------------------------------------------------------------|
+| Secret   | `POSTGRES_URL`              | Required. Production Postgres DSN; the run fails without it.     |
+| Secret   | `GRANTS_PROFILE_SUMMARY`    | The profile summary; the local profile file is not on the runner.|
+| Variable | `GRANTS_PROFILE_INSTITUTION`| Optional. Institution line for the profile.                      |
+| Variable | `GRANTS_SMTP_HOST`, `GRANTS_SMTP_PORT` | SMTP server, if sending by SMTP.                      |
+| Secret   | `GRANTS_SMTP_USER`, `GRANTS_SMTP_PASSWORD` | SMTP login.                                       |
+| Secret   | `GMAIL_TOKEN_JSON`          | Or: contents of the Gmail OAuth `token.json`.                    |
+| Variable | `GRANTS_EMAIL_FROM`         | Sender address.                                                  |
+| Variable | `GRANTS_NOTIFY_RECIPIENTS`  | Optional. Comma-separated team addresses to add.                 |
+| Variable | `GRANTS_DASHBOARD_URL`      | Dashboard URL, for unsubscribe links.                            |
+| Secret   | `GRANTS_LLM_BASE_URL`       | Optional. OpenAI-compatible endpoint reachable from GitHub.      |
+| Secret   | `GRANTS_LLM_API_KEY`        | Optional. Key for that endpoint.                                 |
+| Variable | `GRANTS_LLM_MODEL`          | Optional. Model name; scoring is off when empty.                 |
+| Variable | `GRANTS_KEYWORDS`           | Optional. Overrides the profile's keyword list.                  |
+| Variable | `GRANTS_MIN_SCORE`          | Optional. Overrides the profile's notification threshold.        |
+| Variable | `GRANTS_OVERVIEW_DAY`       | Optional. Overrides the profile's overview day.                  |
+| Variable | `GRANTS_INCLUDE_FORECAST`   | Optional. `false` drops forecasted opportunities.                |
+| Variable | `GRANTS_GOV_LOOKBACK_DAYS`  | Optional. Only grants posted in the last N days; off by default. |
 
 Each run uploads the CSV and `logs/grantwatch.log` as a workflow artifact,
-and `main.py` exits non-zero when the pipeline fails so the run shows up red.
+and `main.py` exits non-zero when the pipeline or any email failed so the
+run shows up red.
 
 ## Deploying the web app
 
 Vercel is not linked to this GitHub repository, so pushing does not deploy.
-After changing `src/web/` or `api/`, run:
+Set `POSTGRES_URL`, `GRANTS_SECRET_KEY`, `GRANTS_DASHBOARD_URL` and one email
+transport (`GRANTS_SMTP_*` or `GMAIL_TOKEN_JSON`, plus `GRANTS_EMAIL_FROM`)
+in the Vercel project's environment variables so sign-in links and
+unsubscribe pages work. After changing `src/web/` or `api/`, run:
 
 ```bash
 npx vercel --prod
