@@ -1,0 +1,55 @@
+# Database for grants, scores, the watchlist and the sent-email log. Data lives
+# on a PersistentVolumeClaim (k3s local-path), so it survives restarts.
+apiVersion: v1
+kind: Service
+metadata:
+  name: grantwatch-db
+  namespace: grantwatch
+spec:
+  selector: {app: grantwatch-db}
+  ports:
+    - port: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: grantwatch-db
+  namespace: grantwatch
+spec:
+  serviceName: grantwatch-db
+  replicas: 1
+  selector:
+    matchLabels: {app: grantwatch-db}
+  template:
+    metadata:
+      labels: {app: grantwatch-db}
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: POSTGRES_DB, value: grantwatch}
+            - {name: POSTGRES_USER, value: grantwatch}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: grantwatch-cred, key: POSTGRES_PASSWORD}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "grantwatch", "-d", "grantwatch"]
+            periodSeconds: 10
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+          resources:
+            requests: {cpu: "100m", memory: "256Mi"}
+            limits: {cpu: "1", memory: "1Gi"}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests: {storage: 5Gi}

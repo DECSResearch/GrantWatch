@@ -1,0 +1,48 @@
+# The dashboard, at http://<node-ip>:30810 on the lab network.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grantwatch-web
+  namespace: grantwatch
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: grantwatch-web}
+  template:
+    metadata:
+      labels: {app: grantwatch-web}
+    spec:
+      containers:
+        - name: web
+          image: grantwatch:local          # built on-host and imported into k3s containerd
+          imagePullPolicy: Never
+          command: ["uvicorn", "web.app:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8000"]
+          envFrom:
+            - configMapRef: {name: grantwatch-config}
+            - secretRef: {name: grantwatch-cred}
+          ports:
+            - containerPort: 8000
+          readinessProbe:
+            httpGet: {path: /, port: 8000}
+            periodSeconds: 15
+          volumeMounts:
+            - {name: profile, mountPath: /app/config/research_profile.local.yml, subPath: research_profile.local.yml, readOnly: true}
+          resources:
+            requests: {cpu: "100m", memory: "256Mi"}
+            limits: {cpu: "1", memory: "512Mi"}
+      volumes:
+        - name: profile
+          secret: {secretName: grantwatch-profile}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grantwatch-web
+  namespace: grantwatch
+spec:
+  type: NodePort
+  selector: {app: grantwatch-web}
+  ports:
+    - port: 8000
+      targetPort: 8000
+      nodePort: 30810

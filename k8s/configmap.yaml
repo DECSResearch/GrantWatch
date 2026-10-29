@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grantwatch-config
+  namespace: grantwatch
+data:
+  # Non-secret settings, injected with envFrom. Secrets (model URL and key,
+  # database password, email login) come from grantwatch-cred.
+  GRANTS_DATA_SOURCE: "extract"
+  GRANTS_LLM_MODEL: "qwen3.6-35b"
+  # Qwen 3.x thinks before answering; off is about 9x faster with near-identical scores.
+  GRANTS_LLM_EXTRA_BODY: '{"chat_template_kwargs": {"enable_thinking": false}}'
+  GRANTS_LLM_BATCH_SIZE: "3"
+  GRANTS_LLM_WORKERS: "2"
+  # High enough that the first run scores every open keyword match (~15 min).
+  GRANTS_RELEVANCE_MAX_PER_RUN: "1500"
+  GRANTS_EMAIL_MAX_NEW: "25"
+  POSTGRES_CONNECT_TIMEOUT: "10"
