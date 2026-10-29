@@ -147,11 +147,8 @@ under `mcpServers`. Tools: `search_grants`, `upcoming_deadlines`,
 
 ## Scheduled runs
 
-Either scheduler works, and both together are safe: the notifications table
-and the send lease keep anyone from hearing the same thing twice.
-
-**On this Mac (recommended when the model runs locally).** The job runs at
-07:30, after the extract is published, and catches up after sleep:
+Run it daily on the machine that runs the model. The job starts at 07:30,
+after the extract is published, and catches up after sleep:
 
 ```bash
 scripts/install_launchd.sh
@@ -159,37 +156,8 @@ launchctl start com.grantwatch.daily     # run once now; output in logs/daily.lo
 ```
 
 On Linux, add `30 7 * * * /path/to/GrantWatch/scripts/run_daily.sh` to
-`crontab -e`.
-
-**On GitHub Actions.** `.github/workflows/pipeline.yml` runs daily at 12:00
-UTC and on demand. A model on a laptop is not reachable from a runner, so
-either point `GRANTS_LLM_BASE_URL` at a server GitHub can reach or leave
-scoring to local runs; unscored grants still load and tracked deadlines are
-still emailed. Configure under **Settings > Secrets and variables > Actions**:
-
-| Kind     | Name                        | Purpose                                                          |
-|----------|-----------------------------|------------------------------------------------------------------|
-| Secret   | `POSTGRES_URL`              | Required. Production Postgres DSN; the run fails without it.     |
-| Secret   | `GRANTS_PROFILE_SUMMARY`    | The profile summary; the local profile file is not on the runner.|
-| Variable | `GRANTS_PROFILE_INSTITUTION`| Optional. Institution line for the profile.                      |
-| Variable | `GRANTS_SMTP_HOST`, `GRANTS_SMTP_PORT` | SMTP server, if sending by SMTP.                      |
-| Secret   | `GRANTS_SMTP_USER`, `GRANTS_SMTP_PASSWORD` | SMTP login.                                       |
-| Secret   | `GMAIL_TOKEN_JSON`          | Or: contents of the Gmail OAuth `token.json`.                    |
-| Variable | `GRANTS_EMAIL_FROM`         | Sender address.                                                  |
-| Variable | `GRANTS_NOTIFY_RECIPIENTS`  | Optional. Comma-separated team addresses to add.                 |
-| Variable | `GRANTS_DASHBOARD_URL`      | Dashboard URL, for unsubscribe links.                            |
-| Secret   | `GRANTS_LLM_BASE_URL`       | Optional. OpenAI-compatible endpoint reachable from GitHub.      |
-| Secret   | `GRANTS_LLM_API_KEY`        | Optional. Key for that endpoint.                                 |
-| Variable | `GRANTS_LLM_MODEL`          | Optional. Model name; scoring is off when empty.                 |
-| Variable | `GRANTS_KEYWORDS`           | Optional. Overrides the profile's keyword list.                  |
-| Variable | `GRANTS_MIN_SCORE`          | Optional. Overrides the profile's notification threshold.        |
-| Variable | `GRANTS_OVERVIEW_DAY`       | Optional. Overrides the profile's overview day.                  |
-| Variable | `GRANTS_INCLUDE_FORECAST`   | Optional. `false` drops forecasted opportunities.                |
-| Variable | `GRANTS_GOV_LOOKBACK_DAYS`  | Optional. Only grants posted in the last N days; off by default. |
-
-Each run uploads the CSV and `logs/grantwatch.log` as a workflow artifact,
-and `main.py` exits non-zero when the pipeline or any email failed so the
-run shows up red.
+`crontab -e`. `main.py` exits non-zero when ingest or any email failed, and
+rerunning it the same day never sends anything twice.
 
 ## Deploying the web app
 
