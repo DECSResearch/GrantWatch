@@ -3,14 +3,12 @@ from __future__ import annotations
 
 import json
 import re
-from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any, Dict, Iterable, List, Set
+from typing import Any, Dict, Iterable, Set
 
-from notifications.gmail_notifier import send_grant_notification
-from grants.sql_utils import db_connection, get_subscribers_for_fields
+from grants.sql_utils import db_connection
 from grants_data.normalize import strip_html
 
 from logs.status_logger import logger
@@ -97,120 +95,6 @@ def _serialise_categories(value: Any) -> str | None:
     return cleaned if cleaned else None
 
 
-def _extract_fields(opportunity_category: Any, funding_categories: str | None) -> List[tuple[str, str]]:
-    fields: Dict[str, str] = {}
-
-    def _add(raw: Any) -> None:
-        if raw in (None, ""):
-            return
-        label = str(raw).strip()
-        if not label:
-            return
-        key = label.lower()
-        fields.setdefault(key, label)
-
-    _add(opportunity_category)
-
-    if funding_categories:
-        for chunk in _SPLIT_PATTERN.split(funding_categories):
-            _add(chunk)
-
-    return list(fields.items())
-
-
-def _format_date(value: datetime | None) -> str:
-    if not value:
-        return "N/A"
-    return value.strftime("%b %d, %Y")
-
-
-def _notify_subscribers(field_grants: Dict[str, List[Dict[str, Any]]], field_labels: Dict[str, str]) -> None:
-    subscribers_map = get_subscribers_for_fields(field_grants.keys())
-    if not any(subscribers_map.values()):
-        return
-
-    email_payload: Dict[str, Dict[str, Any]] = {}
-    for field_key, grants in field_grants.items():
-        subscribers = subscribers_map.get(field_key)
-        if not subscribers:
-            continue
-        label = field_labels.get(field_key, field_key.title())
-        for email in subscribers:
-            payload = email_payload.setdefault(email, {"fields": set(), "grants": {}})
-            payload["fields"].add(label)
-            grant_map = payload["grants"]
-            for grant in grants:
-                entry = grant_map.setdefault(
-                    grant["opp_id"],
-                    {
-                        "opp_id": grant["opp_id"],
-                        "title": grant["title"],
-                        "stage": grant.get("stage"),
-                        "close_date": grant.get("close_date"),
-                        "post_date": grant.get("post_date"),
-                        "url": grant.get("url"),
-                        "agency": grant.get("agency"),
-                        "matched_fields": set(),
-                    },
-                )
-                entry["matched_fields"].add(label)
-
-    if not email_payload:
-        return
-
-    sent = 0
-    for email, data in email_payload.items():
-        fields_sorted = sorted(data["fields"])
-        subject_focus = ", ".join(fields_sorted[:2])
-        if len(fields_sorted) > 2:
-            subject_focus += " + more"
-        subject = f"GrantWatch: new grants in {subject_focus or 'your fields'}"
-
-        grants = list(data["grants"].values())
-        grants.sort(key=lambda item: (item["close_date"] is None, item["close_date"] or item["post_date"] or datetime.max))
-
-        lines = [
-            "Hi there,",
-            "",
-            f"You asked to hear about new grants in: {', '.join(fields_sorted)}.",
-            "",
-            "Here are the latest opportunities:",
-            "",
-        ]
-
-        for grant in grants:
-            lines.append(f"- {grant['title']} (ID: {grant['opp_id']})")
-            meta_parts: List[str] = []
-            if grant.get("close_date"):
-                meta_parts.append(f"Due {_format_date(grant['close_date'])}")
-            if grant.get("post_date"):
-                meta_parts.append(f"Posted {_format_date(grant['post_date'])}")
-            if grant.get("stage"):
-                meta_parts.append(f"Stage: {grant['stage'].title()}")
-            if grant.get("matched_fields"):
-                meta_parts.append(f"Matches: {', '.join(sorted(grant['matched_fields']))}")
-            if meta_parts:
-                lines.append(f"  {' | '.join(meta_parts)}")
-            if grant.get("agency"):
-                lines.append(f"  Agency: {grant['agency']}")
-            if grant.get("url"):
-                lines.append(f"  {grant['url']}")
-            lines.append("")
-
-        lines.extend(
-            [
-                "--",
-                "Update your subscription preferences any time from the GrantWatch dashboard.",
-            ]
-        )
-
-        body = "\n".join(lines).strip()
-        if send_grant_notification(subject, body, [email]):
-            sent += 1
-
-    logger("info", f"Dispatched subscriber updates to {sent} recipients")
-
-
 def _legacy_to_record(grant: Dict[str, Any]) -> Dict[str, Any]:
     if "OPPORTUNITY_NUMBER" in grant:
         return grant
@@ -267,8 +151,6 @@ _UPSERT = """
 
 def load_grants_from_records(records: Iterable[Dict[str, Any]]) -> LoadSummary:
     summary = LoadSummary()
-    field_grants: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-    field_labels: Dict[str, str] = {}
 
     with db_connection() as conn, conn.cursor() as cur:
         for grant in records:
@@ -325,24 +207,8 @@ def load_grants_from_records(records: Iterable[Dict[str, Any]]) -> LoadSummary:
             if is_new:
                 summary.inserted += 1
                 summary.new_ids.add(str(opp_id))
-                for key, label in _extract_fields(opportunity_category, funding_categories):
-                    field_labels.setdefault(key, label)
-                    field_grants[key].append(
-                        {
-                            "opp_id": opp_id,
-                            "title": title,
-                            "stage": stage,
-                            "close_date": close_date,
-                            "post_date": post_date,
-                            "agency": record.get("AGENCY"),
-                            "url": record.get("OPPORTUNITY_URL"),
-                        }
-                    )
             else:
                 summary.updated += 1
-
-    if field_grants:
-        _notify_subscribers(field_grants, field_labels)
 
     logger("info", f"Database load complete: {summary.inserted} new, {summary.updated} updated")
     return summary

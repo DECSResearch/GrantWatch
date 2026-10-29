@@ -21,19 +21,6 @@ ALTER TABLE grants
 ALTER TABLE grants
     ADD COLUMN IF NOT EXISTS funding_categories TEXT;
 
-CREATE TABLE IF NOT EXISTS grant_subscriptions (
-    id SERIAL PRIMARY KEY,
-    email TEXT NOT NULL,
-    field TEXT NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_subscriptions_email_field
-    ON grant_subscriptions (email, field);
-
-CREATE INDEX IF NOT EXISTS idx_subscriptions_field
-    ON grant_subscriptions (field);
-
 -- Relevance scoring, provenance, and the fields the UI and digest show.
 ALTER TABLE grants ADD COLUMN IF NOT EXISTS agency TEXT;
 ALTER TABLE grants ADD COLUMN IF NOT EXISTS agency_code TEXT;
