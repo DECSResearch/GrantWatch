@@ -38,11 +38,21 @@ keyword_threshold: 1
 agencies_exclude: []
 
 # Opportunities below this score stay in the database and CSV, but are left
-# out of the email digest and hidden by default in the web UI.
+# out of the email and hidden by default in the web UI. Each grant at or
+# above it is emailed once, the first time it qualifies.
 min_score_to_notify: 4
 
-# Deadline windows, in days, used by the digest and the UI groupings.
+# Deadline windows, in days, used by the weekly overview and the UI groupings.
 deadline_horizons: [7, 30, 60, 90]
+
+# Tracked grants get one reminder as their deadline passes each of these
+# marks (days before it closes), and a notice when the deadline moves.
+reminder_days: [30, 14, 7, 2]
+
+# Day of the week for the overview of everything relevant closing within the
+# horizons above. "daily" sends it with every email, "never" turns it off.
+# Other days only send an email when there is something new to say.
+overview_day: monday
 
 # Forecasted opportunities carry estimated dates and no final synopsis yet.
 # They are the earliest warning of a deadline, so keep them on.

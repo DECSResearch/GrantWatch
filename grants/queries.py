@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from psycopg2.extras import RealDictCursor
 
-from grants.sql_utils import db_connection
+from grants.sql_utils import db_connection, open_grant_sql
 
 _COLUMNS = """
     g.opp_id, g.title, g.stage, g.opportunity_status, g.opportunity_category,
@@ -40,7 +40,7 @@ def build_grants_sql(query: GrantQuery, *, with_description: bool = False) -> Tu
     params: List[Any] = []
 
     if not query.include_closed:
-        conditions.append("(g.close_date IS NULL OR g.close_date >= CURRENT_DATE)")
+        conditions.append(open_grant_sql("g"))
     if query.closing_within is not None:
         conditions.append("g.close_date IS NOT NULL")
         conditions.append("g.close_date < CURRENT_DATE + (%s || ' days')::interval")
@@ -164,13 +164,13 @@ def get_grant(opp_id: str) -> Optional[Dict[str, Any]]:
 
 def data_status() -> Dict[str, Any]:
     """Freshness and coverage numbers for the UI header and the MCP server."""
-    sql = """
+    sql = f"""
         SELECT COUNT(*) AS total,
-               COUNT(*) FILTER (WHERE close_date IS NULL OR close_date >= CURRENT_DATE) AS open,
-               COUNT(relevance_score) AS scored,
-               MAX(last_seen_at) AS last_seen_at,
+               COUNT(*) FILTER (WHERE {open_grant_sql("g")}) AS open,
+               COUNT(g.relevance_score) AS scored,
+               MAX(g.last_seen_at) AS last_seen_at,
                (SELECT COUNT(*) FROM grant_watchlist) AS watched
-        FROM grants
+        FROM grants g
     """
     with db_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(sql)

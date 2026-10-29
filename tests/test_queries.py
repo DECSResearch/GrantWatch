@@ -11,6 +11,8 @@ class TestBuildGrantsSql:
     def test_defaults_hide_closed_and_order_by_deadline(self):
         sql, params = build_grants_sql(GrantQuery())
         assert "g.close_date >= CURRENT_DATE" in sql
+        assert "g.archive_date >= CURRENT_DATE" in sql  # archived grants are closed
+        assert "SELECT MAX(last_seen_at) FROM grants" in sql  # so are ones gone from the extract
         assert "opportunity_status <> 'Forecasted'" not in sql
         assert "ORDER BY (g.close_date IS NULL), g.close_date, g.relevance_score DESC NULLS LAST" in sql
         assert params == [300]

@@ -1,7 +1,7 @@
 import os
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Tuple, Optional
+from typing import Any, Dict, List, Optional
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -94,89 +94,34 @@ def ensure_schema() -> None:
         cur.execute(sql)
 
 
-def _normalise(value: str) -> str:
-    return value.strip().lower()
+# How long a grant may be missing from the extract before it counts as
+# withdrawn. Measured from the newest load, not from today, so a few days of
+# failed downloads do not hide everything.
+_STALE_AFTER = "3 days"
 
 
+def listed_sql(alias: str = "g") -> str:
+    """SQL condition for a grant that was in a recent extract."""
+    return (
+        f"({alias}.last_seen_at IS NULL OR {alias}.last_seen_at >="
+        f" (SELECT MAX(last_seen_at) FROM grants) - INTERVAL '{_STALE_AFTER}')"
+    )
 
-def available_subscription_fields(limit: int = 200) -> List[Tuple[str, str]]:
-    query = """
-        WITH funding AS (
-            SELECT TRIM(value) AS label
-            FROM (
-                SELECT unnest(string_to_array(funding_categories, ';')) AS value
-                FROM grants
-                WHERE funding_categories IS NOT NULL
-            ) expanded
-            WHERE TRIM(value) <> ''
-        ),
-        categories AS (
-            SELECT TRIM(opportunity_category) AS label
-            FROM grants
-            WHERE opportunity_category IS NOT NULL
-        ),
-        merged AS (
-            SELECT label FROM funding
-            UNION ALL
-            SELECT label FROM categories
-        ),
-        prepared AS (
-            SELECT LOWER(label) AS field_key, label
-            FROM merged
-            WHERE label <> ''
-        )
-        SELECT field_key, MIN(label) AS display_label
-        FROM prepared
-        GROUP BY field_key
-        ORDER BY display_label
-        LIMIT %s;
+
+def open_grant_sql(alias: str = "g") -> str:
+    """SQL condition for a grant someone can still apply to.
+
+    Not past its close date, not archived (Grants.gov stops taking
+    applications at the archive date even when the close date is later), and
+    still present in a recent extract. Every query that lists open grants uses
+    this so the dashboard, MCP server and email agree.
     """
-
-    with db_connection() as conn, conn.cursor() as cur:
-        cur.execute(query, (limit,))
-        return [(row[0], row[1]) for row in cur.fetchall()]
-
-
-
-def add_subscription(email: str, field: str) -> bool:
-    email_clean = _normalise(email)
-    field_clean = _normalise(field)
-    if not email_clean or '@' not in email_clean or not field_clean:
-        raise ValueError("email and field are required")
-
-    query = """
-        INSERT INTO grant_subscriptions (email, field)
-        VALUES (%s, %s)
-        ON CONFLICT (email, field)
-        DO UPDATE SET created_at = NOW();
-    """
-
-    with db_connection() as conn, conn.cursor() as cur:
-        cur.execute(query, (email_clean, field_clean))
-        return cur.rowcount > 0
-
-
-
-def get_subscribers_for_fields(fields: Iterable[str]) -> Dict[str, List[str]]:
-    normalised = {_normalise(field) for field in fields if field and field.strip()}
-    if not normalised:
-        return {}
-
-    query = """
-        SELECT field, email
-        FROM grant_subscriptions
-        WHERE field = ANY(%s);
-    """
-
-    with db_connection() as conn, conn.cursor() as cur:
-        cur.execute(query, (list(normalised),))
-        rows = cur.fetchall()
-
-    subscribers: Dict[str, List[str]] = {}
-    for field, email in rows:
-        subscribers.setdefault(field, []).append(email)
-    return subscribers
-
+    a = alias
+    return (
+        f"({a}.close_date IS NULL OR {a}.close_date >= CURRENT_DATE)"
+        f" AND ({a}.archive_date IS NULL OR {a}.archive_date >= CURRENT_DATE)"
+        f" AND {listed_sql(a)}"
+    )
 
 
 def fetch_relevance(profile_fingerprint: str) -> Dict[str, Dict[str, Any]]:
@@ -212,7 +157,8 @@ def fetch_upcoming(
 ) -> List[Dict[str, Any]]:
     """Grants closing within ``days`` that clear ``min_score`` or are on the watchlist."""
     conditions = [
-        "g.close_date >= CURRENT_DATE",
+        open_grant_sql("g"),
+        "g.close_date IS NOT NULL",
         "g.close_date < CURRENT_DATE + (%s || ' days')::interval",
     ]
     params: List[Any] = [int(days)]

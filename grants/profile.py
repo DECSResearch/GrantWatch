@@ -18,6 +18,9 @@ _LOCAL_PATH = _DEFAULT_PATH.with_name("research_profile.local.yml")
 _PLACEHOLDER = "REPLACE ME"
 _DEFAULT_KEYWORDS = ["research", "education", "innovation", "technology", "infrastructure"]
 _DEFAULT_HORIZONS = [7, 30, 60, 90]
+_DEFAULT_REMINDER_DAYS = [30, 14, 7, 2]
+_WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+_OVERVIEW_CHOICES = set(_WEEKDAYS) | {"daily", "never"}
 
 
 @dataclass
@@ -30,6 +33,8 @@ class Profile:
     agencies_exclude: List[str] = field(default_factory=list)
     min_score_to_notify: int = 4
     deadline_horizons: List[int] = field(default_factory=lambda: list(_DEFAULT_HORIZONS))
+    reminder_days: List[int] = field(default_factory=lambda: list(_DEFAULT_REMINDER_DAYS))
+    overview_day: str = "monday"
     include_forecasted: bool = True
     source: Optional[Path] = None
 
@@ -87,6 +92,20 @@ def _as_bool(value: Any, default: bool) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _positive_ints(value: Any) -> List[int]:
+    return sorted({n for n in (_as_int(v, 0) for v in _as_list(value)) if n > 0})
+
+
+def _overview_day(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return "monday"
+    if text not in _OVERVIEW_CHOICES:
+        logger("warning", f"overview_day '{value}' is not a weekday, 'daily' or 'never'; using monday")
+        return "monday"
+    return text
+
+
 def _env(name: str) -> Optional[str]:
     value = os.getenv(name)
     if value is None or not value.strip():
@@ -102,8 +121,8 @@ def load_profile(path: str | os.PathLike[str] | None = None) -> Profile:
     ``GRANTS_PROFILE_SUMMARY`` and ``GRANTS_PROFILE_INSTITUTION`` override the
     text fields (handy on Vercel or GitHub Actions). ``GRANTS_KEYWORDS``,
     ``GRANTS_KEYWORD_THRESHOLD``, ``GRANTS_INCLUDE_FORECAST`` and
-    ``GRANTS_MIN_SCORE`` override the matching keys so the scheduled workflow
-    can tune a run without editing the file.
+    ``GRANTS_MIN_SCORE`` and ``GRANTS_OVERVIEW_DAY`` override the matching
+    keys so the scheduled workflow can tune a run without editing the file.
     """
     if path:
         location = Path(path)
@@ -127,7 +146,8 @@ def load_profile(path: str | os.PathLike[str] | None = None) -> Profile:
         logger("warning", f"Research profile not found at {location}; using defaults")
 
     keywords = _as_list(_env("GRANTS_KEYWORDS")) or _as_list(raw.get("keywords")) or list(_DEFAULT_KEYWORDS)
-    horizons = sorted({h for h in (_as_int(v, 0) for v in _as_list(raw.get("deadline_horizons"))) if h > 0})
+    horizons = _positive_ints(raw.get("deadline_horizons"))
+    reminder_days = _positive_ints(raw.get("reminder_days"))
 
     profile = Profile(
         summary=(_env("GRANTS_PROFILE_SUMMARY") or str(raw.get("summary") or "")).strip(),
@@ -138,6 +158,8 @@ def load_profile(path: str | os.PathLike[str] | None = None) -> Profile:
         agencies_exclude=_as_list(raw.get("agencies_exclude")),
         min_score_to_notify=min(5, max(0, _as_int(_env("GRANTS_MIN_SCORE") or raw.get("min_score_to_notify"), 4))),
         deadline_horizons=horizons or list(_DEFAULT_HORIZONS),
+        reminder_days=reminder_days or list(_DEFAULT_REMINDER_DAYS),
+        overview_day=_overview_day(_env("GRANTS_OVERVIEW_DAY") or raw.get("overview_day")),
         include_forecasted=_as_bool(_env("GRANTS_INCLUDE_FORECAST"), _as_bool(raw.get("include_forecasted"), True)),
         source=location if location.exists() else None,
     )

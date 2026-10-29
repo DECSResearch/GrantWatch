@@ -1,50 +1,27 @@
-"""Entry point for the GrantWatch data pipeline."""
+"""Entry point for GrantWatch.
+
+    python main.py                  ingest today's extract, then email the team
+    python main.py ingest           only download, filter, score and load
+    python main.py notify           only send email (reminders still go out when ingest fails)
+    python main.py notify --dry-run print what would be sent; sends and records nothing
+    python main.py recipients list | add EMAIL [--name N] [--min-score S] | remove EMAIL
+"""
 from __future__ import annotations
 
-from datetime import date
-from typing import Dict, List, Optional, Set
+import argparse
+from typing import List, Optional
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from grants.profile import Profile, load_profile
-from grants.sql_utils import ensure_schema, fetch_upcoming
+from grants.profile import load_profile
+from grants.sql_utils import ensure_schema
 from grants_data.pipeline import onlyTheGoodStuff
-from notifications.digest import DigestItem, build_digest, merge_items
-from notifications.gmail_notifier import digest_recipients, send_digest
+from notifications.notify import run_notify
 
 
-def _upcoming_from_db(profile: Profile) -> List[DigestItem]:
-    """Deadlines already in the database, including grants older than this run's window."""
-    try:
-        rows = fetch_upcoming(
-            days=max(profile.deadline_horizons),
-            min_score=profile.min_score_to_notify,
-            include_forecasted=profile.include_forecasted,
-        )
-    except Exception as exc:
-        print(f"Unable to read upcoming deadlines from the database: {exc}")
-        return []
-    return [DigestItem.from_row(row) for row in rows]
-
-
-def _items_from_run(records: List[Dict[str, object]], new_ids: Optional[Set[str]], watched: Set[str]) -> List[DigestItem]:
-    items = []
-    for record in records:
-        opp_id = str(record.get("OPPORTUNITY_NUMBER") or "")
-        items.append(
-            DigestItem.from_record(
-                record,
-                is_new=bool(new_ids) and opp_id in new_ids,
-                watched=opp_id in watched,
-            )
-        )
-    return items
-
-
-def main() -> int:
-    """Run the pipeline; return a process exit code so schedulers see failures."""
+def ingest() -> int:
     try:
         ensure_schema()
     except Exception as exc:
@@ -55,39 +32,67 @@ def main() -> int:
         print("Pipeline failed; check logs for details.")
         return 1
 
-    profile: Profile = getattr(onlyTheGoodStuff, "last_profile", None) or load_profile()
-    new_ids: Optional[Set[str]] = getattr(onlyTheGoodStuff, "last_new_ids", None)
+    profile = getattr(onlyTheGoodStuff, "last_profile", None) or load_profile()
     csv_path = getattr(onlyTheGoodStuff, "last_csv_path", None)
-
     message = f"Pipeline complete. {len(grants)} grants kept."
     if csv_path:
         message += f" CSV saved to: {csv_path}"
     print(message)
     if not profile.is_configured:
         print("Relevance scoring is off until config/research_profile.yml has a summary.")
-
-    from_db = _upcoming_from_db(profile)
-    watched = {item.opp_id for item in from_db if item.watched}
-    items = merge_items(from_db, _items_from_run(grants, new_ids, watched))
-
-    digest = build_digest(
-        items,
-        today=date.today(),
-        horizons=profile.deadline_horizons,
-        min_score=profile.min_score_to_notify,
-        profile_line=profile.institution,
-    )
-    if digest is None:
-        print("Nothing new and no relevant deadlines in the next "
-              f"{max(profile.deadline_horizons)} days.")
-        return 0
-
-    print()
-    print(digest.text)
-    if digest_recipients():
-        sent = send_digest(digest.subject, digest.text, digest.html)
-        print("Digest emailed." if sent else "Digest email failed; see logs.")
     return 0
+
+
+def recipients(args: argparse.Namespace) -> int:
+    from notifications import store
+
+    ensure_schema()
+    if args.action == "add":
+        added = store.add_recipient(args.email, name=args.name, min_score=args.min_score)
+        print(f"{added.email} will get GrantWatch email.")
+    elif args.action == "remove":
+        print("Removed." if store.remove_recipient(args.email) else f"{args.email} was not a recipient.")
+    else:
+        rows = store.list_recipients(active_only=False)
+        if not rows:
+            print("No recipients yet. Add one with: python main.py recipients add you@example.edu")
+        for row in rows:
+            state = "active" if row["active"] else f"unsubscribed {row['unsubscribed_at']:%Y-%m-%d}"
+            threshold = f", min score {row['min_score']}" if row["min_score"] is not None else ""
+            print(f"{row['email']}  ({state}{threshold})")
+    return 0
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="GrantWatch: Grants.gov opportunities and deadlines for the team.")
+    sub = parser.add_subparsers(dest="command")
+    sub.add_parser("ingest", help="download, filter, score and load today's extract")
+    notify = sub.add_parser("notify", help="email each recipient what is new since their last email")
+    notify.add_argument("--dry-run", action="store_true", help="print the emails instead of sending or recording them")
+    people = sub.add_parser("recipients", help="manage who gets the email")
+    people.add_argument("action", choices=["list", "add", "remove"])
+    people.add_argument("email", nargs="?")
+    people.add_argument("--name")
+    people.add_argument("--min-score", type=int, choices=range(0, 6), help="this person's threshold instead of the profile's")
+    return parser
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    """Run the requested step; return a process exit code so schedulers see failures."""
+    args = _parser().parse_args(argv)
+    if args.command == "ingest":
+        return ingest()
+    if args.command == "notify":
+        return run_notify(dry_run=args.dry_run)
+    if args.command == "recipients":
+        if args.action != "list" and not args.email:
+            _parser().error(f"recipients {args.action} needs an email address")
+        return recipients(args)
+    # Both steps, and notify even when ingest failed: tracked deadlines do not
+    # depend on today's download.
+    ingested = ingest()
+    notified = run_notify()
+    return ingested or notified
 
 
 if __name__ == "__main__":

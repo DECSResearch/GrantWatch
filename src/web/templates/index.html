@@ -132,16 +132,16 @@
   .empty, .error { margin-top: 30px; padding: 26px 0; border-top: 1px solid var(--fog); border-bottom: 1px solid var(--fog); color: var(--mist); }
   .error { color: var(--signal); }
 
-  /* Subscriptions */
-  .subscribe { margin-top: 56px; padding-top: 22px; border-top: 1px solid var(--ink); max-width: 72ch; }
-  .subscribe h2 { font-size: 17px; font-weight: 600; margin: 0; }
-  .subscribe p { margin: 4px 0 12px; color: var(--mist); font-size: 15px; }
-  .subscribe form { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
-  .subscribe label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--mist); }
-  .subscribe input, .subscribe select { font: inherit; font-size: 15px; color: var(--ink); background: var(--well); border: 1px solid var(--fog); border-radius: 4px; padding: 7px 10px; min-width: 220px; }
-  .subscribe button { font: inherit; font-size: 14px; font-weight: 600; padding: 8px 16px; border: 0; border-radius: 4px; background: var(--spruce); color: var(--paper); cursor: pointer; }
-  .subscribe button:disabled { opacity: 0.6; cursor: wait; }
-  .feedback { min-height: 22px; margin-top: 8px; font-size: 14px; color: var(--mist); }
+  /* Team sign-in */
+  .account[hidden], .account [hidden] { display: none; }
+  .account { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: end; margin: 14px 0 0; font-size: 14px; color: var(--mist); }
+  .account form { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+  .account label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+  .account input { font: inherit; font-size: 15px; color: var(--ink); background: var(--well); border: 1px solid var(--fog); border-radius: 4px; padding: 6px 10px; min-width: 220px; }
+  .account button { font: inherit; font-size: 14px; font-weight: 600; padding: 7px 14px; border: 0; border-radius: 4px; background: var(--spruce); color: var(--paper); cursor: pointer; }
+  .account button.link { background: none; color: var(--spruce); padding: 0; font-weight: 400; text-decoration: underline; }
+  .account button:disabled { opacity: 0.6; cursor: wait; }
+  .feedback { min-height: 22px; margin: 0; font-size: 14px; color: var(--mist); flex-basis: 100%; }
   .feedback.ok { color: var(--spruce); }
   .feedback.bad { color: var(--signal); }
 
@@ -162,6 +162,15 @@
     <p class="status" id="status">Loading…</p>
     <p class="profile-line" id="profileLine" hidden></p>
     <div class="notice" id="notice" hidden></div>
+    <div class="account" id="account" hidden>
+      <span id="accountText"></span>
+      <button type="button" class="link" id="logout" hidden>Sign out</button>
+      <form id="loginForm" hidden>
+        <label>Team email <input type="email" id="loginEmail" required placeholder="you@und.edu" autocomplete="email"></label>
+        <button type="submit" id="loginSubmit">Email me a sign-in link</button>
+      </form>
+      <p class="feedback" id="loginFeedback" role="status" aria-live="polite"></p>
+    </div>
   </header>
 
   <section class="horizon" aria-labelledby="horizonTitle">
@@ -198,16 +207,6 @@
 
   <div id="results"></div>
 
-  <section class="subscribe" aria-labelledby="subTitle">
-    <h2 id="subTitle">Email alerts by category</h2>
-    <p>Get a message when a new grant is posted in a funding category, separate from the daily digest.</p>
-    <form id="subForm">
-      <label>Email <input type="email" id="subEmail" required placeholder="you@und.edu" autocomplete="email"></label>
-      <label>Category <select id="subField" required></select></label>
-      <button type="submit" id="subSubmit">Subscribe</button>
-    </form>
-    <p class="feedback" id="subFeedback" role="status" aria-live="polite"></p>
-  </section>
 </div>
 
 <script>
@@ -217,10 +216,11 @@
     status: $("status"), profileLine: $("profileLine"), notice: $("notice"), strip: $("strip"),
     horizonHint: $("horizonHint"), q: $("q"), minScore: $("minScore"), closingWithin: $("closingWithin"),
     forecasted: $("forecasted"), watchedOnly: $("watchedOnly"), stage: $("stage"), clear: $("clear"), count: $("count"), results: $("results"),
-    subForm: $("subForm"), subEmail: $("subEmail"), subField: $("subField"), subSubmit: $("subSubmit"), subFeedback: $("subFeedback"),
+    account: $("account"), accountText: $("accountText"), logout: $("logout"),
+    loginForm: $("loginForm"), loginEmail: $("loginEmail"), loginSubmit: $("loginSubmit"), loginFeedback: $("loginFeedback"),
   };
 
-  const state = { profile: null, horizons: [7, 30, 60, 90], grants: [], busy: false };
+  const state = { profile: null, horizons: [7, 30, 60, 90], grants: [], busy: false, session: { auth_configured: false, email: null } };
 
   const fmtDate = (iso) => {
     if (!iso) return "no date";
@@ -408,6 +408,11 @@
       const res = on
         ? await fetch(`/api/watchlist/${encodeURIComponent(id)}`, { method: "DELETE" })
         : await fetch("/api/watchlist", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ opp_id: id }) });
+      if (res.status === 401 || res.status === 503) {
+        const body = await res.json().catch(() => ({}));
+        askToSignIn(body.detail || "Sign in to track grants.");
+        return;
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const g = state.grants.find((x) => x.opp_id === id);
       if (g) g.watched = !on;
@@ -459,38 +464,64 @@
     setTimeout(() => row.classList.remove("flash"), 1400);
   }
 
-  async function loadSubscriptionFields() {
+  function renderAccount() {
+    const sess = state.session;
+    els.account.hidden = !sess.auth_configured;
+    els.logout.hidden = !sess.email;
+    els.loginForm.hidden = Boolean(sess.email);
+    els.accountText.textContent = sess.email ? `Signed in as ${sess.email}.` : "Team members sign in to track grants and get reminders.";
+  }
+
+  function askToSignIn(message) {
+    if (!state.session.auth_configured) {
+      // No sign-in on this server: say so where it can be seen.
+      els.notice.textContent = message;
+      els.notice.hidden = false;
+      els.notice.scrollIntoView({ block: "center", behavior: "smooth" });
+      return;
+    }
+    els.loginFeedback.className = "feedback bad";
+    els.loginFeedback.textContent = message;
+    if (!els.loginForm.hidden) els.loginEmail.focus();
+    els.account.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  async function loadSession() {
     try {
-      const res = await fetch("/api/subscription-fields", { headers: { Accept: "application/json" } });
-      if (!res.ok) throw new Error();
-      const body = await res.json();
-      fillSelect(els.subField, (body.fields || []).map((f) => ({ value: f.key, label: f.label })), (body.fields || [{}])[0].key || "");
+      const res = await fetch("/api/session", { headers: { Accept: "application/json" } });
+      if (res.ok) state.session = await res.json();
+    } catch (err) { /* read-only without a session */ }
+    renderAccount();
+  }
+
+  async function requestLink(event) {
+    event.preventDefault();
+    els.loginSubmit.disabled = true;
+    els.loginFeedback.className = "feedback";
+    els.loginFeedback.textContent = "Sending…";
+    try {
+      const res = await fetch("/api/login", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: els.loginEmail.value.trim() }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 422) throw new Error("enter a valid email address.");
+      if (!res.ok) throw new Error(typeof body.detail === "string" ? body.detail : `HTTP ${res.status}`);
+      els.loginFeedback.className = "feedback ok";
+      els.loginFeedback.textContent = body.detail;
     } catch (err) {
-      fillSelect(els.subField, [{ value: "", label: "Categories unavailable" }], "");
+      els.loginFeedback.className = "feedback bad";
+      els.loginFeedback.textContent = `Couldn't send a link: ${err.message}`;
+    } finally {
+      els.loginSubmit.disabled = false;
     }
   }
 
-  async function subscribe(event) {
-    event.preventDefault();
-    els.subSubmit.disabled = true;
-    els.subFeedback.className = "feedback";
-    els.subFeedback.textContent = "Saving…";
-    try {
-      const res = await fetch("/api/subscriptions", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: els.subEmail.value.trim(), field: els.subField.value }),
-      });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`);
-      els.subFeedback.className = "feedback ok";
-      els.subFeedback.textContent = `Subscribed to ${body.field.label}.`;
-      els.subForm.reset();
-    } catch (err) {
-      els.subFeedback.className = "feedback bad";
-      els.subFeedback.textContent = `Couldn't subscribe: ${err.message}`;
-    } finally {
-      els.subSubmit.disabled = false;
-    }
+  async function signOut() {
+    await fetch("/api/logout", { method: "POST" }).catch(() => {});
+    state.session.email = null;
+    els.loginFeedback.textContent = "";
+    renderAccount();
   }
 
   let timer = null;
@@ -508,9 +539,11 @@
     const marker = event.target.closest("[data-jump]");
     if (marker) jumpTo(marker.dataset.jump);
   });
-  els.subForm.addEventListener("submit", subscribe);
+  els.loginForm.addEventListener("submit", requestLink);
+  els.logout.addEventListener("click", signOut);
 
-  loadProfile().then(() => { loadGrants(); loadSubscriptionFields(); });
+  loadSession();
+  loadProfile().then(loadGrants);
 })();
 </script>
 </body>
