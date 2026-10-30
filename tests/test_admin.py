@@ -982,6 +982,15 @@ class TestAdminPage:
         check = webapp.ADMIN_HTML.split("async function checkModel() {")[1].split("\n  }\n")[0]
         assert "renderVerdict(state.data)" in check  # the verdict is redrawn when the check finishes
 
+    def test_a_model_check_never_redraws_the_verdict_next_to_a_failed_load(self):
+        problem = webapp.ADMIN_HTML.split("function problem(text, retry) {")[1].split("\n  }\n")[0]
+        assert '$("verdict").textContent = ""' in problem and 'box.hidden = false' in problem  # a failed load blanks the verdict and shows its message
+        check = webapp.ADMIN_HTML.split("async function checkModel() {")[1].split("\n  }\n")[0]
+        assert 'if ($("message").hidden) renderVerdict(state.data)' in check  # state.data is then the older load, so it is not redrawn
+        assert 'renderSteps(); if ($("message").hidden)' in check  # the model row still shows the new answer
+        load = webapp.ADMIN_HTML.split("async function load() {")[1].split("\n  }\n")[0]
+        assert load.index('$("message").hidden = true') < load.index("checkModel()")  # a good load hides the message before its check starts
+
     def test_the_page_follows_the_dashboards_tokens_and_font(self):
         for line in webapp.INDEX_HTML.split("</style>")[0].split("* { box-sizing")[0].splitlines():
             if line.strip().startswith("--") or "color-scheme" in line:

@@ -848,7 +848,8 @@
     } catch (err) {
       state.llm = { failed: "could not reach the server." };
     }
-    if (state.data) { renderSteps(); renderVerdict(state.data); }
+    // A failed load leaves its message up and the verdict blank on purpose; state.data is then the older load.
+    if (state.data) { renderSteps(); if ($("message").hidden) renderVerdict(state.data); }
   }
 
   async function load() {
