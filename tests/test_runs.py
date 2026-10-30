@@ -11,7 +11,7 @@ from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 
-import httpx
+import httpx2
 import pytest
 from hypothesis import HealthCheck, given, settings, strategies as st
 from openai import APIConnectionError
@@ -484,7 +484,7 @@ class TestNoSecretsInTheRunLog:
                 self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))
 
             def create(self, **kwargs):
-                raise APIConnectionError(request=httpx.Request("POST", base_url))
+                raise APIConnectionError(request=httpx2.Request("POST", base_url))
 
         outcome = score_records(
             [{"OPPORTUNITY_NUMBER": "A-1", "OPPORTUNITY_TITLE": "t"}], Profile(summary="Grid resilience."),
