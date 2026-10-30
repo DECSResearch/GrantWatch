@@ -10,6 +10,8 @@ import logging
 import re
 import string
 import sys
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -1036,6 +1038,69 @@ class TestAdminAuth:
             costs.clear()
             admin_auth.check(users, name, password)
             assert costs == [admin_auth.SCRYPT_N], (name, password)
+
+    @settings(**SLOW)
+    @given(st.integers(1, 4), st.integers(1, 8))
+    def test_more_sign_ins_than_the_cap_never_hash_more_than_the_cap_at_once(self, cap, extra):
+        users = admin_auth.parse_users(_users(me=PASSWORD))
+        real = hashlib.scrypt
+        lock = threading.Lock()
+        running = peak = 0
+
+        def slow_scrypt(*args, **kwargs):
+            nonlocal running, peak
+            with lock:
+                running += 1
+                peak = max(peak, running)
+            try:
+                time.sleep(0.01)  # long enough for the other threads to pile up behind the cap
+                return real(*args, **kwargs)
+            finally:
+                with lock:
+                    running -= 1
+
+        total = cap + extra
+        start = threading.Barrier(total)
+        results = []
+
+        def attempt():
+            start.wait()
+            results.append(admin_auth.check(users, "me", PASSWORD))
+
+        with pytest.MonkeyPatch.context() as patch:  # Hypothesis does not mix with the monkeypatch fixture
+            patch.setattr(hashlib, "scrypt", slow_scrypt)
+            patch.setattr(admin_auth, "_slots", threading.BoundedSemaphore(cap))
+            patch.setattr(admin_auth, "HASH_WAIT_SECONDS", 30)  # nobody is refused here, they only wait
+            threads = [threading.Thread(target=attempt) for _ in range(total)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        assert results == [True] * total
+        assert 1 <= peak <= cap
+
+    def test_an_attempt_is_refused_when_no_slot_frees_up_in_time(self, monkeypatch):
+        users = admin_auth.parse_users(_users(me=PASSWORD))
+        slots = threading.BoundedSemaphore(1)
+        monkeypatch.setattr(admin_auth, "_slots", slots)
+        monkeypatch.setattr(admin_auth, "HASH_WAIT_SECONDS", 0.05)
+        costs = []
+        real = hashlib.scrypt
+        monkeypatch.setattr(hashlib, "scrypt", lambda *args, **kwargs: costs.append(kwargs["n"]) or real(*args, **kwargs))
+        slots.acquire()  # every slot is busy
+        assert admin_auth.check(users, "me", PASSWORD) is False  # even the right password
+        assert admin_auth.check(users, "you", PASSWORD) is False
+        assert costs == []
+        slots.release()
+        assert admin_auth.check(users, "me", PASSWORD) is True
+        assert costs == [admin_auth.SCRYPT_N]
+
+    def test_a_hash_that_fails_gives_its_slot_back(self, monkeypatch):
+        users = admin_auth.parse_users(_users(me=PASSWORD))
+        monkeypatch.setattr(admin_auth, "_slots", threading.BoundedSemaphore(1))
+        monkeypatch.setattr(admin_auth, "HASH_WAIT_SECONDS", 0.05)
+        assert admin_auth.check(users, "me", "\ud800" * 16) is False  # not UTF-8, so scrypt raises
+        assert admin_auth.check(users, "me", PASSWORD) is True
 
     def test_bad_entries_are_skipped_with_a_warning_that_never_shows_the_rest_of_the_entry(self, caplog):
         good = admin_auth.hash_password(PASSWORD)

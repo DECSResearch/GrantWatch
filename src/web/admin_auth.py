@@ -12,6 +12,7 @@ import hmac
 import logging
 import os
 import re
+import threading
 from typing import Dict, Optional, Tuple
 
 from .auth import _b64, _unb64
@@ -26,6 +27,11 @@ SALT_BYTES = 16
 HASH_BYTES = 32
 # Browsers send Basic credentials as ASCII, so the command line asks for ASCII.
 MIN_PASSWORD_LENGTH = 16
+# One hash holds about 16 MiB while it runs, and the admin routes run in a pool of
+# 40 threads, so a flood of bad sign-ins could use more than the web pod's memory
+# limit. Only this many hash at once; the rest wait, then are refused.
+MAX_CONCURRENT_HASHES = 4
+HASH_WAIT_SECONDS = 3.0
 
 NAME = re.compile(r"[a-z0-9._-]{1,32}")
 _SHOWN_NAME = re.compile(r"[A-Za-z0-9._-]{1,32}")
@@ -33,6 +39,7 @@ _NUMBER = re.compile(r"[0-9]{1,9}")
 _BASE64 = re.compile(r"[A-Za-z0-9_-]+")
 # What an unknown name is checked against, so it costs as much as a wrong password.
 _DUMMY = (bytes(SALT_BYTES), bytes(HASH_BYTES))
+_slots = threading.BoundedSemaphore(MAX_CONCURRENT_HASHES)
 
 _Hash = Tuple[int, int, int, bytes, bytes]
 
@@ -94,12 +101,19 @@ def parse_users(raw: Optional[str]) -> Dict[str, str]:
 
 
 def check(users: Dict[str, str], name: str, password: str) -> bool:
-    """Whether the name and password belong to an account. Always costs one hash, known name or not."""
+    """Whether the name and password belong to an account. Always costs one hash, known name or not.
+
+    When too many sign-ins are hashing and no slot frees up in time, the attempt is refused.
+    """
     key = canonical_name(name)
     stored = _parse_hash(users[key]) if key in users else None
     n, r, p, salt, digest = stored or (SCRYPT_N, SCRYPT_R, SCRYPT_P, *_DUMMY)
+    if not _slots.acquire(timeout=HASH_WAIT_SECONDS):
+        return False
     try:
         derived = _derive(password, n, r, p, salt)
     except (ValueError, OverflowError):  # text that is not UTF-8, or a cost scrypt refuses
         return False
+    finally:
+        _slots.release()
     return hmac.compare_digest(derived, digest) and stored is not None
