@@ -66,9 +66,11 @@ managed with `python main.py recipients`.
 
 ### Access
 
-- **Password.** HTTP Basic with `GRANTS_ADMIN_PASSWORD`, any username,
-  `compare_digest` on UTF-8 bytes.
-  - Not set: 503. Wrong or missing: 401 with `WWW-Authenticate`.
+- **Password (replaced in v2.2).** v1 used HTTP Basic with one shared
+  `GRANTS_ADMIN_PASSWORD`, any username, `compare_digest` on UTF-8 bytes. v2.2
+  replaces it with named accounts in `GRANTS_ADMIN_USERS`; see "Admin
+  accounts (v2.2)".
+  - No accounts: 503. Wrong or missing: 401 with `WWW-Authenticate`.
   - ASCII only, because FastAPI decodes the header as ASCII.
 - **Why not the email sign-in.** It sends a magic link, and UND mail drops
   the lab Gmail, so the page would be unreachable.
@@ -313,7 +315,7 @@ Settings      (two-column definition list)
 
 **States.**
 - Loading: "Loading…".
-- 401: "Enter the admin password to see this page.", with a "Try again"
+- 401: "Enter your admin name and password to see this page.", with a "Try again"
   button that reloads.
 - 503: the server's message.
 - 500: "Could not load the admin data: <detail>".
@@ -359,10 +361,10 @@ properties (style of `tests/test_planner_properties.py`):
   - A raised body's log ends with its traceback.
 - **No secrets.** For any random secret strings placed in
   `GRANTS_LLM_API_KEY`, `POSTGRES_PASSWORD`, `POSTGRES_URL`,
-  `GRANTS_SECRET_KEY`, `GRANTS_ADMIN_PASSWORD` and `GRANTS_SMTP_PASSWORD`,
-  none of them appears anywhere in `json.dumps` of the settings,
-  `llm_check()` (fake HTTP) or `email_status`. Generate the strings long
-  enough (8+ characters) that they cannot appear by accident.
+  `GRANTS_SECRET_KEY` and `GRANTS_SMTP_PASSWORD`, none of them appears
+  anywhere in `json.dumps` of the settings, `llm_check()` (fake HTTP) or
+  `email_status`. Generate the strings long enough (8+ characters) that
+  they cannot appear by accident.
 - **`_safe_host`.** For any URL with user info, path, query or fragment,
   the result has none of them, and it never raises.
 - **`llm_check`.** With a fake `requests.get` returning any status, any
@@ -395,11 +397,12 @@ Two fresh reviewers checked v1 and v2. Their findings are settled below.
 
   Remove `/api/admin`. The page fetches the relative URLs `api`, `api/llm`
   and `api/runs/<id>/log`. The dashboard footer links to `/admin/`.
-- **Password strength.** `GRANTS_ADMIN_PASSWORD` counts as unset (503)
-  when it is blank, starts with `REPLACE` (case-insensitive), or is shorter
-  than 16 characters. The 503 text says it needs 16 or more ASCII
-  characters. Update the README, `.env.example`, `ansible/secrets.example.yml`
-  and `k8s/secret.example.yaml` comments to match.
+- **Password strength (replaced in v2.2).** v2.1 made the shared
+  `GRANTS_ADMIN_PASSWORD` count as unset (503) when it was blank, started
+  with `REPLACE` (case-insensitive), or was shorter than 16 characters. That
+  password is gone. In v2.2 the 16-character ASCII minimum applies to each
+  account's password in `python main.py admin-user`, and the page answers 503
+  when `GRANTS_ADMIN_USERS` has no valid entries.
 - **HTML errors on the page.**
   - Add `status_code: int = 200` and `headers: Optional[dict] = None` to
     `_page()` in `src/web/app.py`.
@@ -409,11 +412,12 @@ Two fresh reviewers checked v1 and v2. Their findings are settled below.
     with `WWW-Authenticate` on 401.
   - `admin_page` takes `Depends(_admin_basic)` and, on a problem, returns
     `_page()` with that status. The 401 also sends `WWW-Authenticate`.
-  - 401 body: title "Admin password needed", text "Enter the admin
-    password to see this page. Any user name works."
-  - 503 body: title "The admin page is off", text "Set
-    GRANTS_ADMIN_PASSWORD to 16 or more letters and digits on this server
-    to turn it on."
+  - 401 body: title "Admin password needed", text "Enter your admin name
+    and password to see this page." (v2.2 text; v2.1 said "Enter the admin
+    password to see this page. Any user name works.")
+  - 503 body: title "The admin page is off", text "The admin page is off on
+    this server (no admin accounts in GRANTS_ADMIN_USERS)." (v2.2 text; v2.1
+    told the admin to set `GRANTS_ADMIN_PASSWORD`.)
 
 ### Run log
 
@@ -436,9 +440,10 @@ Two fresh reviewers checked v1 and v2. Their findings are settled below.
   - `grants/runs.py: secret_values() -> List[str]` collects the non-empty
     values, 8 characters or longer, of `GRANTS_LLM_API_KEY`,
     `OPENAI_API_KEY`, `POSTGRES_PASSWORD`, `POSTGRES_URL`,
-    `GRANTS_SECRET_KEY`, `GRANTS_ADMIN_PASSWORD`, `GRANTS_SMTP_PASSWORD`
-    and `GMAIL_TOKEN_JSON`, plus `GRANTS_LLM_BASE_URL` and
-    `OPENAI_BASE_URL` (the full strings).
+    `GRANTS_SECRET_KEY`, `GRANTS_SMTP_PASSWORD` and `GMAIL_TOKEN_JSON`
+    (the same list as `_SECRET_ENV` in `grants/runs.py`; v2.2 dropped
+    `GRANTS_ADMIN_PASSWORD`, and the accounts hold hashes only), plus
+    `GRANTS_LLM_BASE_URL` and `OPENAI_BASE_URL` (the full strings).
   - `redact(text)` replaces each secret value with `***`; for a base URL
     it uses `safe_host(url)` instead.
   - It applies to every captured log line, the detail and the stats string
@@ -592,7 +597,8 @@ captured by `recorded()`, and `ingest_detail` with `scoring_abort` set.
 
 The admin asked that only selected people can open the page. **This section
 replaces the shared `GRANTS_ADMIN_PASSWORD`.** It is not deployed yet, so
-nothing needs to stay compatible with it.
+nothing needs to stay compatible with it. **Where this section and the text
+above disagree, this section wins.**
 
 - **Accounts.** `GRANTS_ADMIN_USERS` lists named accounts, separated by commas
   or newlines. Each entry is `name:scrypt$<n>$<r>$<p>$<salt_b64>$<hash_b64>`.
@@ -613,7 +619,8 @@ nothing needs to stay compatible with it.
     (no admin accounts in GRANTS_ADMIN_USERS)."
   - A wrong name or password gives 401 with `WWW-Authenticate`.
   - On success the dependency returns the account name.
-  - The v2.1 HTML error pages, routes and `no-store` header are unchanged.
+  - The v2.1 HTML error pages, routes and `no-store` header are unchanged,
+    apart from the 401 and 503 texts (see "HTML errors on the page").
 - **Who is signed in.**
   - `/admin/api` adds `"viewer": "<name>"`, and the page header shows
     "Signed in as <name>". Next to it, small text says "Close the browser
