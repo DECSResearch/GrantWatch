@@ -6,20 +6,53 @@
     python main.py notify --dry-run print what would be sent; sends and records nothing
     python main.py recipients list | add EMAIL [--name N] [--min-score S] | remove EMAIL
     python main.py test-email EMAIL send one short message to check delivery
+    python main.py admin-user NAME  make the line that gives NAME access to the admin page
 """
 from __future__ import annotations
 
 import argparse
-from typing import List, Optional
+import getpass
+from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
 from grants.profile import load_profile
+from grants.runs import recorded
 from grants.sql_utils import ensure_schema
 from grants_data.pipeline import onlyTheGoodStuff
 from notifications.notify import run_notify
+
+
+def ingest_detail(ok: bool, stats: Dict[str, Any]) -> str:
+    """One sentence about an ingest run for the run log, from ``onlyTheGoodStuff.last_stats``.
+
+    Runs inside the run log's ``with`` block, so it must cope with any stats.
+    """
+    text = _ingest_sentence(ok, stats)
+    abort = stats.get("scoring_abort")
+    return f"{text.rstrip('.')}. Scoring stopped: {str(abort).rstrip('.')}." if abort else text
+
+
+def _ingest_sentence(ok: bool, stats: Dict[str, Any]) -> str:
+    reason = stats.get("reason")
+    if not ok:
+        return str(reason or "The pipeline failed; check the logs.")
+    n = {key: value for key, value in stats.items() if isinstance(value, int)}
+    parts = []
+    if "extract" in n:
+        parts.append(f"{n['extract']:,} in the extract")
+    if "kept" in n:
+        parts.append(f"{n['kept']:,} kept")
+    scored, failed, deferred = (n.get(key, 0) for key in ("scored", "failed", "deferred"))
+    if scored or failed or deferred:
+        trouble = [f"{count:,} {text}" for count, text in ((failed, "failed"), (deferred, "left for later")) if count]
+        parts.append(f"{scored:,} newly scored" + (f" ({', '.join(trouble)})" if trouble else ""))
+    if "inserted" in n:
+        parts.append(f"{n['inserted']:,} new and {n.get('updated', 0):,} updated in the database")
+    sentence = ", ".join(parts) or "The pipeline finished"
+    return f"{sentence}. {reason}" if reason else sentence
 
 
 def ingest() -> int:
@@ -28,6 +61,15 @@ def ingest() -> int:
     except Exception as exc:
         print(f"Warning: could not verify database schema: {exc}")
 
+    with recorded("ingest") as run:
+        code = _ingest()
+        run.ok = code == 0
+        run.stats = dict(onlyTheGoodStuff.last_stats)
+        run.detail = ingest_detail(run.ok, run.stats)
+        return code
+
+
+def _ingest() -> int:
     success, grants = onlyTheGoodStuff()
     if not success:
         print("Pipeline failed; check logs for details.")
@@ -42,6 +84,23 @@ def ingest() -> int:
     if not profile.is_configured:
         print("Relevance scoring is off until config/research_profile.yml has a summary.")
     return 0
+
+
+def notify_step(dry_run: bool = False) -> int:
+    """Run the notify step; a real run (not a dry run) goes in the run log."""
+    if dry_run:
+        return run_notify(dry_run=True)
+    try:
+        ensure_schema()
+    except Exception as exc:
+        print(f"Warning: could not verify database schema: {exc}")
+
+    with recorded("notify") as run:
+        code = run_notify()
+        run.ok = code == 0
+        run.stats = getattr(run_notify, "last_counts", None)
+        run.detail = run_notify.last_summary
+        return code
 
 
 def recipients(args: argparse.Namespace) -> int:
@@ -90,6 +149,26 @@ def test_email(address: str) -> int:
     return 0
 
 
+def admin_user(name: str) -> int:
+    """Ask for a password and print the GRANTS_ADMIN_USERS line for NAME. Needs no database."""
+    from src.web import admin_auth
+
+    account = admin_auth.canonical_name(name)
+    if account is None:
+        print("A name is 1 to 32 lowercase letters, digits, dots, dashes or underscores.")
+        return 1
+    password = getpass.getpass(f"Password for {account}: ")
+    if getpass.getpass("Password again: ") != password:
+        print("The two passwords differ.")
+        return 1
+    if len(password) < admin_auth.MIN_PASSWORD_LENGTH or not password.isascii():
+        print(f"The password must be at least {admin_auth.MIN_PASSWORD_LENGTH} characters, all ASCII: browsers send it as ASCII.")
+        return 1
+    print(f"{account}:{admin_auth.hash_password(password)}")
+    print("Add this line to admin_users in ansible/secrets.yml and redeploy.")
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="GrantWatch: Grants.gov opportunities and deadlines for the team.")
     sub = parser.add_subparsers(dest="command")
@@ -103,6 +182,8 @@ def _parser() -> argparse.ArgumentParser:
     people.add_argument("--min-score", type=int, choices=range(0, 6), help="this person's threshold instead of the profile's")
     test = sub.add_parser("test-email", help="send one short message to check that email gets through")
     test.add_argument("address")
+    admin = sub.add_parser("admin-user", help="make the line that lets one person open the admin page")
+    admin.add_argument("name")
     return parser
 
 
@@ -112,9 +193,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.command == "ingest":
         return ingest()
     if args.command == "notify":
-        return run_notify(dry_run=args.dry_run)
+        return notify_step(dry_run=args.dry_run)
     if args.command == "test-email":
         return test_email(args.address)
+    if args.command == "admin-user":
+        return admin_user(args.name)
     if args.command == "recipients":
         if args.action != "list" and not args.email:
             _parser().error(f"recipients {args.action} needs an email address")
@@ -122,7 +205,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Both steps, and notify even when ingest failed: tracked deadlines do not
     # depend on today's download.
     ingested = ingest()
-    notified = run_notify()
+    notified = notify_step()
     return ingested or notified
 
 

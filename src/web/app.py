@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import logging
 
 import html
@@ -12,17 +12,20 @@ import os
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Path as PathParam
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, EmailStr
 from dotenv import load_dotenv
 
 load_dotenv()
 
 from doc_checker.config import get_settings
-from . import auth
+from . import admin_auth, auth
 from .document_checker_routes import router as document_checker_router
 
+from grants.admin import admin_status, llm_check, run_log
 from grants.profile import Profile, load_profile
 from grants.queries import GrantQuery, data_status, get_grant, query_grants
 from grants.sql_utils import add_to_watchlist, list_watchlist, remove_from_watchlist
@@ -69,11 +72,12 @@ def _db_error(action: str, exc: Exception) -> HTTPException:
 
 _TEMPLATE = Path(__file__).resolve().parent / "templates" / "index.html"
 INDEX_HTML = _TEMPLATE.read_text(encoding="utf-8")
+ADMIN_HTML = _TEMPLATE.with_name("admin.html").read_text(encoding="utf-8")
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 
-def _page(title: str, body: str) -> HTMLResponse:
-    """A small standalone page for the sign-in and unsubscribe flows."""
+def _page(title: str, body: str, status_code: int = 200, headers: Optional[Dict[str, str]] = None) -> HTMLResponse:
+    """A small standalone page for the sign-in, unsubscribe and admin flows."""
     return HTMLResponse(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
@@ -84,7 +88,9 @@ def _page(title: str, body: str) -> HTMLResponse:
         "main{max-width:34rem;margin:0 auto;padding:48px 16px}h1{font-size:22px;margin:0 0 12px}a{color:var(--spruce)}"
         "button{font:inherit;font-weight:600;padding:8px 16px;border:0;border-radius:4px;background:var(--spruce);color:var(--paper);cursor:pointer}"
         "p.small{color:var(--mist);font-size:14px}</style></head>"
-        f"<body><main><h1>{html.escape(title)}</h1>{body}</main></body></html>"
+        f"<body><main><h1>{html.escape(title)}</h1>{body}</main></body></html>",
+        status_code=status_code,
+        headers=headers,
     )
 
 
@@ -123,9 +129,112 @@ def require_member(request: Request) -> str:
     return email
 
 
+class _AdminBasic(HTTPBasic):
+    """HTTPBasic that reads a malformed Authorization header as no credentials, not its own JSON 401."""
+
+    async def __call__(self, request: Request) -> Optional[HTTPBasicCredentials]:  # type: ignore[override]
+        try:
+            return await super().__call__(request)
+        except HTTPException:
+            return None
+
+
+_admin_basic = _AdminBasic(realm="GrantWatch admin", auto_error=False)
+_ADMIN_CHALLENGE = {"WWW-Authenticate": 'Basic realm="GrantWatch admin"'}
+_ADMIN_NO_STORE = {"Cache-Control": "no-store"}
+_ADMIN_TITLES = {401: "Admin password needed", 503: "The admin page is off"}
+_ADMIN_MESSAGES = {
+    401: "Enter your admin name and password to see this page.",
+    503: "The admin page is off on this server (no admin accounts in GRANTS_ADMIN_USERS).",
+}
+
+
+@lru_cache(maxsize=4)
+def _parse_admin_users(raw: str) -> Dict[str, str]:
+    return admin_auth.parse_users(raw)
+
+
+def _admin_users() -> Dict[str, str]:
+    # Read on each request but parsed once per value, so a bad entry is warned about once.
+    return _parse_admin_users(os.getenv("GRANTS_ADMIN_USERS") or "")
+
+
+_admin_users()  # warn about bad entries at startup
+
+
+def _admin_problem(credentials: Optional[HTTPBasicCredentials]) -> Optional[Tuple[int, str]]:
+    """Why the admin page may not be shown (status, message), or None when it may.
+
+    HTTP Basic against the named accounts in GRANTS_ADMIN_USERS. Not the email
+    sign-in: where mail cannot reach the team, a page behind it could never be opened.
+    """
+    users = _admin_users()
+    if not users:
+        return 503, _ADMIN_MESSAGES[503]
+    if credentials is None or not admin_auth.check(users, credentials.username, credentials.password):
+        return 401, _ADMIN_MESSAGES[401]
+    return None
+
+
+def _admin_headers(status: int) -> Dict[str, str]:
+    return {**_ADMIN_NO_STORE, **(_ADMIN_CHALLENGE if status == 401 else {})}
+
+
+def require_admin(response: Response, credentials: Optional[HTTPBasicCredentials] = Depends(_admin_basic)) -> str:
+    """Guards the admin API and returns the account name; the page answers the same problems with a page instead."""
+    problem = _admin_problem(credentials)
+    if problem is not None:
+        status, message = problem
+        raise HTTPException(status_code=status, detail=message, headers=_admin_headers(status))
+    response.headers.update(_ADMIN_NO_STORE)
+    return credentials.username.lower()  # type: ignore[union-attr]  # no problem means credentials are set
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     return INDEX_HTML
+
+
+# The admin routes live under /admin/ so the browser's Basic credentials, which
+# cover the challenged path and everything below it, never go with dashboard requests.
+@app.get("/admin", include_in_schema=False)
+def admin_redirect() -> RedirectResponse:
+    return RedirectResponse("/admin/", status_code=307)
+
+
+@app.get("/admin/", response_class=HTMLResponse)
+def admin_page(credentials: Optional[HTTPBasicCredentials] = Depends(_admin_basic)) -> HTMLResponse:
+    problem = _admin_problem(credentials)
+    if problem is None:
+        return HTMLResponse(ADMIN_HTML, headers=_ADMIN_NO_STORE)
+    status, message = problem
+    return _page(_ADMIN_TITLES[status], f"<p>{html.escape(message)}</p>", status, _admin_headers(status))
+
+
+@app.get("/admin/api")
+def admin_data(viewer: str = Depends(require_admin)) -> Dict[str, Any]:
+    try:
+        status = admin_status()
+    except Exception as exc:
+        raise _db_error("loading the admin status", exc) from exc
+    logger.info("Admin page opened by %s", viewer)
+    return {**status, "viewer": viewer}
+
+
+@app.get("/admin/api/llm")
+def admin_llm(_admin: str = Depends(require_admin)) -> Dict[str, Any]:
+    return llm_check()
+
+
+@app.get("/admin/api/runs/{run_id}/log")
+def admin_run_log(run_id: int = PathParam(ge=1, le=2_147_483_647), _admin: str = Depends(require_admin)) -> Dict[str, Any]:
+    try:
+        log = run_log(run_id)
+    except Exception as exc:
+        raise _db_error("loading the run log", exc) from exc
+    if log is None:
+        raise HTTPException(status_code=404, detail="No such run.", headers=_ADMIN_NO_STORE)
+    return log
 
 
 @app.get("/api/profile")

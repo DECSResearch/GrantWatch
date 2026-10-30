@@ -38,6 +38,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+from urllib.parse import urlsplit
 
 from openai import (
     APIConnectionError,
@@ -144,6 +145,20 @@ def _env_json(name: str) -> Dict[str, Any]:
     return value
 
 
+def safe_host(url: str) -> str:
+    """``scheme://host[:port]`` of ``url``: no user info, path, query or fragment. Never raises."""
+    try:
+        parts = urlsplit(str(url).strip())
+        host = parts.hostname or ""
+        if not parts.scheme or not re.fullmatch(r"[A-Za-z0-9._:-]+", host):
+            return "unknown"
+        if ":" in host:
+            host = f"[{host}]"
+        return f"{parts.scheme}://{host}" + (f":{parts.port}" if parts.port else "")
+    except Exception:
+        return "unknown"
+
+
 class OutputTruncated(ValueError):
     """The model hit the completion-token limit before writing an answer."""
 
@@ -196,6 +211,7 @@ class ScoringOutcome:
     failed: int = 0
     deferred: int = 0
     new_entries: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    abort_reason: Optional[str] = None
 
 
 def _parse_close(value: Any) -> datetime:
@@ -437,7 +453,7 @@ def score_records(
         except OutputTruncated as exc:
             scorer.abort_reason = str(exc)  # every other batch would be cut off too
         except APIConnectionError as exc:
-            scorer.abort_reason = f"cannot reach {settings.base_url}: {exc}"
+            scorer.abort_reason = f"cannot reach {safe_host(settings.base_url)}: {exc}"
         except RateLimitError as exc:
             logger("warning", f"Rate limited while scoring a batch; skipping it ({exc.message[:120]})")
         except APIStatusError as exc:
@@ -457,6 +473,7 @@ def score_records(
                 outcome.new_entries[number] = {**result, "model": settings.model, "scored_at": scored_at}
                 outcome.scored += 1
 
+    outcome.abort_reason = scorer.abort_reason
     if scorer.abort_reason:
         logger("error", f"Relevance scoring stopped: {scorer.abort_reason}")
     outcome.failed = len(pending) - outcome.scored

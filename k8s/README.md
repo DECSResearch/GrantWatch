@@ -37,6 +37,14 @@ k3s kubectl -n grantwatch create job --from=cronjob/grantwatch-daily first-run
 k3s kubectl -n grantwatch logs -f job/first-run
 ```
 
+Then open `http://<node-ip>:30810/admin/` (your name and password from the
+vault's `admin_users`) to check that the run was recorded, the model server
+answers and the recipients are right. Make each person's line with
+`python main.py admin-user NAME`, add it to `admin_users` in
+`ansible/secrets.yml` and redeploy; delete the line to remove them. Without any
+line the page answers 503. That port is plain HTTP, so use a password you use
+nowhere else.
+
 The first run scores every open keyword match (about 15 minutes with Qwen
 3.6, thinking off); later runs score only new grants. Without
 `notify_recipients` in the secrets nothing is emailed, and the dashboard still

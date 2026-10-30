@@ -1,0 +1,882 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>GrantWatch admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    color-scheme: light dark;
+    --paper: #f7f8f6;
+    --well: #ffffff;
+    --ink: #15221c;
+    --mist: #5b6660;
+    --fog: #d6dbd7;
+    --spruce: #1e5a44;
+    --spruce-soft: #dfeae4;
+    --signal: #b3261e;
+    --ochre: #8a5a00;
+    --font: "Public Sans", system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0f1613;
+      --well: #16201b;
+      --ink: #e6eae7;
+      --mist: #97a39d;
+      --fog: #2a3630;
+      --spruce: #6fbf9a;
+      --spruce-soft: #1c2f27;
+      --signal: #f08a7e;
+      --ochre: #e0b45e;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--paper); }
+  body { margin: 0; font-family: var(--font); font-size: 16px; line-height: 1.5; color: var(--ink); background: var(--paper); }
+  [hidden] { display: none !important; }
+  a { color: var(--spruce); }
+  button { font: inherit; }
+  :focus-visible { outline: 2px solid var(--spruce); outline-offset: 2px; }
+  .page { max-width: 1040px; margin: 0 auto; padding: 36px 20px 72px; }
+  .link { background: none; border: 0; padding: 0; color: var(--spruce); font-size: 15px; text-decoration: underline; cursor: pointer; }
+  .link:disabled { opacity: 0.6; cursor: wait; }
+  .muted { color: var(--mist); }
+  .num { font-variant-numeric: tabular-nums; }
+
+  /* Title and verdict */
+  .top { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 24px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+  .tools { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; font-size: 15px; color: var(--mist); }
+  .who strong { font-weight: 600; color: var(--ink); }
+  .who .hint { font-size: 13px; margin-left: 8px; }
+  .verdict { margin: 14px 0 0; font-size: 20px; font-weight: 600; max-width: 60ch; }
+  .verdict:empty { display: none; }
+  .message { margin: 28px 0 0; padding: 12px 14px; border-left: 3px solid var(--signal); background: var(--well); font-size: 15px; overflow-wrap: anywhere; }
+  .message.quiet { border-left-color: var(--fog); color: var(--mist); }
+  .message .link { margin-left: 12px; }
+
+  /* Run strip: the one bold element */
+  .strip-box { margin-top: 24px; }
+  .strip { --cell: 18px; --gap: 4px; --label: 52px; width: fit-content; max-width: 100%; }
+  .strip-row { display: grid; grid-template-columns: var(--label) repeat(14, var(--cell)); gap: var(--gap); align-items: center; margin-bottom: var(--gap); }
+  .strip-row .name { font-size: 15px; }
+  .cell { position: relative; display: block; width: var(--cell); height: var(--cell); padding: 0; border: 0; border-radius: 2px; background: transparent; cursor: pointer; }
+  .cell:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .cell.worked { background: var(--spruce); }
+  .cell.failed { background: var(--signal); }
+  .cell.failed::after { content: ""; position: absolute; left: 50%; top: 50%; width: 10px; height: 2px; margin: -1px 0 0 -5px; background: var(--paper); }
+  .cell.dnf { background: repeating-linear-gradient(45deg, var(--ochre) 0 3px, transparent 3px 6px); box-shadow: inset 0 0 0 1px var(--ochre); }
+  .cell.running { box-shadow: inset 0 0 0 2px var(--ochre); }
+  .cell.none { box-shadow: inset 0 0 0 1px var(--fog); cursor: default; }
+  .strip-days { display: grid; grid-template-columns: var(--label) calc(14 * var(--cell) + 13 * var(--gap)); gap: var(--gap); font-size: 13px; color: var(--mist); font-variant-numeric: tabular-nums; }
+  .strip-days div { display: flex; justify-content: space-between; }
+  .key { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 10px 0 0; padding: 0; list-style: none; font-size: 13px; color: var(--mist); }
+  .key li { display: flex; align-items: center; gap: 6px; }
+  .key .cell { width: 12px; height: 12px; cursor: default; }
+  .key .cell.failed::after { width: 6px; margin-left: -3px; }
+  .hint { margin: 6px 0 0; font-size: 13px; color: var(--mist); }
+
+  /* Sections */
+  section { margin-top: 34px; }
+  h2 { font-size: 17px; font-weight: 600; margin: 0 0 10px; }
+  .section-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 16px; margin-bottom: 10px; }
+  .section-head h2 { margin: 0; }
+  .check { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: var(--ink); }
+  .check input { width: 16px; height: 16px; margin: 0; accent-color: var(--spruce); }
+
+  .warnings { margin: 24px 0 0; padding: 0; list-style: none; }
+  .warnings li { padding: 10px 14px; border-left: 3px solid var(--signal); background: var(--well); font-size: 15px; overflow-wrap: anywhere; }
+  .warnings li + li { margin-top: 8px; }
+
+  /* How the daily run is doing */
+  .steps { margin: 0; }
+  .step { display: grid; grid-template-columns: 140px 130px 1fr; gap: 2px 16px; padding: 12px 0; border-top: 1px solid var(--fog); }
+  .step:last-child { border-bottom: 1px solid var(--fog); }
+  .step dt { font-weight: 600; }
+  .step dd { margin: 0; }
+  .step .state { font-weight: 600; }
+  .step .detail { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 6px 16px; font-size: 15px; min-width: 0; }
+  .step .lines { min-width: 0; flex: 1 1 260px; overflow-wrap: anywhere; }
+  .step .lines p { margin: 0; }
+  .step .lines p + p { margin-top: 2px; }
+  .step .lines .small { font-size: 13px; color: var(--mist); }
+  .ok { color: var(--spruce); }
+  .bad { color: var(--signal); }
+  .warn { color: var(--ochre); }
+
+  /* Tables */
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { text-align: left; vertical-align: top; padding: 8px 14px 8px 0; border-top: 1px solid var(--fog); }
+  th { font-size: 13px; font-weight: 400; color: var(--mist); white-space: nowrap; }
+  tbody tr:last-child td { border-bottom: 1px solid var(--fog); }
+  caption { text-align: left; padding: 8px 0; }
+  td.nowrap { white-space: nowrap; }
+  td.wrap { min-width: 220px; overflow-wrap: anywhere; }
+  td.email { overflow-wrap: anywhere; }
+  td .small { display: block; font-size: 13px; color: var(--mist); }
+  .runs .result { font-weight: 600; white-space: nowrap; }
+  .runs tr.logrow td, .runs tr.logrow { border-top: 0; }
+  .runs tr.logrow td { padding: 0 0 12px; }
+  .runs tr.run.target { background: var(--spruce-soft); }
+  .toggle { background: none; border: 1px solid var(--fog); border-radius: 4px; padding: 3px 10px; color: var(--spruce); font-size: 13px; cursor: pointer; white-space: nowrap; }
+  .toggle:hover { border-color: var(--spruce); }
+
+  /* A run's log */
+  .logbox { padding: 10px 12px; background: var(--well); border: 1px solid var(--fog); border-radius: 4px; max-width: 100%; }
+  .logbox .bar { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; margin-bottom: 8px; font-size: 13px; color: var(--mist); }
+  .logbox .note { margin: 0; font-size: 14px; color: var(--mist); }
+  pre.log { margin: 0; max-height: 420px; overflow: auto; font-family: var(--mono); font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
+  pre.log span { display: block; min-height: 1.5em; padding-left: 10px; border-left: 3px solid transparent; }
+  pre.log span.warning { border-left-color: var(--ochre); }
+  pre.log span.error { border-left-color: var(--signal); }
+
+  /* Team and settings */
+  .team p { margin: 0 0 8px; max-width: 78ch; overflow-wrap: anywhere; }
+  .team .scroll { margin-top: 14px; }
+  .settings { display: grid; grid-template-columns: max-content 1fr; gap: 6px 24px; margin: 0; font-size: 15px; }
+  .settings dt { color: var(--mist); }
+  .settings dd { margin: 0; overflow-wrap: anywhere; }
+  .empty { color: var(--mist); }
+
+  @media (max-width: 639px) {
+    .page { padding: 24px 16px 56px; }
+    .step { grid-template-columns: 1fr auto; }
+    .step .detail { grid-column: 1 / -1; }
+    .step dd.state { text-align: right; }
+    .settings { grid-template-columns: 1fr; gap: 0; }
+    .settings dd { margin-bottom: 8px; }
+    .runs thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+    .runs, .runs tbody, .runs td { display: block; }
+    .runs tr.run { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 10px 0; border-top: 1px solid var(--fog); }
+    .runs tr.run td { padding: 0; border: 0; }
+    .runs tr.run td.c-when { grid-area: 1 / 1; }
+    .runs tr.run td.c-result { grid-area: 1 / 2; text-align: right; }
+    .runs tr.run td.c-step { grid-area: 2 / 1; color: var(--mist); }
+    .runs tr.run td.c-took { grid-area: 2 / 2; text-align: right; color: var(--mist); }
+    .runs tr.run td.c-detail { grid-area: 3 / 1 / auto / -1; }
+    .runs tr.run td.c-act { grid-area: 4 / 1 / auto / -1; margin-top: 4px; }
+    .runs tr.logrow { display: block; }
+    .runs tr.logrow td { padding: 0 0 12px; }
+    .runs tbody tr:last-child td { border-bottom: 0; }
+    .runs tbody tr:last-child { border-bottom: 1px solid var(--fog); }
+  }
+  @media (max-width: 399px) {
+    .strip { --cell: 16px; --gap: 3px; --label: 48px; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .runs tr.run { transition: background 600ms ease; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <div class="top">
+      <h1>GrantWatch admin</h1>
+      <div class="tools">
+        <a href="/">Dashboard</a>
+        <button type="button" class="link" id="refresh">Refresh</button>
+        <span id="updated" role="status" aria-live="polite"></span>
+        <span class="who" id="viewer" hidden>Signed in as <strong id="viewerName"></strong><span class="hint">Close the browser to sign out</span></span>
+      </div>
+    </div>
+    <p class="verdict" id="verdict" aria-live="polite"></p>
+  </header>
+
+  <p class="message quiet" id="message" role="status">Loading…</p>
+
+  <div id="content" hidden>
+    <div class="strip-box" role="group" aria-label="Runs over the last 14 days">
+      <div class="strip" id="strip"></div>
+      <ul class="key" id="key"></ul>
+      <p class="hint">Select a square to open that run's log.</p>
+    </div>
+
+    <ul class="warnings" id="warnings" hidden></ul>
+
+    <section aria-labelledby="stepsTitle">
+      <h2 id="stepsTitle">How the daily run is doing</h2>
+      <dl class="steps" id="steps"></dl>
+    </section>
+
+    <section aria-labelledby="runsTitle">
+      <div class="section-head">
+        <h2 id="runsTitle">Recent runs</h2>
+        <label class="check"><input type="checkbox" id="onlyProblems"> Only problems</label>
+      </div>
+      <div class="scroll"><table class="runs" id="runs"></table></div>
+    </section>
+
+    <section class="team" aria-labelledby="teamTitle">
+      <h2 id="teamTitle">Team</h2>
+      <div id="team"></div>
+      <div class="scroll"><table id="people"></table></div>
+    </section>
+
+    <section aria-labelledby="emailsTitle">
+      <h2 id="emailsTitle">Emails sent</h2>
+      <div class="scroll"><table id="emails"></table></div>
+    </section>
+
+    <section aria-labelledby="settingsTitle">
+      <h2 id="settingsTitle">Settings</h2>
+      <dl class="settings" id="settings"></dl>
+    </section>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const DAYS = 14;
+  const API = "api";
+  const LLM = "api/llm";
+  const logUrl = (id) => "api/runs/" + encodeURIComponent(id) + "/log";
+  const RESULT = { ok: "Worked", failed: "Failed", "did not finish": "Did not finish", running: "Running" };
+  const CELL = { ok: "worked", failed: "failed", "did not finish": "dnf", running: "running" };
+  const RESULT_CLASS = { ok: "ok", failed: "bad", "did not finish": "warn", running: "warn" };
+  const SERVICES = { smtp: "SMTP", gmail: "Gmail API", outbox: "Outbox folder (nothing is sent)" };
+  const SOURCES = { extract: "Daily XML extract", export: "Search export" };
+
+  // Everything from the server goes in through textContent, never as markup.
+  function el(tag, text, className) {
+    const node = document.createElement(tag);
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    if (className) node.className = className;
+    return node;
+  }
+
+  const state = {
+    data: null,
+    llm: "checking",
+    open: new Set(),
+    logs: new Map(),
+    onlyWarnings: new Set(),
+    target: null,
+  };
+
+  /* ---------- formatting ---------- */
+
+  const num = (n) => (n === null || n === undefined || isNaN(n) ? "–" : Number(n).toLocaleString());
+  const plural = (n, one, many) => num(n) + " " + (Number(n) === 1 ? one : (many || one + "s"));
+  const isNum = (n) => typeof n === "number" && isFinite(n);
+
+  function parse(iso) {
+    const d = new Date(iso);
+    return isNaN(d) ? null : d;
+  }
+
+  function dayLabel(d) {
+    const opts = { month: "short", day: "numeric" };
+    if (d.getFullYear() !== new Date().getFullYear()) opts.year = "numeric";
+    return d.toLocaleDateString(undefined, opts);
+  }
+
+  function when(iso) {
+    const d = parse(iso);
+    if (!d) return "–";
+    const opts = { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" };
+    if (d.getFullYear() !== new Date().getFullYear()) opts.year = "numeric";
+    return d.toLocaleString(undefined, opts);
+  }
+
+  function dayOf(iso) {
+    const d = parse(iso);
+    return d ? dayLabel(d) : "–";
+  }
+
+  function dayOnly(text) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(text || "");
+    return m ? dayLabel(new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))) : "–";
+  }
+
+  const dateKey = (d) => d.getFullYear() + "-" + d.getMonth() + "-" + d.getDate();
+
+  function span(seconds) {
+    if (!isNum(seconds)) return "–";
+    if (seconds < 90) return Math.round(seconds) + " s";
+    if (seconds < 3600) return Math.round(seconds / 60) + " min";
+    const h = Math.floor(seconds / 3600);
+    return h + " h " + Math.round((seconds % 3600) / 60) + " min";
+  }
+
+  function agoPhrase(seconds) {
+    if (seconds < 90) return "just now";
+    if (seconds < 3600) return Math.round(seconds / 60) + " minutes ago";
+    if (seconds < 48 * 3600) return plural(Math.round(seconds / 3600), "hour") + " ago";
+    return plural(Math.round(seconds / 86400), "day") + " ago";
+  }
+
+  function words(list) {
+    const items = (list || []).map(String);
+    if (items.length < 2) return items.join("");
+    return items.slice(0, -1).join(", ") + " and " + items[items.length - 1];
+  }
+
+  const capital = (text) => text.charAt(0).toUpperCase() + text.slice(1);
+  const newest = (runs, step) => runs.find((r) => r.step === step) || null;
+  const statsOf = (run) => (run && run.stats && typeof run.stats === "object" && !Array.isArray(run.stats) ? run.stats : {});
+
+  /* ---------- verdict, strip, warnings ---------- */
+
+  // The live model check loads apart from data.warnings. Only "Not answering" and "Model missing" count;
+  // "Not set up", "Checking…" and a check that could not run do not.
+  function modelProblem() {
+    const check = state.llm;
+    return Boolean(check && check.configured && (!check.reachable || !check.model_listed));
+  }
+
+  function renderVerdict(data) {
+    const count = data.warnings.length + (modelProblem() ? 1 : 0);
+    if (count) {
+      $("verdict").textContent = count === 1 ? "1 thing needs attention." : count + " things need attention.";
+      return;
+    }
+    const finished = (step) => data.runs.find((r) => r.step === step && r.state === "ok" && isNum(r.age_seconds) && isNum(r.duration_seconds));
+    const notify = finished("notify");
+    const run = notify || finished("ingest");
+    let text = "All clear.";
+    if (run) {
+      text += " The daily run finished " + agoPhrase(run.age_seconds - run.duration_seconds);
+      const sent = statsOf(run).sent;
+      text += notify && isNum(sent) ? " and emailed " + plural(sent, "person", "people") + "." : ".";
+    } else if (data.runs.some((r) => r.state === "running")) {
+      text += " A run is going now.";
+    }
+    $("verdict").textContent = text;
+  }
+
+  function renderStrip(runs) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const days = [];
+    for (let i = DAYS - 1; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(today.getDate() - i);
+      days.push(d);
+    }
+    const byDay = { ingest: {}, notify: {} };
+    runs.forEach((run) => {
+      const bucket = byDay[run.step];
+      const started = parse(run.started_at);
+      if (!bucket || !started) return;
+      const key = dateKey(started);
+      if (!bucket[key] || parse(bucket[key].started_at) < started) bucket[key] = run;
+    });
+
+    const strip = $("strip");
+    strip.replaceChildren();
+    ["ingest", "notify"].forEach((step) => {
+      const row = el("div", null, "strip-row");
+      row.append(el("span", capital(step), "name"));
+      days.forEach((day) => {
+        const run = byDay[step][dateKey(day)];
+        const word = run ? RESULT[run.state].toLowerCase() : "no run";
+        const label = dayLabel(day) + ", " + step + ": " + word;
+        const cell = el("button", null, "cell " + (run ? CELL[run.state] : "none"));
+        cell.type = "button";
+        cell.title = label;
+        cell.setAttribute("aria-label", label);
+        if (run) cell.addEventListener("click", () => showRun(run.id));
+        else cell.disabled = true;
+        row.append(cell);
+      });
+      strip.append(row);
+    });
+    const labels = el("div", null, "strip-days");
+    const ends = el("div");
+    ends.append(el("span", dayLabel(days[0])), el("span", dayLabel(days[days.length - 1])));
+    labels.append(el("span"), ends);
+    strip.append(labels);
+
+    const key = $("key");
+    key.replaceChildren();
+    [["worked", "Worked"], ["failed", "Failed"], ["dnf", "Did not finish"], ["running", "Running"], ["none", "No run"]].forEach(([cls, text]) => {
+      const item = el("li");
+      const swatch = el("span", null, "cell " + cls);
+      swatch.setAttribute("aria-hidden", "true");
+      item.append(swatch, el("span", text));
+      key.append(item);
+    });
+  }
+
+  function renderWarnings(list) {
+    const box = $("warnings");
+    box.replaceChildren();
+    list.forEach((text) => box.append(el("li", text)));
+    box.hidden = !list.length;
+  }
+
+  /* ---------- how the daily run is doing ---------- */
+
+  function stepRow(name, word, cls, lines, button) {
+    const row = el("div", null, "step");
+    const detail = el("dd", null, "detail");
+    const box = el("div", null, "lines");
+    lines.filter(Boolean).forEach((line) => {
+      const text = typeof line === "string" ? line : line.text;
+      box.append(el("p", text, typeof line === "string" ? "" : line.className));
+    });
+    detail.append(box);
+    if (button) detail.append(button);
+    row.append(el("dt", name), el("dd", word, "state " + cls), detail);
+    return row;
+  }
+
+  function funnel(stats, profile) {
+    const parts = [];
+    const step = (key, text) => { if (isNum(stats[key])) parts.push(text(stats[key])); };
+    const keepForecasts = profile && profile.include_forecasted;
+    const exclusions = profile && profile.agencies_exclude && profile.agencies_exclude.length;
+    step("extract", (n) => num(n) + " in the extract");
+    step("open", (n) => num(n) + " still open");
+    if (keepForecasts) parts.push("forecasts kept");
+    else step("after_forecast", (n) => num(n) + " without forecasts");
+    if (exclusions || (isNum(stats.after_agency) && stats.after_agency !== (keepForecasts ? stats.open : stats.after_forecast))) {
+      step("after_agency", (n) => num(n) + " after agency exclusions");
+    }
+    step("matched", (n) => num(n) + " matched keywords");
+    return parts.join(", ");
+  }
+
+  function grantsRow(data) {
+    const ingest = newest(data.runs, "ingest");
+    let word = "No run yet", cls = "muted";
+    if (ingest) {
+      if (ingest.state === "running") { word = "Running"; cls = "muted"; }
+      else if (ingest.state === "ok") {
+        const kept = statsOf(ingest).kept;
+        if (kept === 0) { word = "Nothing loaded"; cls = "warn"; } else { word = "Working"; cls = "ok"; }
+      } else { word = "Failed"; cls = "bad"; }
+    }
+    const source = data.runs.find((r) => r.step === "ingest" && isNum(statsOf(r).extract));
+    const lines = [];
+    if (ingest && (ingest.state === "failed" || ingest.state === "did not finish") && ingest.detail) lines.push(ingest.detail);
+    if (source) {
+      const stats = statsOf(source);
+      lines.push((SOURCES[stats.source] || "Source not recorded") + (stats.source_file ? ", " + stats.source_file : ""));
+      lines.push(funnel(stats, data.profile));
+      lines.push({ text: "From the run of " + when(source.started_at) + ".", className: "small" });
+    } else {
+      lines.push("No run has recorded its numbers yet.");
+    }
+    return stepRow("Grants.gov", word, cls, lines);
+  }
+
+  function databaseRow(data) {
+    const h = data.health;
+    const scored = h.scoring_on ? num(h.open_scored) + " scored, " + num(h.open_unscored) + " not yet" : "scoring is off";
+    const lines = [plural(h.open, "open grant") + ", " + scored + ", " + num(h.watched) + " tracked"];
+    lines.push({ text: h.data_as_of ? "Grants last updated " + when(h.data_as_of) + "." : "No grants have been loaded yet.", className: "small" });
+    return stepRow("Database", "Working", "ok", lines);
+  }
+
+  function modelRow() {
+    const check = state.llm;
+    const button = el("button", "Check now", "link");
+    button.type = "button";
+    button.disabled = check === "checking";
+    button.addEventListener("click", checkModel);
+    let word = "Checking…", cls = "muted", lines = ["Asking the model server which models it has."];
+    if (check && check !== "checking") {
+      if (check.failed) {
+        word = "Failed"; cls = "bad"; lines = ["Could not run the check: " + check.failed];
+      } else if (!check.configured) {
+        word = "Not set up"; cls = "muted"; lines = ["No model is set, so scoring is off. Set GRANTS_LLM_MODEL to turn it on."];
+      } else {
+        const where = check.host + ", " + check.model;
+        if (!check.reachable) {
+          word = "Not answering"; cls = "bad";
+          lines = [where, check.error || "No answer."];
+        } else if (!check.model_listed) {
+          word = "Model missing"; cls = "bad";
+          lines = [where, check.model + " is not among: " + ((check.models || []).join(", ") || "no models listed")];
+        } else {
+          word = "Working"; cls = "ok";
+          lines = [where, { text: isNum(check.latency_ms) ? "Answered in " + num(check.latency_ms) + " ms." : "", className: "small" }];
+        }
+      }
+    }
+    const row = stepRow("Model server", word, cls, lines, button);
+    row.querySelector(".state").setAttribute("aria-busy", check === "checking" ? "true" : "false");
+    return row;
+  }
+
+  function emailRow(data) {
+    const mail = data.email || {};
+    const notify = newest(data.runs, "notify");
+    let word = "Working", cls = "ok";
+    const lines = [];
+    if (mail.error) {
+      word = "Misconfigured"; cls = "bad"; lines.push(mail.error);
+    } else if (!mail.service) {
+      word = "Not set up"; cls = "muted"; lines.push("Nothing is set up to send email.");
+    } else {
+      const failing = notify && (notify.state === "failed" || notify.state === "did not finish" || statsOf(notify).failed > 0);
+      if (failing) { word = "Failing"; cls = "bad"; }
+      let text = (SERVICES[mail.service] || mail.service) + (mail.sender ? " from " + mail.sender : "");
+      text += mail.last_sent ? ", last sent " + when(mail.last_sent) : ", nothing sent yet";
+      lines.push(text);
+      const s = statsOf(notify);
+      if (!notify) {
+        lines.push("No notify run has been recorded yet.");
+      } else if (isNum(s.sent)) {
+        lines.push("Last run sent " + num(s.sent) + ", failed " + num(s.failed || 0));
+        lines.push({ text: "From the run of " + when(notify.started_at) + ".", className: "small" });
+      } else if (notify.state === "running") {
+        lines.push("A notify run is going now.");
+      } else {
+        lines.push("The run of " + when(notify.started_at) + " stopped before sending.");
+        lines.push(notify.detail);
+      }
+    }
+    return stepRow("Email", word, cls, lines);
+  }
+
+  function renderSteps() {
+    const data = state.data;
+    $("steps").replaceChildren(grantsRow(data), databaseRow(data), modelRow(), emailRow(data));
+  }
+
+  /* ---------- recent runs and their logs ---------- */
+
+  function logLines(text, onlyWarnings) {
+    const out = [];
+    let level = "";
+    let trace = false;
+    (text || "").split("\n").forEach((line) => {
+      if (/^Traceback \(most recent call last\):/.test(line)) trace = true;
+      const record = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \| (\w+) \| /.exec(line);
+      if (record) level = record[1];
+      let cls = "";
+      if (trace || level === "ERROR" || level === "CRITICAL") cls = "error";
+      else if (level === "WARNING") cls = "warning";
+      if (onlyWarnings && !cls) return;
+      out.push({ line: line, cls: cls });
+    });
+    return out;
+  }
+
+  function logBody(run, box) {
+    const entry = state.logs.get(run.id);
+    box.replaceChildren();
+    if (!entry || entry.status === "loading") { box.append(el("p", "Loading the log…", "note")); return; }
+    if (entry.status === "error") { box.append(el("p", "Could not load the log: " + entry.message, "note")); return; }
+    if (entry.text === null || entry.text === "") { box.append(el("p", missingLog(run), "note")); return; }
+
+    const bar = el("div", null, "bar");
+    const label = el("label", null, "check");
+    const only = el("input");
+    only.type = "checkbox";
+    only.checked = state.onlyWarnings.has(run.id);
+    label.append(only, document.createTextNode(" Only warnings and errors"));
+    bar.append(label, el("span", plural(entry.text.split("\n").length, "line"), "num"));
+    const pre = el("pre", null, "log");
+    pre.tabIndex = 0;
+    pre.setAttribute("aria-label", "Log of the " + run.step + " run of " + when(run.started_at));
+    const fill = () => {
+      pre.replaceChildren();
+      const shown = logLines(entry.text, only.checked);
+      if (!shown.length) pre.append(el("span", "No warnings or errors in this log."));
+      shown.forEach((item) => pre.append(el("span", item.line, item.cls)));
+    };
+    only.addEventListener("change", () => {
+      if (only.checked) state.onlyWarnings.add(run.id); else state.onlyWarnings.delete(run.id);
+      fill();
+    });
+    fill();
+    box.append(bar, pre);
+  }
+
+  function missingLog(run) {
+    if (run.state === "did not finish") return "This run was stopped before it could save its log.";
+    if (run.state === "running") return "This run is still going. Its log is saved when it ends.";
+    return "No log was saved for this run.";
+  }
+
+  function fetchLog(run) {
+    if (state.logs.has(run.id)) return;
+    if (!run.has_log) { state.logs.set(run.id, { status: "ready", text: null }); return; }
+    state.logs.set(run.id, { status: "loading" });
+    fetch(logUrl(run.id), { headers: { Accept: "application/json" }, cache: "no-store", credentials: "same-origin" })
+      .then((res) => (res.ok ? res.json() : res.json().catch(() => ({})).then((body) => { throw new Error(typeof body.detail === "string" ? body.detail : "HTTP " + res.status); })))
+      .then((body) => state.logs.set(run.id, { status: "ready", text: typeof body.log === "string" ? body.log : null }))
+      .catch((err) => state.logs.set(run.id, { status: "error", message: err.message || "could not reach the server" }))
+      .then(() => {
+        const box = document.querySelector('[data-log-for="' + run.id + '"]');
+        if (box) logBody(run, box);
+      });
+  }
+
+  function logRow(run) {
+    const tr = el("tr", null, "logrow");
+    tr.dataset.logRow = String(run.id);
+    const td = el("td");
+    td.colSpan = 6;
+    const box = el("div", null, "logbox");
+    box.id = "log-" + run.id;
+    box.dataset.logFor = String(run.id);
+    fetchLog(run);
+    logBody(run, box);
+    td.append(box);
+    tr.append(td);
+    return tr;
+  }
+
+  function setOpen(run, row, open) {
+    const button = row.querySelector(".toggle");
+    button.setAttribute("aria-expanded", open ? "true" : "false");
+    button.textContent = open ? "Hide log" : "Show log";
+    const existing = row.nextElementSibling && row.nextElementSibling.dataset.logRow === String(run.id) ? row.nextElementSibling : null;
+    if (open) {
+      state.open.add(run.id);
+      if (!existing) row.after(logRow(run));
+    } else {
+      state.open.delete(run.id);
+      if (existing) existing.remove();
+    }
+  }
+
+  function runRow(run) {
+    const tr = el("tr", null, "run");
+    tr.id = "run-" + run.id;
+    tr.dataset.runId = String(run.id);
+    const result = el("td", RESULT[run.state] || run.state, "c-result result " + (RESULT_CLASS[run.state] || ""));
+    const took = run.state === "running" ? "still running" : run.state === "did not finish" ? "never finished" : span(run.duration_seconds);
+    let detail = run.detail;
+    if (!detail) detail = run.state === "did not finish" ? "The job was stopped before it could record an end." : run.state === "running" ? "Still going." : "–";
+    const button = el("button", "Show log", "toggle");
+    button.type = "button";
+    button.setAttribute("aria-expanded", "false");
+    button.setAttribute("aria-controls", "log-" + run.id);
+    button.addEventListener("click", () => setOpen(run, tr, button.getAttribute("aria-expanded") !== "true"));
+    const act = el("td", null, "c-act");
+    act.append(button);
+    tr.append(
+      el("td", when(run.started_at), "c-when nowrap num"),
+      el("td", capital(run.step), "c-step"),
+      el("td", took, "c-took nowrap num"),
+      result,
+      el("td", detail, "c-detail wrap"),
+      act
+    );
+    return tr;
+  }
+
+  function renderRuns() {
+    const table = $("runs");
+    const runs = state.data.runs.filter((r) => !$("onlyProblems").checked || r.state !== "ok");
+    table.replaceChildren();
+    if (!runs.length) {
+      const empty = el("tbody");
+      const cell = el("td", $("onlyProblems").checked ? "No problems in the last 15 days." : "No runs recorded yet.", "empty");
+      cell.colSpan = 6;
+      const tr = el("tr");
+      tr.append(cell);
+      empty.append(tr);
+      table.append(empty);
+      return;
+    }
+    const head = el("tr");
+    ["Started", "Step", "Took", "Result", "What happened", "Log"].forEach((label) => head.append(el("th", label)));
+    const thead = el("thead");
+    thead.append(head);
+    const body = el("tbody");
+    runs.forEach((run) => {
+      const row = runRow(run);
+      body.append(row);
+      if (state.open.has(run.id)) setOpen(run, row, true);
+      if (state.target === run.id) row.classList.add("target");
+    });
+    table.append(thead, body);
+  }
+
+  function showRun(id) {
+    const run = state.data.runs.find((r) => r.id === id);
+    if (!run) return;
+    if ($("onlyProblems").checked) {
+      $("onlyProblems").checked = false;
+      renderRuns();
+    }
+    const row = $("run-" + id);
+    if (!row) return;
+    if (state.target !== null) {
+      const previous = $("run-" + state.target);
+      if (previous) previous.classList.remove("target");
+    }
+    state.target = id;
+    row.classList.add("target");
+    setOpen(run, row, true);
+    const calm = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    row.scrollIntoView({ block: "start", behavior: calm ? "auto" : "smooth" });
+    row.querySelector(".toggle").focus({ preventScroll: true });
+  }
+
+  /* ---------- team, emails, settings ---------- */
+
+  function fillTable(target, heads, rows, emptyText) {
+    target.replaceChildren();
+    if (!rows.length) { target.append(el("caption", emptyText, "empty")); return; }
+    const head = el("tr");
+    heads.forEach((label) => head.append(el("th", label)));
+    const thead = el("thead");
+    thead.append(head);
+    const body = el("tbody");
+    rows.forEach((cells) => {
+      const tr = el("tr");
+      cells.forEach((cell) => tr.append(cell));
+      body.append(tr);
+    });
+    target.append(thead, body);
+  }
+
+  function renderTeam(data) {
+    const p = data.profile || {};
+    const box = $("team");
+    box.replaceChildren();
+    if (p.configured) box.append(el("p", "Research profile: " + p.summary));
+    else box.append(el("p", "The research profile has not been written yet, so scoring is off."));
+    if (p.institution) box.append(el("p", "Institution: " + p.institution + "."));
+    const threshold = p.keyword_threshold;
+    box.append(el("p", "Keywords: " + (p.keywords || []).join(", ") + ". A grant needs " + plural(threshold, "match", "matches") + "."));
+    const rules = [
+      "Emails grants scoring " + p.min_score + " or higher.",
+      "Reminders " + words(p.reminder_days) + " days before.",
+      p.overview_day === "never" ? "No weekly overview." : p.overview_day === "daily" ? "Overview every day." : "Weekly overview on " + capital(p.overview_day || "") + ".",
+      p.include_forecasted ? "Forecasts kept." : "Forecasts dropped.",
+      p.agencies_exclude && p.agencies_exclude.length ? "Agencies excluded: " + p.agencies_exclude.join(", ") + "." : "No agencies excluded.",
+      "The dashboard looks ahead " + words(p.horizons) + " days.",
+    ];
+    box.append(el("p", rules.join(" ")));
+
+    fillTable($("people"), ["Person", "Status", "Own threshold", "Last email"], data.recipients.map((r) => {
+      const who = el("td", r.name || r.email, "email");
+      if (r.name) who.append(el("span", r.email, "small"));
+      return [
+        who,
+        el("td", r.active ? "Gets email" : r.unsubscribed_at ? "Unsubscribed " + dayOf(r.unsubscribed_at) : "Off", r.active ? "" : "muted"),
+        el("td", r.min_score === null || r.min_score === undefined ? "Team default" : r.min_score + " or higher"),
+        el("td", r.last_emailed ? dayOf(r.last_emailed) : "Never", "nowrap" + (r.last_emailed ? "" : " muted")),
+      ];
+    }), "No recipients yet. Add one with python main.py recipients add EMAIL.");
+  }
+
+  function renderEmails(data) {
+    fillTable($("emails"), ["Day", "Person", "What was sent"], data.emails.map((r) => {
+      const parts = [];
+      if (r.new) parts.push(plural(r.new, "new grant"));
+      if (r.reminder) parts.push(plural(r.reminder, "reminder"));
+      if (r.changed) parts.push(plural(r.changed, "deadline change"));
+      if (r.removed) parts.push(plural(r.removed, "tracked grant", "tracked grants") + " no longer open");
+      if (r.overview) parts.push("weekly overview");
+      return [el("td", dayOnly(r.day), "nowrap num"), el("td", r.email, "email"), el("td", parts.join(", ") || "–")];
+    }), "No email has been sent yet.");
+  }
+
+  function renderSettings(data) {
+    const s = data.settings || {};
+    const llm = s.llm || {};
+    const rows = [
+      ["Data source", SOURCES[s.data_source] || s.data_source || "–"],
+      ["Posted-date window", s.lookback_days > 0 ? "Grants posted in the last " + plural(s.lookback_days, "day") : "None; every open grant counts"],
+      ["Model server", llm.host || "–"],
+      ["Model", llm.model || "None"],
+      ["Grants per request", num(llm.batch_size)],
+      ["Requests at a time", num(llm.workers)],
+      ["Scored per run, at most", num(llm.max_per_run)],
+      ["Wait per request", isNum(llm.timeout) ? num(llm.timeout) + " s" : "–"],
+      ["Answer length limit", llm.max_tokens ? num(llm.max_tokens) + " tokens" : "Automatic"],
+      ["Model thinking", llm.thinking === true ? "On" : llm.thinking === false ? "Off" : "Not set"],
+      ["New grants per email, at most", num(s.email_max_new)],
+      ["Dashboard address", s.dashboard_url || "Not set"],
+    ];
+    const list = $("settings");
+    list.replaceChildren();
+    rows.forEach(([name, value]) => list.append(el("dt", name), el("dd", value, "num")));
+  }
+
+  /* ---------- loading ---------- */
+
+  function render() {
+    const data = state.data;
+    $("viewerName").textContent = data.viewer || "";
+    $("viewer").hidden = !data.viewer;
+    renderVerdict(data);
+    renderStrip(data.runs);
+    renderWarnings(data.warnings);
+    renderSteps();
+    renderRuns();
+    renderTeam(data);
+    renderEmails(data);
+    renderSettings(data);
+    $("updated").textContent = "Updated " + new Date().toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  }
+
+  function problem(text, retry) {
+    const box = $("message");
+    box.className = "message";
+    box.replaceChildren(document.createTextNode(text));
+    if (retry) {
+      const again = el("button", "Try again", "link");
+      again.type = "button";
+      again.addEventListener("click", () => window.location.reload());
+      box.append(again);
+    }
+    box.hidden = false;
+    $("verdict").textContent = "";
+  }
+
+  async function detailOf(res) {
+    const body = await res.json().catch(() => ({}));
+    return typeof body.detail === "string" ? body.detail : "HTTP " + res.status;
+  }
+
+  async function checkModel() {
+    state.llm = "checking";
+    if (state.data) renderSteps();
+    try {
+      const res = await fetch(LLM, { headers: { Accept: "application/json" }, cache: "no-store", credentials: "same-origin" });
+      state.llm = res.ok ? await res.json() : { failed: await detailOf(res) };
+    } catch (err) {
+      state.llm = { failed: "could not reach the server." };
+    }
+    // A failed load leaves its message up and the verdict blank on purpose; state.data is then the older load.
+    if (state.data) { renderSteps(); if ($("message").hidden) renderVerdict(state.data); }
+  }
+
+  async function load() {
+    const button = $("refresh");
+    button.disabled = true;
+    try {
+      const res = await fetch(API, { headers: { Accept: "application/json" }, cache: "no-store", credentials: "same-origin" });
+      if (res.status === 401) { problem("Enter your admin name and password to see this page.", true); return; }
+      if (res.status === 503) { problem(await detailOf(res), false); return; }
+      if (!res.ok) { problem("Could not load the admin data: " + (await detailOf(res)), false); return; }
+      state.data = await res.json();
+      state.logs.clear();
+      $("message").hidden = true;
+      $("content").hidden = false;
+      render();
+      checkModel();
+    } catch (err) {
+      problem("Could not load the admin data: could not reach the server.", false);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  $("refresh").addEventListener("click", load);
+  $("onlyProblems").addEventListener("change", () => { if (state.data) renderRuns(); });
+  load();
+})();
+</script>
+</body>
+</html>

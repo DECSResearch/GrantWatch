@@ -66,6 +66,12 @@ def plan_all(store: Store, recipients: Sequence[Recipient], today: date, setting
     }
 
 
+def _report(level: str, summary: str) -> None:
+    """Log the outcome and keep it for the run log (``run_notify.last_summary``)."""
+    logger(level, f"Notify: {summary}")
+    run_notify.last_summary = summary  # type: ignore[attr-defined]
+
+
 def run_notify(
     *,
     store: Optional[Store] = None,
@@ -75,6 +81,8 @@ def run_notify(
     dry_run: bool = False,
 ) -> int:
     """Send today's emails; returns a process exit code (non-zero when anything failed)."""
+    run_notify.last_summary = None  # type: ignore[attr-defined]
+    run_notify.last_counts = None  # type: ignore[attr-defined]
     if store is None:
         from notifications.store import PostgresStore
 
@@ -87,29 +95,29 @@ def run_notify(
         store.sync_recipients(env_recipients())
         recipients = store.recipients()
     except Exception as exc:
-        logger("error", f"Notify: cannot read recipients from the database: {exc}")
+        _report("error", f"cannot read recipients from the database: {exc}")
         return 1
     if not recipients:
-        logger("info", "Notify: no recipients yet; add one with `python main.py recipients add EMAIL`")
+        _report("info", "no recipients yet; add one with `python main.py recipients add EMAIL`")
         return 0
 
     if transport is None and not dry_run:
         try:
             transport = get_transport()
         except ValueError as exc:
-            logger("error", f"Notify: {exc}")
+            _report("error", str(exc))
             return 1
         if transport is None:
-            logger("error", "Notify: no email transport configured (set GRANTS_SMTP_HOST, GMAIL_TOKEN_FILE or GRANTS_EMAIL_OUTBOX)")
+            _report("error", "no email transport configured (set GRANTS_SMTP_HOST, GMAIL_TOKEN_FILE or GRANTS_EMAIL_OUTBOX)")
             return 1
 
     if not dry_run:
         try:
             if not store.acquire_lock():
-                logger("warning", "Notify: another run is sending right now; skipping this one")
+                _report("warning", "another run is sending right now; skipping this one")
                 return 0
         except Exception as exc:
-            logger("error", f"Notify: cannot take the send lock: {exc}")
+            _report("error", f"cannot take the send lock: {exc}")
             return 1
 
     failures = sent = quiet = 0
@@ -138,7 +146,7 @@ def run_notify(
                 failures += 1
                 logger("error", f"Notify: emailed {recipient.email} but could not record it, so the next run may repeat it: {exc}")
     except Exception as exc:
-        logger("error", f"Notify: failed while preparing emails: {exc}")
+        _report("error", f"failed while preparing emails: {exc}")
         return 1
     finally:
         if not dry_run:
@@ -147,5 +155,10 @@ def run_notify(
             except Exception as exc:
                 logger("warning", f"Notify: could not release the send lock (it expires on its own): {exc}")
 
-    logger("info", f"Notify: sent {sent}, failed {failures}, nothing new for {quiet} of {len(recipients)} recipients")
+    _report("info", f"sent {sent}, failed {failures}, nothing new for {quiet} of {len(recipients)} recipients")
+    run_notify.last_counts = {"sent": sent, "failed": failures, "quiet": quiet, "recipients": len(recipients)}  # type: ignore[attr-defined]
     return 1 if failures else 0
+
+
+run_notify.last_summary = None  # type: ignore[attr-defined]
+run_notify.last_counts = None  # type: ignore[attr-defined]

@@ -140,6 +140,47 @@ Reading is open to anyone with the URL; changing the tracked list needs
 `GRANTS_SECRET_KEY` on the server and a sign-in. Without the key the
 dashboard is read-only.
 
+## Admin page
+
+`/admin/` answers "did last night's run work, and if not, where did it
+break?". It is read-only and shows:
+
+- a verdict, a strip of the last 14 days of `ingest` and `notify` runs, and a
+  sentence for anything that looks wrong;
+- how the daily run is doing: the Grants.gov file and its filter funnel, the
+  database, a live check of the model server (with a "Check now" button), and
+  email;
+- the last 15 days of runs, each with its numbers and the log lines it wrote;
+- the team (research profile, thresholds, recipients), the emails sent per
+  day, and the settings that shape a run. No keys or passwords.
+
+It asks for HTTP Basic credentials: each person has a named account in
+`GRANTS_ADMIN_USERS`, one `name:scrypt$...` entry per person (comma or newline
+separated), and only the password hash is stored. The page shows "Signed in as
+NAME", and each visit is logged with the name. With no valid account the page
+answers 503. It does not use the email sign-in, so it opens even where the
+team's mail cannot receive sign-in links. Log lines are saved with each run
+with the known secrets removed.
+
+Make an entry with `python main.py admin-user NAME`. It asks for a password
+twice (16 or more ASCII characters), prints the line, and needs no database.
+To remove a person, delete their line and redeploy. Basic auth has no
+sign-out: close the browser.
+
+```bash
+python main.py admin-user alice
+GRANTS_ADMIN_USERS='alice:scrypt$16384$8$1$...' PYTHONPATH=. uvicorn web.app:app --app-dir src   # http://localhost:8000/admin/
+```
+
+Keep the value in single quotes, or the shell expands the `$` signs. On the lab
+cluster it is at `http://<lab host>:30810/admin/`, and the lines go in
+`admin_users` in `ansible/secrets.yml`. That NodePort is plain HTTP, so the
+password crosses the lab network unencrypted: use a password you use nowhere
+else. Runs are recorded in the `job_runs` table; the
+first page load after an upgrade adds the columns it needs. A run killed by the
+job's deadline cannot save its log, and shows as "did not finish". Emails are
+counted by day in `GRANTS_TIMEZONE` (default `America/Chicago`).
+
 ## MCP server
 
 Register it once from the repository root, then ask Claude things like

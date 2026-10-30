@@ -91,3 +91,20 @@ CREATE TABLE IF NOT EXISTS notify_lock (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     locked_until TIMESTAMP NOT NULL
 );
+
+-- One row per scheduled step (ingest, notify), for the admin page. finished_at
+-- stays NULL when the process was killed before it could finish (deadline, OOM).
+CREATE TABLE IF NOT EXISTS job_runs (
+    id SERIAL PRIMARY KEY,
+    step TEXT NOT NULL,
+    started_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    finished_at TIMESTAMP,
+    ok BOOLEAN,
+    detail TEXT
+);
+
+-- The step's log lines and its numbers (counts per stage), for the run's page.
+ALTER TABLE job_runs ADD COLUMN IF NOT EXISTS log TEXT;
+ALTER TABLE job_runs ADD COLUMN IF NOT EXISTS stats JSONB;
+
+CREATE INDEX IF NOT EXISTS idx_job_runs_started ON job_runs (started_at DESC);
