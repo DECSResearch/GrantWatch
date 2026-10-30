@@ -123,6 +123,19 @@ class TestRecorded:
                 raise ValueError("boom")
         assert ended(db) == ("UPDATE", (False, "ValueError: boom"), 7)
 
+    def test_an_exception_that_cannot_print_is_still_recorded_as_failed(self, db):
+        class Unprintable(Exception):
+            def __str__(self):
+                raise RuntimeError("no text")
+
+        with pytest.raises(Unprintable):
+            with runs.recorded("ingest"):
+                raise Unprintable()
+        kind, (ok, detail), run_id = ended(db)
+        assert (kind, ok, run_id) == ("UPDATE", False, 7)
+        assert detail.startswith("Unprintable: ")
+        assert saved(db)[0].endswith("Unprintable: <exception str() failed>")
+
     def test_the_callers_detail_beats_the_exception_text(self, db):
         with pytest.raises(RuntimeError):
             with runs.recorded("ingest") as run:

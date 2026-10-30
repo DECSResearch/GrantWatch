@@ -156,6 +156,15 @@ def _finish(
         _update(step, _FINISH_PLAIN_SQL, (ok, detail, run_id))
 
 
+def _describe(error: BaseException) -> str:
+    """``Type: message`` for the run's detail, even when the error cannot print its own message."""
+    try:
+        message = str(error)
+    except Exception:
+        message = "<exception str() failed>"  # as the traceback module prints it
+    return f"{type(error).__name__}: {message}"
+
+
 @contextmanager
 def recorded(step: str) -> Iterator[Run]:
     """Log one run of ``step``; the body sets ``run.ok``, ``run.detail`` and ``run.stats``.
@@ -178,7 +187,7 @@ def recorded(step: str) -> Iterator[Run]:
         channel.removeHandler(capture)
         if run_id is not None:
             try:
-                detail = run.detail or (f"{type(error).__name__}: {error}" if error is not None else None)
+                detail = run.detail or (_describe(error) if error is not None else None)
                 _finish(run_id, step, run.ok and error is None, detail, capture.text(error_traceback), run.stats)
             except Exception as exc:
                 logger("warning", f"Could not record the end of the {step} step: {exc}")
