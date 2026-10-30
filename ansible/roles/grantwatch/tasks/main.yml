@@ -34,6 +34,7 @@
           'POSTGRES_URL': 'postgresql://grantwatch:' ~ (db_password | urlencode) ~ '@grantwatch-db.' ~ namespace ~ '.svc:5432/grantwatch',
           'GRANTS_SECRET_KEY': secret_key,
           'GRANTS_DASHBOARD_URL': dashboard_url,
+          'GRANTS_ADMIN_PASSWORD': admin_password | default(''),
           'GRANTS_NOTIFY_RECIPIENTS': notify_recipients | default(''),
           'GRANTS_EMAIL_FROM': email_from | default(''),
           'GRANTS_SMTP_HOST': smtp_host | default(''),
