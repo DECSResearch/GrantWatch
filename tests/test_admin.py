@@ -973,6 +973,15 @@ class TestAdminPage:
         assert ".find(" not in row and 'newest(data.runs, "notify")' in row  # never an older run's counts
         assert "stopped before sending" in row and "From the run of" in row
 
+    def test_the_verdict_counts_a_model_server_that_is_not_answering_or_lacks_the_model(self):
+        verdict = webapp.ADMIN_HTML.split("function renderVerdict(data) {")[1].split("\n  }\n")[0]
+        assert "data.warnings.length + (modelProblem() ? 1 : 0)" in verdict
+        problem = webapp.ADMIN_HTML.split("function modelProblem() {")[1].split("\n  }\n")[0]
+        assert "check.configured" in problem and "!check.reachable" in problem and "!check.model_listed" in problem
+        assert "failed" not in problem and "checking" not in problem  # a check that could not run, or is running, never counts
+        check = webapp.ADMIN_HTML.split("async function checkModel() {")[1].split("\n  }\n")[0]
+        assert "renderVerdict(state.data)" in check  # the verdict is redrawn when the check finishes
+
     def test_the_page_follows_the_dashboards_tokens_and_font(self):
         for line in webapp.INDEX_HTML.split("</style>")[0].split("* { box-sizing")[0].splitlines():
             if line.strip().startswith("--") or "color-scheme" in line:

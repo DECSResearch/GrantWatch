@@ -327,8 +327,15 @@
 
   /* ---------- verdict, strip, warnings ---------- */
 
+  // The live model check loads apart from data.warnings. Only "Not answering" and "Model missing" count;
+  // "Not set up", "Checking…" and a check that could not run do not.
+  function modelProblem() {
+    const check = state.llm;
+    return Boolean(check && check.configured && (!check.reachable || !check.model_listed));
+  }
+
   function renderVerdict(data) {
-    const count = data.warnings.length;
+    const count = data.warnings.length + (modelProblem() ? 1 : 0);
     if (count) {
       $("verdict").textContent = count === 1 ? "1 thing needs attention." : count + " things need attention.";
       return;
@@ -841,7 +848,7 @@
     } catch (err) {
       state.llm = { failed: "could not reach the server." };
     }
-    if (state.data) renderSteps();
+    if (state.data) { renderSteps(); renderVerdict(state.data); }
   }
 
   async function load() {
