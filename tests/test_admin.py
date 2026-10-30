@@ -453,6 +453,13 @@ class TestEmailStatus:
         monkeypatch.setenv("GRANTS_SMTP_USER", "c2sr.und@gmail.com")
         assert admin.email_status()["sender"] == "c2sr.und@gmail.com"
 
+    def test_the_sender_never_shows_the_smtp_password(self, monkeypatch):
+        # Some providers (Postmark) use one token for the SMTP user and password.
+        monkeypatch.setenv("GRANTS_SMTP_HOST", "smtp.example.org")
+        monkeypatch.setenv("GRANTS_SMTP_USER", "tok-0123456789abcdef")
+        monkeypatch.setenv("GRANTS_SMTP_PASSWORD", "tok-0123456789abcdef")
+        assert "tok-0123456789abcdef" not in json.dumps(admin.email_status())
+
     def test_a_misconfiguration_is_reported_not_raised(self, monkeypatch):
         monkeypatch.setenv("GRANTS_EMAIL_TRANSPORT", "smtp")
         assert admin.email_status() == {"service": None, "sender": None, "error": "GRANTS_EMAIL_TRANSPORT=smtp needs GRANTS_SMTP_HOST", "last_sent": None}

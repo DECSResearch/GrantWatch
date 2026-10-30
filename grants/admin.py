@@ -210,7 +210,7 @@ def email_status(last_sent: Any = None) -> Dict[str, Any]:
         transport, error = None, redact(str(exc))
     return {
         "service": transport.name if transport else None,
-        "sender": sender_address() or None,
+        "sender": redact(sender_address()) or None,
         "error": error,
         "last_sent": _iso(last_sent),
     }
