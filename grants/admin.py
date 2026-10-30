@@ -5,7 +5,8 @@ from __future__ import annotations
 import os
 import time
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 from psycopg2.extras import RealDictCursor
@@ -14,6 +15,7 @@ from grants.profile import Profile, load_profile
 from grants.runs import redact
 from grants.sql_utils import db_connection, ensure_schema, open_grant_sql
 from llm_utils.relevance import LLMSettings, safe_host
+from logs.status_logger import logger
 from notifications.notify import settings_from_profile
 from notifications.transport import get_transport, sender_address
 
@@ -318,14 +320,28 @@ def llm_check(timeout: float = 5.0) -> Dict[str, Any]:
     return result
 
 
-def _timezone() -> str:
-    return (os.getenv("GRANTS_TIMEZONE") or "").strip() or _DEFAULT_TIMEZONE
+def _timezone() -> Tuple[str, Optional[str]]:
+    """The zone that decides which day an email counts for, and a warning when GRANTS_TIMEZONE was ignored.
+
+    Postgres fails the whole emails query on a zone it does not know, which would blank the page.
+    """
+    name = (os.getenv("GRANTS_TIMEZONE") or "").strip()
+    if not name:
+        return _DEFAULT_TIMEZONE, None
+    try:
+        ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        warning = f"GRANTS_TIMEZONE is {name[:60]!r}, which is not a time zone name. It was ignored and {_DEFAULT_TIMEZONE} is used."
+        logger("warning", warning)
+        return _DEFAULT_TIMEZONE, warning
+    return name, None
 
 
 def admin_status() -> Dict[str, Any]:
     """Everything the admin page shows, read from the database."""
     _ensure_runs_table()
     profile = load_profile()
+    zone, zone_warning = _timezone()
     with db_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(_RUNS_SQL)
         run_rows = [dict(row) for row in cur.fetchall()]
@@ -333,7 +349,7 @@ def admin_status() -> Dict[str, Any]:
         health_row = dict(cur.fetchone() or {})
         cur.execute(_RECIPIENTS_SQL)
         recipients = [_pick(row, _RECIPIENT_FIELDS) for row in cur.fetchall()]
-        cur.execute(_EMAILS_SQL, {"tz": _timezone()})
+        cur.execute(_EMAILS_SQL, {"tz": zone})
         emails = [_pick(row, _EMAIL_FIELDS) for row in cur.fetchall()]
 
     runs = []
@@ -352,12 +368,15 @@ def admin_status() -> Dict[str, Any]:
         row["day"] = _iso(row["day"])
 
     active = sum(1 for row in recipients if row["active"])
+    warnings = warnings_for(health, runs, active, profile.is_configured)
+    if zone_warning:
+        warnings.append(zone_warning)
     return {
         "runs": runs,
         "health": health,
         "recipients": recipients,
         "emails": emails,
-        "warnings": warnings_for(health, runs, active, profile.is_configured),
+        "warnings": warnings,
         "email": email_status(health_row.get("last_sent")),
         "profile": profile_summary(profile),
         "settings": settings_summary(),

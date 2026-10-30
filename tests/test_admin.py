@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import string
 import sys
 from datetime import datetime, timezone
@@ -332,6 +333,32 @@ class TestAdminStatus:
         admin.admin_status()
         assert fake_db.params[admin._EMAILS_SQL] == {"tz": "Europe/Oslo"}
         assert "AT TIME ZONE %(tz)s" in admin._EMAILS_SQL
+
+    @pytest.mark.parametrize("name", ["America/Chicag", "America", "../etc/passwd", "/etc/passwd", "Mars/Olympus"])
+    def test_a_bad_time_zone_is_ignored_with_a_warning(self, fake_db, monkeypatch, caplog, name):
+        monkeypatch.setenv("GRANTS_TIMEZONE", name)
+        with caplog.at_level(logging.WARNING, logger="grantwatch"):
+            status = admin.admin_status()
+        assert fake_db.params[admin._EMAILS_SQL] == {"tz": "America/Chicago"}
+        assert [w for w in status["warnings"] if "GRANTS_TIMEZONE" in w] == [
+            f"GRANTS_TIMEZONE is {name!r}, which is not a time zone name. It was ignored and America/Chicago is used."
+        ]
+        assert "GRANTS_TIMEZONE" in caplog.text and "America/Chicago is used" in caplog.text
+        json.dumps(status)
+
+    def test_a_long_bad_time_zone_is_cut_in_the_warning(self, fake_db, monkeypatch):
+        monkeypatch.setenv("GRANTS_TIMEZONE", "x" * 500)
+        warning = admin._timezone()[1]
+        assert "x" * 60 in warning and "x" * 61 not in warning
+
+    @pytest.mark.parametrize("name, used", [("Europe/Oslo", "Europe/Oslo"), ("UTC", "UTC"), ("  Europe/Oslo ", "Europe/Oslo"), ("", "America/Chicago"), ("   ", "America/Chicago")])
+    def test_a_good_or_blank_time_zone_gives_no_warning(self, fake_db, monkeypatch, caplog, name, used):
+        monkeypatch.setenv("GRANTS_TIMEZONE", name)
+        with caplog.at_level(logging.WARNING, logger="grantwatch"):
+            status = admin.admin_status()
+        assert fake_db.params[admin._EMAILS_SQL] == {"tz": used}
+        assert not any("GRANTS_TIMEZONE" in w for w in status["warnings"])
+        assert "GRANTS_TIMEZONE" not in caplog.text
 
     def test_the_profile_and_settings_come_with_it(self, fake_db):
         status = admin.admin_status()
