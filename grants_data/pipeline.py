@@ -115,17 +115,22 @@ def _load_source_records() -> List[Dict[str, object]]:
     The default ``extract`` downloads and parses the full daily XML database
     extract (every opportunity, no row cap); ``GRANTS_DATA_SOURCE=export``
     uses the search_export JSON endpoint, capped at ``GRANTS_GOV_ROWS`` rows.
+    Which source was used, and its file, go in ``onlyTheGoodStuff.last_stats``.
     """
     source = os.getenv("GRANTS_DATA_SOURCE", "extract").strip().lower()
+    stats = onlyTheGoodStuff.last_stats  # type: ignore[attr-defined]
 
     if source == "extract":
+        stats["source"] = "extract"
         if not gen_extract():
             logger("error", "Failed to download the XML database extract.")
             return []
+        stats["source_file"] = Path(gen_extract.last_extract_path).name
         return process_extract_xml(gen_extract.last_extract_path)
 
     if source != "export":
         logger("warning", f"Unknown GRANTS_DATA_SOURCE '{source}'; falling back to 'export'")
+    stats["source"] = "export"
 
     if gen_grants():
         latest_file_path = getattr(gen_grants, "last_download_path", None)
@@ -141,6 +146,7 @@ def _load_source_records() -> List[Dict[str, object]]:
         logger("error", "No latest file path found.")
         return []
 
+    stats["source_file"] = Path(latest_file_path).name
     return process_json_data(latest_file_path)
 
 
@@ -160,31 +166,49 @@ def _score_relevance(records: List[Dict[str, Any]], profile: Profile) -> List[Di
     except Exception as exc:
         logger("warning", f"Could not read stored relevance scores from the database: {exc}")
     outcome = score_records(records, profile, already_scored=cached)
+    onlyTheGoodStuff.last_stats.update(  # type: ignore[attr-defined]
+        scored=outcome.scored, cached=outcome.cached, failed=outcome.failed, deferred=outcome.deferred
+    )
     if outcome.new_entries:
         save_cached(fingerprint, outcome.new_entries)
+    if outcome.abort_reason:
+        onlyTheGoodStuff.last_stats["scoring_abort"] = outcome.abort_reason  # type: ignore[attr-defined]
     return outcome.records
 
 
-def _finish(success: bool, records: List[Dict[str, object]], csv_path: Optional[Path] = None) -> Tuple[bool, List[Dict[str, object]]]:
+def _finish(
+    success: bool,
+    records: List[Dict[str, object]],
+    csv_path: Optional[Path] = None,
+    reason: Optional[str] = None,
+) -> Tuple[bool, List[Dict[str, object]]]:
     onlyTheGoodStuff.last_csv_path = csv_path  # type: ignore[attr-defined]
+    stats = onlyTheGoodStuff.last_stats  # type: ignore[attr-defined]
+    stats["kept"] = len(records)
+    if reason:
+        stats["reason"] = reason
     return success, records
 
 
 def onlyTheGoodStuff() -> Tuple[bool, List[Dict[str, object]]]:
     onlyTheGoodStuff.last_new_ids = None  # type: ignore[attr-defined]
+    stats: Dict[str, Any] = {}
+    onlyTheGoodStuff.last_stats = stats  # type: ignore[attr-defined]
     profile = load_profile()
     onlyTheGoodStuff.last_profile = profile  # type: ignore[attr-defined]
 
     whole_json_data = normalize_records(_load_source_records())
     length_initial = len(whole_json_data)
+    stats["extract"] = length_initial
     if length_initial == 0:
         logger("error", "Failed to process JSON data.")
-        return _finish(False, [])
+        return _finish(False, [], reason="Could not download or parse the Grants.gov extract.")
 
     date_sorted_data = drop_closed_grants(date_filter_json_data(whole_json_data))
+    stats["open"] = len(date_sorted_data)
     if len(date_sorted_data) == 0:
         logger("warning", "No data found after date filtering.")
-        return _finish(True, [])
+        return _finish(True, [], reason="No grants were left after date filtering.")
 
     keywords, threshold, include_forecast = keyword_extractor(profile)
 
@@ -194,16 +218,19 @@ def onlyTheGoodStuff() -> Tuple[bool, List[Dict[str, object]]]:
     else:
         logger("info", "Dropping forecasted opportunities (GRANTS_INCLUDE_FORECAST is off).")
         status_sorted_data = filter_forecasted_data(date_sorted_data)
-        if len(status_sorted_data) == 0:
-            logger("info", "No data found after status filtering.")
-            return _finish(True, [])
+    stats["after_forecast"] = len(status_sorted_data)
+    if len(status_sorted_data) == 0:
+        logger("info", "No data found after status filtering.")
+        return _finish(True, [], reason="No grants were left after status filtering.")
 
     agency_filtered = _drop_excluded_agencies(status_sorted_data, profile)
+    stats["after_agency"] = len(agency_filtered)
 
     keyword_json_data = filter_grants_by_keywords(agency_filtered, "FUNDING_DESCRIPTION", keywords, threshold)
+    stats["matched"] = len(keyword_json_data)
     if len(keyword_json_data) == 0:
         logger("warning", "No data found after keyword filtering.")
-        return _finish(True, [])
+        return _finish(True, [], reason="No grants matched the profile keywords.")
     logger("info", f"Filtered keyword length: {len(keyword_json_data)}")
 
     scored_data = _score_relevance(keyword_json_data, profile)
@@ -211,7 +238,7 @@ def onlyTheGoodStuff() -> Tuple[bool, List[Dict[str, object]]]:
     summarized_json_data = description_summarizer(scored_data)
     if summarized_json_data is None or len(summarized_json_data) == 0:
         logger("error", "Failed to summarize descriptions.")
-        return _finish(False, [])
+        return _finish(False, [], reason="Summarizing descriptions failed.")
 
     final_json_data = list(summarized_json_data)
     final_json_data.sort(key=_sort_key)
@@ -222,11 +249,12 @@ def onlyTheGoodStuff() -> Tuple[bool, List[Dict[str, object]]]:
     try:
         summary: LoadSummary = load_grants_from_records(final_json_data)
         onlyTheGoodStuff.last_new_ids = summary.new_ids  # type: ignore[attr-defined]
+        onlyTheGoodStuff.last_stats.update(inserted=summary.inserted, updated=summary.updated)  # type: ignore[attr-defined]
     except Exception as exc:
         # The email step reads from the database, so a run that could not
         # load it has failed even though the CSV was written.
         logger("error", f"Failed to load data into the database: {exc}")
-        return _finish(False, final_json_data, csv_path)
+        return _finish(False, final_json_data, csv_path, reason=f"Database load failed: {exc}")
 
     final_length = len(final_json_data)
     retained_pct = (final_length / length_initial) * 100 if length_initial else 0
@@ -239,3 +267,4 @@ def onlyTheGoodStuff() -> Tuple[bool, List[Dict[str, object]]]:
 onlyTheGoodStuff.last_csv_path = None  # type: ignore[attr-defined]
 onlyTheGoodStuff.last_new_ids = None  # type: ignore[attr-defined]
 onlyTheGoodStuff.last_profile = None  # type: ignore[attr-defined]
+onlyTheGoodStuff.last_stats = {}  # type: ignore[attr-defined]
