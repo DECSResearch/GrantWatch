@@ -5,6 +5,7 @@ import textwrap
 
 from grants.profile import Profile, load_profile
 from llm_utils.keywords_gen import keyword_extractor
+from llm_utils.relevance import score_key
 
 
 def _write(tmp_path, body: str):
@@ -70,6 +71,14 @@ class TestLoadProfile:
         c = Profile(summary="B")
         assert a.fingerprint() == b.fingerprint()
         assert a.fingerprint() != c.fingerprint()
+
+    def test_score_key_adds_the_model_to_the_fingerprint(self):
+        profile = Profile(summary="A")
+        assert score_key(profile, "m1").startswith(profile.fingerprint())
+        assert score_key(profile, "m1") != score_key(profile, "m2")
+        # What does not reach the scorer's prompt does not rescore anything.
+        assert score_key(profile, "m1") == score_key(Profile(summary="A", keywords=["y"], keyword_threshold=3), "m1")
+        assert score_key(profile, "m1") != score_key(Profile(summary="A", institution="UND"), "m1")
 
     def test_prompt_text_includes_institution(self):
         profile = Profile(summary="Grid work.", institution="UND", applicant_type="public university")

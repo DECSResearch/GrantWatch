@@ -124,15 +124,15 @@ def open_grant_sql(alias: str = "g") -> str:
     )
 
 
-def fetch_relevance(profile_fingerprint: str) -> Dict[str, Dict[str, Any]]:
-    """Scores already stored for this profile, keyed by opportunity number."""
+def fetch_relevance(key: str) -> Dict[str, Dict[str, Any]]:
+    """Scores already stored under this score key (``relevance.score_key``), keyed by opportunity number."""
     query = """
         SELECT opp_id, relevance_score, relevance_reason, summary, relevance_model, relevance_scored_at
         FROM grants
         WHERE relevance_profile = %s AND relevance_score IS NOT NULL;
     """
     with db_connection() as conn, conn.cursor() as cur:
-        cur.execute(query, (profile_fingerprint,))
+        cur.execute(query, (key,))
         rows = cur.fetchall()
     return {
         opp_id: {

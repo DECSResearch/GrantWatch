@@ -23,7 +23,7 @@ from grants_data.retention import keep_limit, prune_old_files
 from grants_data.keyword_filter_data import filter_grants_by_keywords
 from llm_utils.gpt_summarizer import description_summarizer
 from llm_utils.keywords_gen import keyword_extractor
-from llm_utils.relevance import SCORE_FIELD, score_records
+from llm_utils.relevance import SCORE_FIELD, LLMSettings, score_key, score_records
 from llm_utils.relevance_cache import load_cached, save_cached
 from logs.status_logger import logger
 
@@ -159,18 +159,19 @@ def _drop_excluded_agencies(records: List[Dict[str, Any]], profile: Profile) -> 
 
 
 def _score_relevance(records: List[Dict[str, Any]], profile: Profile) -> List[Dict[str, Any]]:
-    fingerprint = profile.fingerprint()
-    cached = load_cached(fingerprint)
+    settings = LLMSettings.from_env()
+    key = score_key(profile, settings.model)
+    cached = load_cached(key)
     try:
-        cached.update(fetch_relevance(fingerprint))
+        cached.update(fetch_relevance(key))
     except Exception as exc:
         logger("warning", f"Could not read stored relevance scores from the database: {exc}")
-    outcome = score_records(records, profile, already_scored=cached)
+    outcome = score_records(records, profile, already_scored=cached, settings=settings)
     onlyTheGoodStuff.last_stats.update(  # type: ignore[attr-defined]
         scored=outcome.scored, cached=outcome.cached, failed=outcome.failed, deferred=outcome.deferred
     )
     if outcome.new_entries:
-        save_cached(fingerprint, outcome.new_entries)
+        save_cached(key, outcome.new_entries)
     if outcome.abort_reason:
         onlyTheGoodStuff.last_stats["scoring_abort"] = outcome.abort_reason  # type: ignore[attr-defined]
     return outcome.records

@@ -521,7 +521,7 @@ class TestPipelineStats:
         monkeypatch.setattr(pipeline, "save_cached", lambda *args: None)
         monkeypatch.setattr(
             pipeline, "score_records",
-            lambda records, profile, already_scored: ScoringOutcome(records=records, enabled=True, scored=1, cached=0, failed=1, deferred=0),
+            lambda records, profile, already_scored, settings: ScoringOutcome(records=records, enabled=True, scored=1, cached=0, failed=1, deferred=0),
         )
         monkeypatch.setattr(pipeline, "description_summarizer", lambda records: records)
         monkeypatch.setattr(pipeline, "_write_csv", lambda records: Path("grants.csv"))
@@ -585,7 +585,7 @@ class TestPipelineStats:
     def test_a_stopped_scorer_is_carried_into_the_stats(self, stubbed, monkeypatch):
         monkeypatch.setattr(
             pipeline, "score_records",
-            lambda records, profile, already_scored: ScoringOutcome(
+            lambda records, profile, already_scored, settings: ScoringOutcome(
                 records=records, enabled=True, failed=2, abort_reason="cannot reach http://10.0.0.5:18100: Connection error."
             ),
         )

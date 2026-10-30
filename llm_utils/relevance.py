@@ -11,6 +11,7 @@ or a hosted endpoint. Configuration comes from the environment:
     GRANTS_LLM_WORKERS           concurrent requests, default 2
     GRANTS_LLM_TIMEOUT           seconds per request, default 180
     GRANTS_LLM_MAX_CHARS         description characters sent per grant, default 3000
+                                 (eligibility text is cut at 2000)
     GRANTS_LLM_MAX_TOKENS        completion tokens per request, default max(2048, 400 * batch)
     GRANTS_LLM_EXTRA_BODY        JSON merged into each request body, e.g. to turn off a
                                  reasoning model's thinking on vLLM or Open WebUI:
@@ -24,9 +25,9 @@ before it is given up on; a grant that stays unscored is tried again on the
 next run. A reasoning model that spends the whole token budget thinking
 returns no answer; scoring then stops with a message naming the two fixes
 (more tokens, or thinking off) instead of retrying every batch. Keep the
-server's context window comfortably above the prompt
-(Ollama: OLLAMA_CONTEXT_LENGTH=8192 or a Modelfile num_ctx), or the system
-prompt is silently truncated away.
+server's context window comfortably above the prompt, about 12k tokens for
+the default 3 grants per request (Ollama: OLLAMA_CONTEXT_LENGTH=12288 or a
+Modelfile num_ctx), or the system prompt is silently truncated away.
 """
 from __future__ import annotations
 
@@ -59,6 +60,13 @@ MODEL_FIELD = "RELEVANCE_MODEL"
 PROFILE_FIELD = "RELEVANCE_PROFILE"
 SCORED_AT_FIELD = "RELEVANCE_SCORED_AT"
 
+# Bump whenever _SYSTEM_PROMPT or the text _record_block sends changes. It is
+# part of the score cache key, so a bump rescores every grant once (under the
+# per-run cap). 1 was the unversioned scorer; 2 is the eligibility and
+# broad-program prompt with eligibility cut at 2,000 characters.
+SCORER_VERSION = 2
+ELIGIBILITY_CHARS = 2000
+
 _DATE_FORMATS = ["%m/%d/%Y", "%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ"]
 
 _SYSTEM_PROMPT = """You screen federal funding opportunities for a university research group.
@@ -75,8 +83,18 @@ whether the group is an eligible applicant. Use this scale:
    tribes, states, individuals, or foreign governments may apply) or off-topic.
 
 Judge fit from the substance of the description, not from keyword overlap.
-Read the eligibility text carefully; a good topic with the wrong eligibility
-is a 0.
+Eligibility: give 0 only when the text clearly excludes a US public university
+(for example only states, tribes, small businesses, individuals, named
+institutions, or foreign entities may apply). Eligibility lists are often
+bulleted; read every item. If any item covers institutions of higher
+education, the group is eligible. If eligibility is unclear, judge on fit.
+
+Broad programs: agency-wide research announcements, early-career awards
+(CAREER, young investigator, young faculty), EPSCoR, instrumentation and
+"any field of science" calls are open to almost everyone. Give them 2 or 3
+unless the text itself names one of the group's research topics; 4 if it
+names one as a listed interest; 5 only for programs whose stated purpose is
+one of the group's research lines.
 
 Respond with JSON only, no prose, in this exact shape:
 {"scores": [{"opportunity_number": "...", "score": 0, "summary": "...", "reason": "..."}]}
@@ -116,6 +134,16 @@ _RESPONSE_FORMATS: List[Optional[Dict[str, Any]]] = [
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.S | re.I)
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.S | re.I)
+
+
+def score_key(profile: Profile, model: str) -> str:
+    """What a stored score is valid for: the profile text, the scorer version and the model.
+
+    The one key for the database column, the local cache file and the scoring
+    run, so a score is reused only when all three match. The fingerprint is a
+    fixed-length hex string and the model comes last, so no two triples share a key.
+    """
+    return f"{profile.fingerprint()}:v{SCORER_VERSION}:{model}"
 
 
 def _env(name: str, default: str = "") -> str:
@@ -252,7 +280,7 @@ def _record_block(record: Dict[str, Any], max_chars: int) -> str:
         lines.append(f"Award ceiling: {record.get('AWARD_CEILING')}")
     eligibility = strip_html(record.get("ADDITIONAL_INFORMATION_ON_ELIGIBILITY"))
     if eligibility:
-        lines.append(f"Eligibility: {_truncate(eligibility, 700)}")
+        lines.append(f"Eligibility: {_truncate(eligibility, ELIGIBILITY_CHARS)}")
     description = strip_html(record.get("FUNDING_DESCRIPTION")) or "(no description)"
     lines.append(f"Description: {_truncate(description, max_chars)}")
     return "\n".join(lines)
@@ -416,14 +444,14 @@ def score_records(
         return outcome
     outcome.enabled = True
 
-    fingerprint = profile.fingerprint()
+    key = score_key(profile, settings.model)
     cached = already_scored or {}
     pending: List[Dict[str, Any]] = []
     for record in output:
         number = str(record.get("OPPORTUNITY_NUMBER") or "")
         hit = cached.get(number)
         if hit and hit.get("score") is not None:
-            _apply(record, hit, fingerprint, hit.get("model") or settings.model, hit.get("scored_at"))
+            _apply(record, hit, key, hit.get("model") or settings.model, hit.get("scored_at"))
             outcome.cached += 1
         elif number:
             pending.append(record)
@@ -469,7 +497,7 @@ def score_records(
                 record = by_number.get(number)
                 if record is None:
                     continue
-                _apply(record, result, fingerprint, settings.model, scored_at)
+                _apply(record, result, key, settings.model, scored_at)
                 outcome.new_entries[number] = {**result, "model": settings.model, "scored_at": scored_at}
                 outcome.scored += 1
 
@@ -485,11 +513,11 @@ def score_records(
     return outcome
 
 
-def _apply(record: Dict[str, Any], result: Dict[str, Any], fingerprint: str, model: str, scored_at: Any) -> None:
+def _apply(record: Dict[str, Any], result: Dict[str, Any], key: str, model: str, scored_at: Any) -> None:
     record[SCORE_FIELD] = result.get("score")
     record[REASON_FIELD] = result.get("reason") or ""
     record[MODEL_FIELD] = model
-    record[PROFILE_FIELD] = fingerprint
+    record[PROFILE_FIELD] = key
     record[SCORED_AT_FIELD] = scored_at
     summary = (result.get("summary") or "").strip()
     if summary:

@@ -67,7 +67,8 @@ those, and tolerates reasoning tags and code fences. Scores are cached per
 profile in the database and in `grants_data/cache/`, so each run only scores
 grants it has not seen; the first run is capped by
 `GRANTS_RELEVANCE_MAX_PER_RUN` (soonest deadlines first) and catches up on
-later runs. Changing the profile summary rescores everything.
+later runs. Changing the profile summary or the model rescores everything, and so does
+a release that changes the scoring prompt (`SCORER_VERSION`).
 
 ### Running it
 
