@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+from grants.profile import Profile
 from notifications.digest import render_email
+from notifications.notify import settings_from_profile
 from notifications.planner import GrantState, NotifySettings, Recipient, plan_email
 from notifications.transport import build_message
 
@@ -80,6 +82,24 @@ class TestRender:
         assert email.text.index("Grant MANY") < email.text.index("Grant FEW")  # most keyword hits first
         assert "match the research keywords" in email.text
         assert email.subject == "GrantWatch: 2 new"
+
+    def test_without_scores_a_grant_that_matched_nothing_is_not_announced(self):
+        """A model that scores every open grant also loads ones that matched no keyword."""
+        grants = [_grant("NONE", 3, score=None, matches=0), _grant("ONE", 4, score=None, matches=1)]
+        email = _email(grants)
+        assert "Grant ONE" in email.text and "Grant NONE" not in email.text
+        assert _email(grants[:1], NotifySettings(overview_day="never")) is None
+
+    def test_without_scores_the_keyword_threshold_is_the_floor_but_never_below_one(self):
+        grants = [_grant("ONE", 3, score=None, matches=1), _grant("TWO", 4, score=None, matches=2)]
+        email = _email(grants, NotifySettings(keyword_threshold=2))
+        assert "Grant TWO" in email.text and "Grant ONE" not in email.text
+        none_and_one = [_grant("NONE", 3, score=None, matches=0), _grant("ONE", 4, score=None, matches=1)]
+        email = _email(none_and_one, NotifySettings(keyword_threshold=0))
+        assert "Grant ONE" in email.text and "Grant NONE" not in email.text
+
+    def test_the_profiles_keyword_threshold_reaches_the_settings(self):
+        assert settings_from_profile(Profile(summary="s", keyword_threshold=3)).keyword_threshold == 3
 
     def test_trims_to_size_and_reports_only_what_fits(self):
         long = "Ünïcode ’quoted’ title " * 20

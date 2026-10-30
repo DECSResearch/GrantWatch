@@ -11,8 +11,10 @@ The rules:
   the recipient's threshold. Whether it was inserted today or a month ago
   does not matter, so a grant scored late (model down, per-run cap) is still
   announced. Tracked grants are not announced; the team already has them.
-  Until any grant has a score, every keyword match counts, ranked by how
-  many of the profile's keywords it mentions.
+  Until any grant has a score, every grant that meets the profile's keyword
+  threshold (at least one match) counts, ranked by how many keywords it
+  mentions. The database can hold grants that matched nothing, because a
+  model scores every open grant, so a model outage never announces those.
 * A tracked grant gets one reminder each time its deadline passes one of the
   reminder marks. A new deadline resets the reminders and is announced once.
 * A tracked grant that is archived early or drops out of the extract is
@@ -113,6 +115,7 @@ class NotifySettings:
     horizons: Sequence[int] = (7, 30, 60, 90)
     overview_day: str = "monday"
     include_forecasted: bool = True
+    keyword_threshold: int = 1
     max_new: int = 25
     max_per_bucket: int = 10
     max_bytes: int = 90_000
@@ -186,9 +189,14 @@ def plan_email(
     scoring_active = any(g.score is not None for g in open_grants)
     plan = Plan(recipient=recipient, scoring_active=scoring_active, min_score=min_score)
 
+    # With nothing scored yet, only keyword matches count (see the fallback below).
+    needed = max(1, settings.keyword_threshold)
+
     def relevant(g: GrantState) -> bool:
-        if g.watched or not scoring_active:
+        if g.watched:
             return True
+        if not scoring_active:
+            return g.matches >= needed
         return g.score is not None and g.score >= min_score
 
     marks = sorted({int(m) for m in settings.reminder_days if int(m) >= 0})
@@ -214,9 +222,10 @@ def plan_email(
         ]
         fresh.sort(key=lambda g: (-(g.score or 0), _date_key(g.close_date), g.title, g.opp_id))
     else:
-        # No model yet: every grant in the database already matched the
-        # profile keywords, so announce those, most keyword hits first.
-        fresh = [g for g in open_grants if not g.watched and g.opp_id not in announced]
+        # Nothing is scored yet: announce the keyword matches, most hits first. A model
+        # that scores every open grant also loads ones that matched nothing, so the
+        # threshold is checked here (and at least one match is always needed).
+        fresh = [g for g in open_grants if not g.watched and g.opp_id not in announced and g.matches >= needed]
         fresh.sort(key=lambda g: (-g.matches, _date_key(g.close_date), g.title, g.opp_id))
     plan.new = [Notice(NEW, g) for g in fresh]
 

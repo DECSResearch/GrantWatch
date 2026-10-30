@@ -9,8 +9,9 @@ read back as text. The properties are the spec:
 1. A grant is announced to a recipient at most once.
 2. Each run announces min(backlog, max_new) of the best unannounced
    qualifying grants (by score, or by keyword matches before anything is
-   scored), so nothing qualifying is lost; repeated runs drain the backlog
-   and then go quiet.
+   scored, and only grants with at least max(1, keyword_threshold) of them),
+   so nothing qualifying is lost; repeated runs drain the backlog and then go
+   quiet.
 3. A failed send records nothing.
 4. After a successful send every due reminder for a tracked grant is
    recorded, at most once per mark and deadline, and the recipient's latest
@@ -102,6 +103,7 @@ def scenarios(draw):
         min_score=draw(st.integers(0, 5)),
         reminder_days=draw(st.lists(st.integers(1, 30), min_size=1, max_size=4, unique=True)),
         overview_day=draw(st.sampled_from(["monday", "thursday", "daily", "never"])),
+        keyword_threshold=draw(st.integers(0, 3)),
         max_new=draw(st.integers(1, 10)),
         dashboard_url="https://gw.example.edu",
     )
@@ -113,7 +115,8 @@ def _eligible(grants: List[GrantState], person: Recipient, config: NotifySetting
     threshold = config.min_score if person.min_score is None else person.min_score
     open_now = [g for g in grants if g.is_open(today)]
     if not any(g.score is not None for g in open_now):
-        return [g for g in open_now if not g.watched and g.opp_id not in announced]  # keyword matches
+        needed = max(1, config.keyword_threshold)
+        return [g for g in open_now if not g.watched and g.opp_id not in announced and g.matches >= needed]  # keyword matches
     return [g for g in open_now if not g.watched and g.score is not None and g.score >= threshold and g.opp_id not in announced]
 
 
