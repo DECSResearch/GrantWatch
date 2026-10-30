@@ -17,6 +17,11 @@ _LOG_LEVELS: Dict[str, int] = {
 
 _log_file = Path(__file__).resolve().parent / "grantwatch.log"
 
+FORMATTER = logging.Formatter(
+    fmt="%(asctime)s | %(levelname)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
 
 def _configure_logger() -> logging.Logger:
     logger = logging.getLogger(_LOG_NAME)
@@ -25,13 +30,8 @@ def _configure_logger() -> logging.Logger:
 
     logger.setLevel(logging.INFO)
 
-    formatter = logging.Formatter(
-        fmt="%(asctime)s | %(levelname)s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-
     stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(formatter)
+    stream_handler.setFormatter(FORMATTER)
     logger.addHandler(stream_handler)
 
     try:
@@ -39,7 +39,7 @@ def _configure_logger() -> logging.Logger:
         file_handler = RotatingFileHandler(
             _log_file, encoding="utf-8", maxBytes=5 * 1024 * 1024, backupCount=3
         )
-        file_handler.setFormatter(formatter)
+        file_handler.setFormatter(FORMATTER)
         logger.addHandler(file_handler)
     except OSError:
         logger.warning("Failed to set up file logging at %s", _log_file)
