@@ -5,8 +5,10 @@ import json
 from types import SimpleNamespace
 from unittest import mock
 
+import httpx2
 import pytest
 from hypothesis import given, strategies as st
+from openai import BadRequestError
 
 from grants.profile import Profile
 from grants_data import pipeline
@@ -16,6 +18,9 @@ from llm_utils.relevance import (
     ELIGIBILITY_CHARS,
     SCORER_VERSION,
     LLMSettings,
+    PromptTooLong,
+    RelevanceScorer,
+    _is_context_error,
     _record_block,
     parse_scores,
     score_key,
@@ -406,3 +411,86 @@ class TestPipelineKey:
             assert len(wired.client.completions.calls) == 2
             pipeline._score_relevance(_records("A"), PROFILE)
             assert len(wired.client.completions.calls) == 2
+
+
+def _bad_request(message, **body):
+    """A 400 as the openai SDK raises it, with the error body the server sent."""
+    request = httpx2.Request("POST", "http://models.test/v1/chat/completions")
+    return BadRequestError(message, response=httpx2.Response(400, request=request), body={"message": message, **body})
+
+
+# The wording of a prompt that does not fit, as each kind of server reports it.
+CONTEXT_ERRORS = [
+    pytest.param("This model's maximum context length is 8192 tokens. However, your messages resulted in 9100 tokens.",
+                 {"code": "context_length_exceeded", "type": "invalid_request_error"}, id="openai"),
+    pytest.param("This model's maximum context length is 4096 tokens. However, you requested 5000 tokens (4000 in the messages).",
+                 {"code": 400, "type": "BadRequestError"}, id="vllm"),
+    pytest.param("the request exceeds the available context size, try increasing it", {"type": "exceed_context_size_error"}, id="llama.cpp"),
+    pytest.param("prompt too long; exceeded max context length by 120 tokens", {}, id="ollama"),
+]
+
+
+class TestContextLengthError:
+    @pytest.mark.parametrize("message, body", CONTEXT_ERRORS)
+    def test_is_recognised(self, message, body):
+        assert _is_context_error(_bad_request(message, **body))
+
+    @pytest.mark.parametrize("message", [
+        "response_format of type json_schema is not supported with this model",
+        "'response_format.type' must be 'json_object' or 'text'",
+        "Invalid request: unknown field extra_body",
+    ])
+    def test_a_rejected_format_is_not_one(self, message):
+        assert not _is_context_error(_bad_request(message, code="invalid_request"))
+
+    def test_an_exception_with_only_a_message_is_still_checked(self):
+        class Bare(Exception):
+            message = "maximum context length is 2048 tokens"
+
+        assert _is_context_error(Bare())
+
+    @pytest.mark.parametrize("message, body", CONTEXT_ERRORS)
+    def test_does_not_advance_the_response_format_or_stop_the_other_batches(self, message, body):
+        def responder(kwargs):
+            if "A" in _numbers_in(kwargs):
+                raise _bad_request(message, **body)
+            return _echo_scores()(kwargs)
+
+        client = FakeClient(responder)
+        out = score_records(_records("A", "B", "C", "D"), PROFILE, settings=SETTINGS, client=client)
+        formats = [(c.get("response_format") or {}).get("type") for c in client.completions.calls]
+        assert formats == ["json_schema", "json_schema"]  # one request per batch, none retried in a looser format
+        assert out.scored == 2 and out.failed == 2 and out.abort_reason is None
+        assert {r["OPPORTUNITY_NUMBER"] for r in out.records if r.get("RELEVANCE_SCORE") is not None} == {"C", "D"}
+
+    def test_a_rejected_format_still_falls_back(self):
+        def responder(kwargs):
+            if (kwargs.get("response_format") or {}).get("type") == "json_schema":
+                raise _bad_request("response_format of type json_schema is not supported with this model")
+            return _echo_scores()(kwargs)
+
+        client = FakeClient(responder)
+        out = score_records(_records("A", "B"), PROFILE, settings=SETTINGS, client=client)
+        assert out.scored == 2
+        assert [(c.get("response_format") or {}).get("type") for c in client.completions.calls] == ["json_schema", "json_object"]
+
+    def test_the_message_names_the_fixes(self):
+        scorer = RelevanceScorer(PROFILE, SETTINGS, client=FakeClient(lambda kwargs: (_ for _ in ()).throw(_bad_request("maximum context length is 2048 tokens"))))
+        with pytest.raises(PromptTooLong) as raised:
+            scorer.score_batch(_records("A"))
+        assert "12k tokens" in str(raised.value) and all(name in str(raised.value) for name in ("GRANTS_LLM_MAX_CHARS", "GRANTS_LLM_BATCH_SIZE", "GRANTS_LLM_MAX_TOKENS"))
+
+    @given(
+        st.sampled_from([0, 1, 2]),
+        st.sampled_from(["context length", "context_length_exceeded", "context size", "context window", "prompt is too long", "too many tokens"]),
+        st.text(max_size=40),
+        st.text(max_size=40),
+    )
+    def test_never_moves_the_response_format_from_any_position(self, start, phrase, before, after):
+        client = FakeClient(lambda kwargs: (_ for _ in ()).throw(_bad_request(f"{before}{phrase}{after}")))
+        scorer = RelevanceScorer(PROFILE, SETTINGS, client=client)
+        scorer._format_index = start
+        with pytest.raises(PromptTooLong):
+            scorer.score_batch(_records("A"))
+        assert scorer._current_format() == start
+        assert len(client.completions.calls) == 1

@@ -26,8 +26,9 @@ next run. A reasoning model that spends the whole token budget thinking
 returns no answer; scoring then stops with a message naming the two fixes
 (more tokens, or thinking off) instead of retrying every batch. Keep the
 server's context window comfortably above the prompt, about 12k tokens for
-the default 3 grants per request (Ollama: OLLAMA_CONTEXT_LENGTH=12288 or a
-Modelfile num_ctx), or the system prompt is silently truncated away.
+the default 3 grants per request, plus GRANTS_LLM_MAX_TOKENS if you raised it
+(Ollama: OLLAMA_CONTEXT_LENGTH=12288 or a Modelfile num_ctx), or the system
+prompt is silently truncated away.
 """
 from __future__ import annotations
 
@@ -189,6 +190,21 @@ def safe_host(url: str) -> str:
 
 class OutputTruncated(ValueError):
     """The model hit the completion-token limit before writing an answer."""
+
+
+class PromptTooLong(Exception):
+    """The server refused a batch because the prompt does not fit its context window."""
+
+
+# OpenAI sets the code context_length_exceeded, vLLM and Ollama say "context
+# length" in the message, llama.cpp's error type is exceed_context_size_error.
+_CONTEXT_ERROR_RE = re.compile(r"context[ _-]?(?:length|size|window)|prompt (?:is )?too long|too many tokens", re.I)
+
+
+def _is_context_error(exc: Exception) -> bool:
+    """True for a 400 that says the prompt is too long, as opposed to a format the server rejects."""
+    parts = (getattr(exc, "code", None), getattr(exc, "type", None), getattr(exc, "message", None))
+    return any(_CONTEXT_ERROR_RE.search(str(part)) for part in parts if part)
 
 
 @dataclass
@@ -405,6 +421,14 @@ class RelevanceScorer:
             try:
                 text, finish = self._complete(batch, index)
             except BadRequestError as exc:
+                if _is_context_error(exc):
+                    # Not a format problem: every format sends the same prompt, and moving on would
+                    # downgrade the format for all later batches too.
+                    raise PromptTooLong(
+                        f"the server says the prompt does not fit its context window ({exc.message[:120]}). Raise the "
+                        "server's context to about 12k tokens (plus GRANTS_LLM_MAX_TOKENS), or lower GRANTS_LLM_MAX_CHARS, "
+                        "GRANTS_LLM_BATCH_SIZE or GRANTS_LLM_MAX_TOKENS"
+                    ) from exc
                 if self._advance_format(index, f"the server rejected the request ({exc.message[:120]})"):
                     continue
                 raise
@@ -482,6 +506,8 @@ def score_records(
             scorer.abort_reason = str(exc)  # every other batch would be cut off too
         except APIConnectionError as exc:
             scorer.abort_reason = f"cannot reach {safe_host(settings.base_url)}: {exc}"
+        except PromptTooLong as exc:
+            logger("warning", f"Skipping a batch of {len(batch)}: {exc}")  # other batches may be shorter and fit
         except RateLimitError as exc:
             logger("warning", f"Rate limited while scoring a batch; skipping it ({exc.message[:120]})")
         except APIStatusError as exc:
