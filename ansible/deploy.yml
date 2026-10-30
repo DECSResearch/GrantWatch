@@ -1,0 +1,11 @@
+---
+# Deploy GrantWatch into its own grantwatch namespace.
+# Run: ansible-playbook ansible/deploy.yml --ask-vault-pass
+# Secrets come from the vaulted ansible/secrets.yml (see secrets.example.yml).
+- name: Deploy GrantWatch
+  hosts: lambda
+  gather_facts: false
+  vars_files:
+    - secrets.yml
+  roles:
+    - grantwatch

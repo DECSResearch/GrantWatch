@@ -125,7 +125,7 @@ scores, moving deadlines and failed sends.
 ## Dashboard
 
 ```bash
-uvicorn web.app:app --app-dir src --reload   # http://localhost:8000
+PYTHONPATH=. uvicorn web.app:app --app-dir src --reload   # http://localhost:8000
 ```
 
 API: `GET /api/grants` (`q`, `min_score`, `closing_within`,
@@ -169,6 +169,12 @@ launchctl start com.grantwatch.daily     # run once now; output in logs/daily.lo
 On Linux, add `30 7 * * * /path/to/GrantWatch/scripts/run_daily.sh` to
 `crontab -e`. `main.py` exits non-zero when ingest or any email failed, and
 rerunning it the same day never sends anything twice.
+
+## Running on the lab cluster
+
+GrantWatch can run on the lab's k3s cluster: Postgres, the dashboard on port
+30810, and the daily job as a CronJob, deployed with Ansible the same way as
+`c2sr-testbed-llm-orchestrator`. See [k8s/README.md](k8s/README.md).
 
 ## Deploying the web app
 

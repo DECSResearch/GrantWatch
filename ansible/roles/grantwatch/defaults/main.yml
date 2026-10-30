@@ -1,0 +1,12 @@
+---
+namespace: grantwatch
+manifests_dir: "{{ playbook_dir }}/../k8s"
+# Where team members open the dashboard; links in emails point here.
+dashboard_url: "http://{{ ansible_host | default(inventory_hostname) }}:30810"
+# The research profile mounted into the pods. Keep the real one in the
+# git-ignored config/research_profile.local.yml on the machine running Ansible.
+profile_file: "{{ playbook_dir }}/../config/research_profile.local.yml"
+# Secrets are rendered from ansible-vault into k8s Secrets at deploy time.
+# Define these in ansible/secrets.yml (vaulted), NOT here:
+#   llm_base_url, llm_api_key, db_password, secret_key
+#   optional: notify_recipients, email_from, smtp_host, smtp_user, smtp_password

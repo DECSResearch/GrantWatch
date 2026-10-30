@@ -1,0 +1,39 @@
+# The daily run: download the Grants.gov extract, score new grants with the
+# model, load them, then email the team (python main.py).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: grantwatch-daily
+  namespace: grantwatch
+spec:
+  schedule: "30 7 * * *"             # 07:30, after Grants.gov publishes the extract
+  timeZone: "America/Chicago"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600      # a run missed while the node was down still happens
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 5400    # the first run scores every open grant
+      backoffLimit: 1
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: daily
+              image: grantwatch:local
+              imagePullPolicy: Never
+              envFrom:
+                - configMapRef: {name: grantwatch-config}
+                - secretRef: {name: grantwatch-cred}
+              volumeMounts:
+                - {name: profile, mountPath: /app/config/research_profile.local.yml, subPath: research_profile.local.yml, readOnly: true}
+                - {name: extract, mountPath: /app/grants_data/grants_xml_data}
+              resources:
+                requests: {cpu: "500m", memory: "1Gi"}
+                limits: {cpu: "2", memory: "3Gi"}
+          volumes:
+            - name: profile
+              secret: {secretName: grantwatch-profile}
+            - name: extract                # the ~300 MB XML; discarded after each run
+              emptyDir: {sizeLimit: 2Gi}
