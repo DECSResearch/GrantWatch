@@ -90,6 +90,11 @@ def notify_step(dry_run: bool = False) -> int:
     """Run the notify step; a real run (not a dry run) goes in the run log."""
     if dry_run:
         return run_notify(dry_run=True)
+    try:
+        ensure_schema()
+    except Exception as exc:
+        print(f"Warning: could not verify database schema: {exc}")
+
     with recorded("notify") as run:
         code = run_notify()
         run.ok = code == 0

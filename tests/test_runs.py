@@ -746,6 +746,45 @@ class TestSteps:
         assert main.main(["notify", "--dry-run"]) == 0
         assert log == []
 
+    @pytest.fixture
+    def order(self, monkeypatch):
+        """Events in the order they happen: the schema check and the start of each recorded step."""
+        events = []
+
+        @contextmanager
+        def fake(step):
+            events.append(f"record {step}")
+            yield runs.Run()
+
+        monkeypatch.setattr(main, "recorded", fake)
+        monkeypatch.setattr(main, "ensure_schema", lambda: events.append("schema"))
+
+        def notify(dry_run=False):
+            events.append("notify")
+            return notify.code
+
+        notify.code, notify.last_summary = 0, None
+        monkeypatch.setattr(main, "run_notify", notify)
+        return events
+
+    def test_notify_ensures_the_schema_before_it_records_the_run(self, order):
+        assert main.main(["notify"]) == 0
+        assert order == ["schema", "record notify", "notify"]
+
+    def test_notify_that_cannot_check_the_schema_still_runs_and_is_recorded(self, order, monkeypatch, capsys):
+        def down():
+            raise RuntimeError("database is down")
+
+        monkeypatch.setattr(main, "ensure_schema", down)
+        main.run_notify.code = 1
+        assert main.main(["notify"]) == 1
+        assert order == ["record notify", "notify"]
+        assert "could not verify database schema: database is down" in capsys.readouterr().out
+
+    def test_a_dry_run_neither_checks_the_schema_nor_is_recorded(self, order):
+        assert main.main(["notify", "--dry-run"]) == 0
+        assert order == ["notify"]
+
     def test_the_default_command_logs_both_steps(self, log, monkeypatch):
         monkeypatch.setattr(main, "_ingest", lambda: 0)
 
