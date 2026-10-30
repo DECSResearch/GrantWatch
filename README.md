@@ -154,19 +154,29 @@ break?". It is read-only and shows:
 - the team (research profile, thresholds, recipients), the emails sent per
   day, and the settings that shape a run. No keys or passwords.
 
-It asks for HTTP Basic credentials: any username and `GRANTS_ADMIN_PASSWORD`,
-16 or more ASCII letters and digits (shorter, blank or `REPLACE...` and the
-page answers 503). It does not use the email sign-in, so it opens even where
-the team's mail cannot receive sign-in links. Log lines are saved with each run
+It asks for HTTP Basic credentials: each person has a named account in
+`GRANTS_ADMIN_USERS`, one `name:scrypt$...` entry per person (comma or newline
+separated), and only the password hash is stored. The page shows "Signed in as
+NAME", and each visit is logged with the name. With no valid account the page
+answers 503. It does not use the email sign-in, so it opens even where the
+team's mail cannot receive sign-in links. Log lines are saved with each run
 with the known secrets removed.
 
+Make an entry with `python main.py admin-user NAME`. It asks for a password
+twice (16 or more ASCII characters), prints the line, and needs no database.
+To remove a person, delete their line and redeploy. Basic auth has no
+sign-out: close the browser.
+
 ```bash
-GRANTS_ADMIN_PASSWORD=choosealongone1234 PYTHONPATH=. uvicorn web.app:app --app-dir src   # http://localhost:8000/admin/
+python main.py admin-user alice
+GRANTS_ADMIN_USERS='alice:scrypt$16384$8$1$...' PYTHONPATH=. uvicorn web.app:app --app-dir src   # http://localhost:8000/admin/
 ```
 
-On the lab cluster it is at `http://<lab host>:30810/admin/`. That NodePort is
-plain HTTP, so the password crosses the lab network unencrypted: use a
-password you use nowhere else. Runs are recorded in the `job_runs` table; the
+Keep the value in single quotes, or the shell expands the `$` signs. On the lab
+cluster it is at `http://<lab host>:30810/admin/`, and the lines go in
+`admin_users` in `ansible/secrets.yml`. That NodePort is plain HTTP, so the
+password crosses the lab network unencrypted: use a password you use nowhere
+else. Runs are recorded in the `job_runs` table; the
 first page load after an upgrade adds the columns it needs. A run killed by the
 job's deadline cannot save its log, and shows as "did not finish". Emails are
 counted by day in `GRANTS_TIMEZONE` (default `America/Chicago`).

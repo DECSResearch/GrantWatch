@@ -32,7 +32,7 @@ ME = Recipient(id=1, email="me@und.edu", unsubscribe_token="t1")
 QUIET = NotifySettings(overview_day="never")
 SECRET_VARS = [
     "GRANTS_LLM_API_KEY", "OPENAI_API_KEY", "POSTGRES_PASSWORD", "POSTGRES_URL", "GRANTS_SECRET_KEY",
-    "GRANTS_ADMIN_PASSWORD", "GRANTS_SMTP_PASSWORD", "GMAIL_TOKEN_JSON", "GRANTS_LLM_BASE_URL", "OPENAI_BASE_URL",
+    "GRANTS_SMTP_PASSWORD", "GMAIL_TOKEN_JSON", "GRANTS_LLM_BASE_URL", "OPENAI_BASE_URL",
 ]
 LOG_TEXT = st.characters(blacklist_categories=("Cs",), blacklist_characters="\x00")
 

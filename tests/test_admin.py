@@ -3,8 +3,11 @@ no network)."""
 from __future__ import annotations
 
 import base64
+import getpass
+import hashlib
 import json
 import logging
+import re
 import string
 import sys
 from datetime import datetime, timezone
@@ -15,19 +18,20 @@ from urllib.parse import urlsplit
 import pytest
 import requests
 from fastapi.testclient import TestClient
-from hypothesis import HealthCheck, given, settings, strategies as st
+from hypothesis import HealthCheck, assume, given, settings, strategies as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from grants import admin  # noqa: E402
 from grants.profile import Profile  # noqa: E402
 from llm_utils.relevance import safe_host  # noqa: E402
+from web import admin_auth  # noqa: E402
 from web import app as webapp  # noqa: E402
 
 HOUR = 3600
 SECRET_VARS = [
     "GRANTS_LLM_API_KEY", "OPENAI_API_KEY", "POSTGRES_PASSWORD", "POSTGRES_URL", "GRANTS_SECRET_KEY",
-    "GRANTS_ADMIN_PASSWORD", "GRANTS_SMTP_PASSWORD", "GMAIL_TOKEN_JSON", "GRANTS_LLM_BASE_URL", "OPENAI_BASE_URL",
+    "GRANTS_ADMIN_USERS", "GRANTS_SMTP_PASSWORD", "GMAIL_TOKEN_JSON", "GRANTS_LLM_BASE_URL", "OPENAI_BASE_URL",
 ]
 # Everything else the admin page reads from the environment, so a developer's own setup never leaks into a test.
 OTHER_VARS = [
@@ -44,6 +48,11 @@ SLOW = dict(max_examples=max(20, settings.default.max_examples // 5), deadline=N
 def clean_env(monkeypatch):
     for name in SECRET_VARS + OTHER_VARS:
         monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def cheap_hashes(monkeypatch):
+    monkeypatch.setattr(admin_auth, "SCRYPT_N", 2**4)  # the real cost is for the server, not the tests
 
 
 def _run(step="ingest", state="ok", detail=None, stats=None):
@@ -731,13 +740,17 @@ STATUS = {
 }
 PASSWORD = "lab-only-password"
 REALM = 'Basic realm="GrantWatch admin"'
-OFF_TEXT = "Set GRANTS_ADMIN_PASSWORD to 16 or more letters and digits on this server to turn it on."
-ASK_TEXT = "Enter the admin password to see this page. Any user name works."
+OFF_TEXT = "The admin page is off on this server (no admin accounts in GRANTS_ADMIN_USERS)."
+ASK_TEXT = "Enter your admin name and password to see this page."
+
+
+def _users(**passwords: str) -> str:
+    return "\n".join(f"{name}:{admin_auth.hash_password(password)}" for name, password in passwords.items())
 
 
 @pytest.fixture
 def client(monkeypatch):
-    monkeypatch.setenv("GRANTS_ADMIN_PASSWORD", PASSWORD)
+    monkeypatch.setenv("GRANTS_ADMIN_USERS", _users(me=PASSWORD))
     monkeypatch.delenv("GRANTS_SECRET_KEY", raising=False)  # the admin page does not depend on email sign-in
     monkeypatch.setattr(webapp, "admin_status", lambda: STATUS)
     monkeypatch.setattr(webapp, "llm_check", lambda: {"configured": False})
@@ -758,21 +771,22 @@ def _is_page(reply) -> bool:
 
 @PATHS
 class TestAdminAccess:
-    def test_off_without_a_password(self, client, monkeypatch, path):
-        monkeypatch.delenv("GRANTS_ADMIN_PASSWORD", raising=False)
+    def test_off_without_accounts(self, client, monkeypatch, path):
+        monkeypatch.delenv("GRANTS_ADMIN_USERS", raising=False)
         for reply in (client.get(path), client.get(path, auth=("me", PASSWORD))):
             assert reply.status_code == 503 and reply.headers["Cache-Control"] == "no-store"
             assert OFF_TEXT in (reply.text if _is_page(reply) else reply.json()["detail"])
 
-    @pytest.mark.parametrize("configured", ["", "   ", "REPLACE_ME", "REPLACE_ME_WITH_32_RANDOM_CHARACTERS", "replace-me-with-a-long-one", "a" * 15])
-    def test_off_with_an_unusable_password(self, client, monkeypatch, path, configured):
-        monkeypatch.setenv("GRANTS_ADMIN_PASSWORD", configured)
-        assert client.get(path, auth=("me", configured)).status_code == 503
-
-    def test_sixteen_characters_is_enough(self, client, monkeypatch, path):
-        monkeypatch.setenv("GRANTS_ADMIN_PASSWORD", "a" * 16)
-        assert client.get(path, auth=("me", "a" * 16)).status_code == 200
-        assert client.get(path, auth=("me", "a" * 15)).status_code == 401
+    @pytest.mark.parametrize("configured", [
+        "", "   ", ",\n,", "REPLACE_ME", "me", "me:", "me:PASSWORD", "me:scrypt", "me:scrypt$16$8$1", ":scrypt$16$8$1$" + "A" * 22 + "$" + "A" * 43,
+        "me:scrypt$17$8$1$" + "A" * 22 + "$" + "A" * 43,  # n is not a power of two
+        "me:scrypt$16$8$1$" + "A" * 21 + "$" + "A" * 43,  # the salt is not 16 bytes
+        "me:scrypt$16$8$1$" + "A" * 22 + "$" + "A" * 42,  # the hash is not 32 bytes
+        "me:scrypt$16$8$1$" + "A=" * 11 + "$" + "A" * 43,  # not URL-safe base64 without padding
+    ])
+    def test_off_with_only_unusable_entries(self, client, monkeypatch, path, configured):
+        monkeypatch.setenv("GRANTS_ADMIN_USERS", configured)
+        assert client.get(path, auth=("me", PASSWORD)).status_code == 503
 
     def test_asks_for_credentials(self, client, path):
         reply = client.get(path)
@@ -780,10 +794,40 @@ class TestAdminAccess:
         assert reply.headers["WWW-Authenticate"] == REALM and reply.headers["Cache-Control"] == "no-store"
         assert ASK_TEXT in (reply.text if _is_page(reply) else reply.json()["detail"])
 
-    def test_wrong_password(self, client, path):
-        reply = client.get(path, auth=("me", "not-it"))
-        assert reply.status_code == 401
-        assert reply.headers["WWW-Authenticate"] == REALM
+    def test_wrong_password_or_name(self, client, path):
+        for pair in (("me", "not-it"), ("you", PASSWORD), ("", PASSWORD), ("me", ""), ("me", PASSWORD + "x")):
+            reply = client.get(path, auth=pair)
+            assert reply.status_code == 401, pair
+            assert reply.headers["WWW-Authenticate"] == REALM
+
+    def test_the_name_is_not_case_sensitive_but_the_password_is(self, client, path):
+        assert client.get(path, auth=("ME", PASSWORD)).status_code == 200
+        assert client.get(path, auth=("me", PASSWORD.upper())).status_code == 401
+
+    def test_each_person_opens_the_page_with_their_own_password_only(self, client, monkeypatch, path):
+        monkeypatch.setenv("GRANTS_ADMIN_USERS", _users(alice="alice-long-password", bob="bob-long-password-1"))
+        assert client.get(path, auth=("alice", "alice-long-password")).status_code == 200
+        assert client.get(path, auth=("bob", "bob-long-password-1")).status_code == 200
+        assert client.get(path, auth=("alice", "bob-long-password-1")).status_code == 401
+        assert client.get(path, auth=("bob", "alice-long-password")).status_code == 401
+
+    def test_removing_a_line_removes_the_person(self, client, monkeypatch, path):
+        both = _users(alice="alice-long-password", bob="bob-long-password-1")
+        monkeypatch.setenv("GRANTS_ADMIN_USERS", both)
+        assert client.get(path, auth=("bob", "bob-long-password-1")).status_code == 200
+        monkeypatch.setenv("GRANTS_ADMIN_USERS", both.split("\n")[0])
+        assert client.get(path, auth=("bob", "bob-long-password-1")).status_code == 401
+        assert client.get(path, auth=("alice", "alice-long-password")).status_code == 200
+
+    def test_entries_can_be_separated_by_commas_or_newlines(self, client, monkeypatch, path):
+        monkeypatch.setenv("GRANTS_ADMIN_USERS", _users(alice="alice-long-password", bob="bob-long-password-1").replace("\n", " , \r\n"))
+        assert client.get(path, auth=("alice", "alice-long-password")).status_code == 200
+        assert client.get(path, auth=("bob", "bob-long-password-1")).status_code == 200
+
+    def test_a_bad_entry_does_not_lock_out_the_good_ones(self, client, monkeypatch, path):
+        monkeypatch.setenv("GRANTS_ADMIN_USERS", "junk,\n" + _users(me=PASSWORD))
+        assert client.get(path, auth=("me", PASSWORD)).status_code == 200
+        assert client.get(path, auth=("junk", "junk")).status_code == 401
 
     def test_other_schemes_and_garbage_are_refused_the_same_way(self, client, path):
         assert client.get(path, headers={"Authorization": "Bearer " + PASSWORD}).status_code == 401
@@ -795,25 +839,13 @@ class TestAdminAccess:
         assert non_ascii.status_code == 401 and _is_page(non_ascii) == (path == "/admin/")
 
     def test_malformed_credentials_do_not_hide_that_the_page_is_off(self, client, monkeypatch, path):
-        monkeypatch.delenv("GRANTS_ADMIN_PASSWORD", raising=False)
+        monkeypatch.delenv("GRANTS_ADMIN_USERS", raising=False)
         assert client.get(path, headers={"Authorization": "Basic !!!"}).status_code == 503
-
-    def test_a_non_ascii_password_on_the_server_is_not_a_crash(self, client, monkeypatch, path):
-        # Not a crash, but also never a way in: HTTPBasic decodes the header as ASCII, so docs say ASCII only.
-        monkeypatch.setenv("GRANTS_ADMIN_PASSWORD", "pässword-long-enough")
-        assert client.get(path, auth=("me", "password-long-enough")).status_code == 401
-        assert client.get(path, headers=_basic("me:pässword-long-enough".encode("utf-8"))).status_code == 401
-
-    def test_any_username_with_the_right_password(self, client, path):
-        for username in ("me", "", "admin"):
-            reply = client.get(path, auth=(username, PASSWORD))
-            assert reply.status_code == 200, username
-            assert reply.headers["Cache-Control"] == "no-store"
 
 
 class TestAdminErrorPages:
     def test_the_page_answers_with_html_when_off(self, client, monkeypatch):
-        monkeypatch.delenv("GRANTS_ADMIN_PASSWORD", raising=False)
+        monkeypatch.delenv("GRANTS_ADMIN_USERS", raising=False)
         reply = client.get("/admin/")
         assert reply.status_code == 503 and _is_page(reply) and "WWW-Authenticate" not in reply.headers
         assert "<h1>The admin page is off</h1>" in reply.text and OFF_TEXT in reply.text
@@ -834,7 +866,7 @@ class TestAdminRoutes:
     def test_the_bare_path_redirects_to_the_slash_path_without_a_password(self, client, monkeypatch):
         for password in (PASSWORD, None):
             if password is None:
-                monkeypatch.delenv("GRANTS_ADMIN_PASSWORD", raising=False)
+                monkeypatch.delenv("GRANTS_ADMIN_USERS", raising=False)
             reply = client.get("/admin", follow_redirects=False)
             assert reply.status_code == 307 and reply.headers["location"] == "/admin/"
             assert "WWW-Authenticate" not in reply.headers
@@ -851,9 +883,35 @@ class TestAdminRoutes:
             reply = client.get(path)
             assert reply.status_code == 200 and "WWW-Authenticate" not in reply.headers
 
-    def test_the_data(self, client):
-        reply = client.get("/admin/api", auth=("me", PASSWORD))
-        assert reply.json() == STATUS
+    def test_the_data_says_who_is_signed_in(self, client, monkeypatch):
+        assert client.get("/admin/api", auth=("me", PASSWORD)).json() == {**STATUS, "viewer": "me"}
+        monkeypatch.setenv("GRANTS_ADMIN_USERS", _users(**{"dr.who-2": "long-enough-password"}))
+        assert client.get("/admin/api", auth=("DR.Who-2", "long-enough-password")).json()["viewer"] == "dr.who-2"
+        assert "viewer" not in STATUS  # the shared status is not changed
+
+    def test_each_visit_is_logged_with_the_name(self, client, caplog):
+        with caplog.at_level(logging.INFO, logger="grantwatch"):
+            client.get("/admin/api", auth=("ME", PASSWORD))
+            client.get("/admin/api", auth=("me", "wrong"))
+        assert [m for m in caplog.messages if "Admin page" in m] == ["Admin page opened by me"]
+
+    def test_a_visit_that_fails_is_not_logged_as_opened(self, client, monkeypatch, caplog):
+        def broken():
+            raise RuntimeError("connection refused")
+
+        monkeypatch.setattr(webapp, "admin_status", broken)
+        with caplog.at_level(logging.INFO, logger="grantwatch"):
+            assert client.get("/admin/api", auth=("me", PASSWORD)).status_code == 500
+        assert "Admin page opened" not in caplog.text
+
+    def test_a_bad_entry_is_warned_about_once_not_on_every_request(self, client, monkeypatch, caplog):
+        monkeypatch.setenv("GRANTS_ADMIN_USERS", "once-only:nope\n" + _users(me=PASSWORD))
+        webapp._parse_admin_users.cache_clear()
+        with caplog.at_level(logging.WARNING, logger="grantwatch"):
+            for _ in range(3):
+                assert client.get("/admin/api", auth=("me", PASSWORD)).status_code == 200
+        assert len([m for m in caplog.messages if "once-only" in m]) == 1
+        webapp._parse_admin_users.cache_clear()
 
     def test_the_model_check_is_its_own_route(self, client, monkeypatch):
         monkeypatch.setattr(webapp, "llm_check", lambda: {"configured": True, "reachable": False, "error": "ConnectTimeout: x"})
@@ -893,6 +951,10 @@ class TestAdminPage:
         reply = client.get("/admin/", auth=("me", PASSWORD))
         assert _is_page(reply) and "GrantWatch admin" in reply.text
 
+    def test_the_page_shows_who_is_signed_in_and_how_to_sign_out(self):
+        assert "Signed in as" in webapp.ADMIN_HTML and "Close the browser to sign out" in webapp.ADMIN_HTML
+        assert '$("viewerName").textContent = data.viewer' in webapp.ADMIN_HTML
+
     def test_the_page_asks_for_relative_urls_so_the_credentials_stay_under_admin(self):
         assert '"api"' in webapp.ADMIN_HTML and '"api/llm"' in webapp.ADMIN_HTML and '"api/runs/' in webapp.ADMIN_HTML
         assert '"/api' not in webapp.ADMIN_HTML and "/api/admin" not in webapp.ADMIN_HTML
@@ -921,3 +983,119 @@ class TestAdminPage:
 
     def test_the_dashboard_links_to_it(self, client):
         assert 'href="/admin/"' in client.get("/").text
+
+
+NAMES = st.from_regex(r"[a-z0-9._-]{1,32}", fullmatch=True)
+PASSWORDS = st.text(st.characters(min_codepoint=32, max_codepoint=126), min_size=16, max_size=40)
+
+
+class TestAdminAuth:
+    @settings(**SLOW)
+    @given(NAMES, NAMES, PASSWORDS, PASSWORDS, st.booleans())
+    def test_check_accepts_exactly_the_pair_that_was_hashed(self, first, second, secret_1, secret_2, shout):
+        assume(first != second and secret_1 != secret_2)
+        users = admin_auth.parse_users(f"{first}:{admin_auth.hash_password(secret_1)}\n{second}:{admin_auth.hash_password(secret_2)}")
+        assert set(users) == {first, second}
+        for name, secret in ((first, secret_1), (second, secret_2)):
+            assert admin_auth.check(users, name.upper() if shout else name, secret)
+        assert not admin_auth.check(users, first, secret_2) and not admin_auth.check(users, second, secret_1)  # swapped pairs
+        assert not admin_auth.check(users, first, secret_1 + " ") and not admin_auth.check(users, first, secret_1[:-1])
+        assert not admin_auth.check(users, first + "x", secret_1) and not admin_auth.check(users, "", secret_1)
+
+    @settings(**SLOW)
+    @given(st.one_of(st.text(), st.text(alphabet=" ,:$\n\r-_=Aa0scrypt", max_size=200)), st.text(), st.text())
+    def test_parse_users_and_check_never_raise(self, raw, name, password):
+        users = admin_auth.parse_users(raw)
+        assert all(admin_auth.NAME.fullmatch(key) and value.startswith("scrypt$") for key, value in users.items())
+        assert admin_auth.check(users, name, password) in (True, False)
+
+    def test_text_that_is_not_utf8_is_a_wrong_password_not_an_error(self):
+        users = admin_auth.parse_users(_users(me=PASSWORD))
+        assert admin_auth.check(users, "me", "\ud800" * 16) is False
+        assert admin_auth.check({}, "me", "\ud800" * 16) is False
+
+    def test_the_hash_follows_the_documented_format(self, monkeypatch):
+        monkeypatch.setattr(admin_auth, "SCRYPT_N", 2**14)
+        hashed = admin_auth.hash_password(PASSWORD)
+        assert re.fullmatch(r"scrypt\$16384\$8\$1\$[A-Za-z0-9_-]{22}\$[A-Za-z0-9_-]{43}", hashed)
+        assert hashed != admin_auth.hash_password(PASSWORD)  # a new salt each time
+
+    def test_a_hash_made_by_the_documented_recipe_is_accepted(self):
+        salt = bytes(range(16))
+        digest = hashlib.scrypt(PASSWORD.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=32)
+        encode = lambda data: base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+        users = admin_auth.parse_users(f"Me:scrypt$16384$8$1${encode(salt)}${encode(digest)}")  # the cost comes from the hash itself
+        assert admin_auth.check(users, "me", PASSWORD) and not admin_auth.check(users, "me", PASSWORD + "x")
+
+    def test_a_wrong_name_costs_one_hash_just_like_a_wrong_password(self, monkeypatch):
+        users = admin_auth.parse_users(_users(me=PASSWORD))
+        costs = []
+        real = hashlib.scrypt
+        monkeypatch.setattr(hashlib, "scrypt", lambda *args, **kwargs: costs.append(kwargs["n"]) or real(*args, **kwargs))
+        for name, password in (("you", PASSWORD), ("me", "wrong"), ("me", PASSWORD), ("", ""), ("é", "x")):
+            costs.clear()
+            admin_auth.check(users, name, password)
+            assert costs == [admin_auth.SCRYPT_N], (name, password)
+
+    def test_bad_entries_are_skipped_with_a_warning_that_never_shows_the_rest_of_the_entry(self, caplog):
+        good = admin_auth.hash_password(PASSWORD)
+        raw = f"alice:scrypt$16$8$1$AAAA$BBBB, PlainPassword123456, Bob:{good}, carol:{good}, carol:{good}, d@ve:{good}, bad:HASHTEXT"
+        with caplog.at_level(logging.WARNING, logger="grantwatch"):
+            users = admin_auth.parse_users(raw)
+        assert set(users) == {"bob", "carol"}
+        text = caplog.text
+        assert "'alice'" in text and "'carol'" in text and "number 2" in text and "'bad'" in text
+        for secret in ("AAAA", "BBBB", "PlainPassword123456", "HASHTEXT", good, "dave"):
+            assert secret not in text
+
+    def test_no_text_means_no_accounts(self):
+        assert admin_auth.parse_users("") == {} and admin_auth.parse_users(None) == {} and admin_auth.parse_users(" \n , ") == {}
+
+
+@pytest.fixture
+def cli(monkeypatch, capsys):
+    """main.py's admin-user command with typed passwords and no database."""
+    import main
+    from src.web import admin_auth as cli_auth  # the command line's own copy of the module
+
+    monkeypatch.setattr(cli_auth, "SCRYPT_N", 2**4)
+    monkeypatch.setattr(main, "ensure_schema", lambda: pytest.fail("admin-user must not touch the database"))
+
+    def run(name, *typed):
+        answers = iter(typed)
+        monkeypatch.setattr(getpass, "getpass", lambda prompt="": next(answers))
+        code = main.main(["admin-user", name])
+        assert next(answers, None) is None  # it asked for the password exactly as often as it was answered
+        return code, capsys.readouterr().out
+
+    return run
+
+
+class TestAdminUserCommand:
+    def test_prints_the_line_for_the_vault(self, cli):
+        code, out = cli("alice", PASSWORD, PASSWORD)
+        line, advice = out.splitlines()
+        assert code == 0
+        assert advice == "Add this line to admin_users in ansible/secrets.yml and redeploy."
+        users = admin_auth.parse_users(line)
+        assert list(users) == ["alice"] and line.startswith("alice:scrypt$")
+        assert admin_auth.check(users, "alice", PASSWORD) and not admin_auth.check(users, "alice", PASSWORD + "x")
+        assert PASSWORD not in out
+
+    def test_the_name_is_lowercased(self, cli):
+        code, out = cli("Alice", PASSWORD, PASSWORD)
+        assert code == 0 and out.startswith("alice:scrypt$")
+
+    @pytest.mark.parametrize("password", ["a" * 15, "", "pässword-long-enough", "a" * 15 + "é"])
+    def test_a_short_or_non_ascii_password_is_refused(self, cli, password):
+        code, out = cli("alice", password, password)
+        assert code == 1 and "scrypt$" not in out and (not password or password not in out)
+
+    def test_a_password_that_is_typed_differently_twice_is_refused(self, cli):
+        code, out = cli("alice", PASSWORD, PASSWORD + "x")
+        assert code == 1 and "scrypt$" not in out
+
+    @pytest.mark.parametrize("name", ["", "bad name", "x" * 33, "dr:who", "a/b", "é", "a,b"])
+    def test_a_bad_name_is_refused_before_a_password_is_asked(self, cli, name):
+        code, out = cli(name)
+        assert code == 1 and "scrypt$" not in out

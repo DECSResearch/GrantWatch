@@ -9,7 +9,6 @@ import logging
 
 import html
 import os
-import secrets
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -23,7 +22,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from doc_checker.config import get_settings
-from . import auth
+from . import admin_auth, auth
 from .document_checker_routes import router as document_checker_router
 
 from grants.admin import admin_status, llm_check, run_log
@@ -143,27 +142,36 @@ class _AdminBasic(HTTPBasic):
 _admin_basic = _AdminBasic(realm="GrantWatch admin", auto_error=False)
 _ADMIN_CHALLENGE = {"WWW-Authenticate": 'Basic realm="GrantWatch admin"'}
 _ADMIN_NO_STORE = {"Cache-Control": "no-store"}
-_ADMIN_MIN_LENGTH = 16
 _ADMIN_TITLES = {401: "Admin password needed", 503: "The admin page is off"}
 _ADMIN_MESSAGES = {
-    401: "Enter the admin password to see this page. Any user name works.",
-    503: f"Set GRANTS_ADMIN_PASSWORD to {_ADMIN_MIN_LENGTH} or more letters and digits on this server to turn it on.",
+    401: "Enter your admin name and password to see this page.",
+    503: "The admin page is off on this server (no admin accounts in GRANTS_ADMIN_USERS).",
 }
+
+
+@lru_cache(maxsize=4)
+def _parse_admin_users(raw: str) -> Dict[str, str]:
+    return admin_auth.parse_users(raw)
+
+
+def _admin_users() -> Dict[str, str]:
+    # Read on each request but parsed once per value, so a bad entry is warned about once.
+    return _parse_admin_users(os.getenv("GRANTS_ADMIN_USERS") or "")
+
+
+_admin_users()  # warn about bad entries at startup
 
 
 def _admin_problem(credentials: Optional[HTTPBasicCredentials]) -> Optional[Tuple[int, str]]:
     """Why the admin page may not be shown (status, message), or None when it may.
 
-    HTTP Basic with GRANTS_ADMIN_PASSWORD (any username). Not the email sign-in:
-    where mail cannot reach the team, a page behind it could never be opened.
-    A blank, placeholder or short password counts as unset.
+    HTTP Basic against the named accounts in GRANTS_ADMIN_USERS. Not the email
+    sign-in: where mail cannot reach the team, a page behind it could never be opened.
     """
-    expected = (os.getenv("GRANTS_ADMIN_PASSWORD") or "").strip()
-    if len(expected) < _ADMIN_MIN_LENGTH or expected.lower().startswith("replace"):
+    users = _admin_users()
+    if not users:
         return 503, _ADMIN_MESSAGES[503]
-    # Bytes, because compare_digest raises on a non-ASCII str. (A non-ASCII
-    # configured password still cannot sign in: HTTPBasic decodes the header as ASCII.)
-    if credentials is None or not secrets.compare_digest(credentials.password.encode("utf-8"), expected.encode("utf-8")):
+    if credentials is None or not admin_auth.check(users, credentials.username, credentials.password):
         return 401, _ADMIN_MESSAGES[401]
     return None
 
@@ -172,13 +180,14 @@ def _admin_headers(status: int) -> Dict[str, str]:
     return {**_ADMIN_NO_STORE, **(_ADMIN_CHALLENGE if status == 401 else {})}
 
 
-def require_admin(response: Response, credentials: Optional[HTTPBasicCredentials] = Depends(_admin_basic)) -> None:
-    """Guards the admin API; the page answers the same problems with a page instead."""
+def require_admin(response: Response, credentials: Optional[HTTPBasicCredentials] = Depends(_admin_basic)) -> str:
+    """Guards the admin API and returns the account name; the page answers the same problems with a page instead."""
     problem = _admin_problem(credentials)
     if problem is not None:
         status, message = problem
         raise HTTPException(status_code=status, detail=message, headers=_admin_headers(status))
     response.headers.update(_ADMIN_NO_STORE)
+    return credentials.username.lower()  # type: ignore[union-attr]  # no problem means credentials are set
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -203,20 +212,22 @@ def admin_page(credentials: Optional[HTTPBasicCredentials] = Depends(_admin_basi
 
 
 @app.get("/admin/api")
-def admin_data(_admin: None = Depends(require_admin)) -> Dict[str, Any]:
+def admin_data(viewer: str = Depends(require_admin)) -> Dict[str, Any]:
     try:
-        return admin_status()
+        status = admin_status()
     except Exception as exc:
         raise _db_error("loading the admin status", exc) from exc
+    logger.info("Admin page opened by %s", viewer)
+    return {**status, "viewer": viewer}
 
 
 @app.get("/admin/api/llm")
-def admin_llm(_admin: None = Depends(require_admin)) -> Dict[str, Any]:
+def admin_llm(_admin: str = Depends(require_admin)) -> Dict[str, Any]:
     return llm_check()
 
 
 @app.get("/admin/api/runs/{run_id}/log")
-def admin_run_log(run_id: int = PathParam(ge=1, le=2_147_483_647), _admin: None = Depends(require_admin)) -> Dict[str, Any]:
+def admin_run_log(run_id: int = PathParam(ge=1, le=2_147_483_647), _admin: str = Depends(require_admin)) -> Dict[str, Any]:
     try:
         log = run_log(run_id)
     except Exception as exc:

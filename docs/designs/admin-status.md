@@ -1,6 +1,6 @@
 # Admin status page
 
-Status: v2.1. v1 (run log, admin data, password) is built on branch
+Status: v2.2. v1 (run log, admin data, password) is built on branch
 `admin-status`. v2 adds what the admin asked for next: the research profile,
 a live model-server check, per-run logs, email status, settings, the data
 source with its filter funnel, and the page design.
@@ -587,3 +587,63 @@ The no-secrets property covers:
 It asserts over `json.dumps(admin_status())` (fake DB), `llm_check()`
 (fake HTTP, including exceptions whose text contains the URL), a log
 captured by `recorded()`, and `ingest_detail` with `scoring_abort` set.
+
+## Admin accounts (v2.2)
+
+The admin asked that only selected people can open the page. **This section
+replaces the shared `GRANTS_ADMIN_PASSWORD`.** It is not deployed yet, so
+nothing needs to stay compatible with it.
+
+- **Accounts.** `GRANTS_ADMIN_USERS` lists named accounts, separated by commas
+  or newlines. Each entry is `name:scrypt$<n>$<r>$<p>$<salt_b64>$<hash_b64>`.
+  - `name` matches `[a-z0-9._-]{1,32}` and is compared case-insensitively.
+  - The hash is `hashlib.scrypt(password_utf8, salt=16 random bytes,
+    n=2**14, r=8, p=1, dklen=32)`, written with URL-safe base64 without
+    padding.
+  - A malformed entry is skipped, with a warning logged once at startup.
+    The warning gives the entry's name only, never its hash.
+- **New module `src/web/admin_auth.py`.**
+  - `hash_password(password) -> str` returns the `scrypt$...` part.
+  - `parse_users(raw) -> Dict[str, str]` maps each name to its hash.
+  - `check(users, name, password) -> bool` uses constant-time comparison.
+    For an unknown name it still runs one scrypt against a fixed dummy
+    hash, so a wrong name takes as long as a wrong password.
+- **Access rules.**
+  - No valid entries gives 503: "The admin page is off on this server
+    (no admin accounts in GRANTS_ADMIN_USERS)."
+  - A wrong name or password gives 401 with `WWW-Authenticate`.
+  - On success the dependency returns the account name.
+  - The v2.1 HTML error pages, routes and `no-store` header are unchanged.
+- **Who is signed in.**
+  - `/admin/api` adds `"viewer": "<name>"`, and the page header shows
+    "Signed in as <name>". Next to it, small text says "Close the browser
+    to sign out". Basic auth has no sign-out.
+  - Each successful `/admin/api` load logs
+    `"Admin page opened by <name>"` through the web logger.
+- **CLI.** `python main.py admin-user NAME` checks NAME against the pattern.
+  - It asks for the password twice with `getpass`. The password must be at
+    least 16 characters and ASCII, because browsers send Basic credentials
+    as ASCII.
+  - It prints exactly one line, `NAME:scrypt$...`, then:
+    "Add this line to admin_users in ansible/secrets.yml and redeploy."
+  - It never prints the password. It needs no database.
+- **Deploy wiring.**
+  - `ansible/secrets.example.yml` gets
+    `admin_users: []  # one line per person from python main.py admin-user NAME`.
+  - The role renders `'GRANTS_ADMIN_USERS': admin_users | default([]) | join(',')`.
+  - `k8s/secret.example.yaml`, `.env.example`, README and `k8s/README.md`
+    document `GRANTS_ADMIN_USERS` and the CLI.
+  - Remove `GRANTS_ADMIN_PASSWORD` everywhere.
+- **Tests.**
+  - Hypothesis property: for any names and ASCII passwords of 16 or more
+    characters, `check` accepts exactly the name and password pair that
+    was hashed. Wrong passwords, other names and swapped pairs are all
+    refused.
+  - `parse_users` never raises on any text.
+  - Web: 503 with no accounts, 401 for a wrong pair, 200 and `viewer` for
+    the right pair.
+  - CLI: monkeypatch `getpass`. A matching pair prints a line that
+    `parse_users` accepts and that `check` verifies. A short or mismatched
+    password exits 1.
+  - Keep the hashing fast in tests by monkeypatching the cost, for example
+    `n=2**4`, through a module constant.

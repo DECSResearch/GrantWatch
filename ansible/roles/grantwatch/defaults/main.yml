@@ -10,4 +10,4 @@ profile_file: "{{ playbook_dir }}/../config/research_profile.local.yml"
 # Define these in ansible/secrets.yml (vaulted), NOT here:
 #   llm_base_url, llm_api_key, db_password, secret_key
 #   optional: notify_recipients, email_from, smtp_host, smtp_user, smtp_password
-#   admin_password (opens /admin/; 16+ ASCII characters, or the page answers 503)
+#   admin_users (who may open /admin/: a list of name:scrypt$... lines from python main.py admin-user NAME; empty keeps the page off, 503)

@@ -6,10 +6,12 @@
     python main.py notify --dry-run print what would be sent; sends and records nothing
     python main.py recipients list | add EMAIL [--name N] [--min-score S] | remove EMAIL
     python main.py test-email EMAIL send one short message to check delivery
+    python main.py admin-user NAME  make the line that gives NAME access to the admin page
 """
 from __future__ import annotations
 
 import argparse
+import getpass
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
@@ -142,6 +144,26 @@ def test_email(address: str) -> int:
     return 0
 
 
+def admin_user(name: str) -> int:
+    """Ask for a password and print the GRANTS_ADMIN_USERS line for NAME. Needs no database."""
+    from src.web import admin_auth
+
+    account = admin_auth.canonical_name(name)
+    if account is None:
+        print("A name is 1 to 32 lowercase letters, digits, dots, dashes or underscores.")
+        return 1
+    password = getpass.getpass(f"Password for {account}: ")
+    if getpass.getpass("Password again: ") != password:
+        print("The two passwords differ.")
+        return 1
+    if len(password) < admin_auth.MIN_PASSWORD_LENGTH or not password.isascii():
+        print(f"The password must be at least {admin_auth.MIN_PASSWORD_LENGTH} characters, all ASCII: browsers send it as ASCII.")
+        return 1
+    print(f"{account}:{admin_auth.hash_password(password)}")
+    print("Add this line to admin_users in ansible/secrets.yml and redeploy.")
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="GrantWatch: Grants.gov opportunities and deadlines for the team.")
     sub = parser.add_subparsers(dest="command")
@@ -155,6 +177,8 @@ def _parser() -> argparse.ArgumentParser:
     people.add_argument("--min-score", type=int, choices=range(0, 6), help="this person's threshold instead of the profile's")
     test = sub.add_parser("test-email", help="send one short message to check that email gets through")
     test.add_argument("address")
+    admin = sub.add_parser("admin-user", help="make the line that lets one person open the admin page")
+    admin.add_argument("name")
     return parser
 
 
@@ -167,6 +191,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return notify_step(dry_run=args.dry_run)
     if args.command == "test-email":
         return test_email(args.address)
+    if args.command == "admin-user":
+        return admin_user(args.name)
     if args.command == "recipients":
         if args.action != "list" and not args.email:
             _parser().error(f"recipients {args.action} needs an email address")

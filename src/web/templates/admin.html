@@ -53,6 +53,8 @@
   .top { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 24px; }
   h1 { font-size: 22px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
   .tools { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; font-size: 15px; color: var(--mist); }
+  .who strong { font-weight: 600; color: var(--ink); }
+  .who .hint { font-size: 13px; margin-left: 8px; }
   .verdict { margin: 14px 0 0; font-size: 20px; font-weight: 600; max-width: 60ch; }
   .verdict:empty { display: none; }
   .message { margin: 28px 0 0; padding: 12px 14px; border-left: 3px solid var(--signal); background: var(--well); font-size: 15px; overflow-wrap: anywhere; }
@@ -182,6 +184,7 @@
         <a href="/">Dashboard</a>
         <button type="button" class="link" id="refresh">Refresh</button>
         <span id="updated" role="status" aria-live="polite"></span>
+        <span class="who" id="viewer" hidden>Signed in as <strong id="viewerName"></strong><span class="hint">Close the browser to sign out</span></span>
       </div>
     </div>
     <p class="verdict" id="verdict" aria-live="polite"></p>
@@ -797,6 +800,8 @@
 
   function render() {
     const data = state.data;
+    $("viewerName").textContent = data.viewer || "";
+    $("viewer").hidden = !data.viewer;
     renderVerdict(data);
     renderStrip(data.runs);
     renderWarnings(data.warnings);
@@ -844,7 +849,7 @@
     button.disabled = true;
     try {
       const res = await fetch(API, { headers: { Accept: "application/json" }, cache: "no-store", credentials: "same-origin" });
-      if (res.status === 401) { problem("Enter the admin password to see this page.", true); return; }
+      if (res.status === 401) { problem("Enter your admin name and password to see this page.", true); return; }
       if (res.status === 503) { problem(await detailOf(res), false); return; }
       if (!res.ok) { problem("Could not load the admin data: " + (await detailOf(res)), false); return; }
       state.data = await res.json();
