@@ -503,7 +503,6 @@
   function emailRow(data) {
     const mail = data.email || {};
     const notify = newest(data.runs, "notify");
-    const counted = data.runs.find((r) => r.step === "notify" && isNum(statsOf(r).sent));
     let word = "Working", cls = "ok";
     const lines = [];
     if (mail.error) {
@@ -516,11 +515,17 @@
       let text = (SERVICES[mail.service] || mail.service) + (mail.sender ? " from " + mail.sender : "");
       text += mail.last_sent ? ", last sent " + when(mail.last_sent) : ", nothing sent yet";
       lines.push(text);
-      if (counted) {
-        const s = statsOf(counted);
-        lines.push("Last run sent " + num(s.sent) + ", failed " + num(s.failed || 0));
-      } else {
+      const s = statsOf(notify);
+      if (!notify) {
         lines.push("No notify run has been recorded yet.");
+      } else if (isNum(s.sent)) {
+        lines.push("Last run sent " + num(s.sent) + ", failed " + num(s.failed || 0));
+        lines.push({ text: "From the run of " + when(notify.started_at) + ".", className: "small" });
+      } else if (notify.state === "running") {
+        lines.push("A notify run is going now.");
+      } else {
+        lines.push("The run of " + when(notify.started_at) + " stopped before sending.");
+        lines.push(notify.detail);
       }
     }
     return stepRow("Email", word, cls, lines);

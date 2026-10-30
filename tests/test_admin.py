@@ -870,6 +870,11 @@ class TestAdminPage:
     def test_the_page_clears_nodes_with_replaceChildren(self):
         assert "replaceChildren()" in webapp.ADMIN_HTML
 
+    def test_the_email_row_counts_only_the_newest_notify_run(self):
+        row = webapp.ADMIN_HTML.split("function emailRow(data) {")[1].split("\n  }\n")[0]
+        assert ".find(" not in row and 'newest(data.runs, "notify")' in row  # never an older run's counts
+        assert "stopped before sending" in row and "From the run of" in row
+
     def test_the_page_follows_the_dashboards_tokens_and_font(self):
         for line in webapp.INDEX_HTML.split("</style>")[0].split("* { box-sizing")[0].splitlines():
             if line.strip().startswith("--") or "color-scheme" in line:
