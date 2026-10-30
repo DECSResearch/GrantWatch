@@ -37,6 +37,11 @@ k3s kubectl -n grantwatch create job --from=cronjob/grantwatch-daily first-run
 k3s kubectl -n grantwatch logs -f job/first-run
 ```
 
+Then open `http://<node-ip>:30810/admin/` (any username, the vault's
+`admin_password`, 16 or more letters and digits) to check that the run was
+recorded, the model server answers and the recipients are right. That port is
+plain HTTP, so use a password you use nowhere else.
+
 The first run scores every open keyword match (about 15 minutes with Qwen
 3.6, thinking off); later runs score only new grants. Without
 `notify_recipients` in the secrets nothing is emailed, and the dashboard still
