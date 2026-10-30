@@ -443,6 +443,9 @@
     if (exclusions || (isNum(stats.after_agency) && stats.after_agency !== (keepForecasts ? stats.open : stats.after_forecast))) {
       step("after_agency", (n) => num(n) + " after agency exclusions");
     }
+    // A model scores every open grant (sent_to_model); without one, keywords decide (matched).
+    step("ineligible", (n) => num(n) + " not open to your applicant type (scored 0)");
+    step("sent_to_model", (n) => num(n) + " candidates for scoring");
     step("matched", (n) => num(n) + " matched keywords");
     return parts.join(", ");
   }

@@ -9,16 +9,19 @@ questions about the same data.
 
 ## How it fits together
 
-1. `config/research_profile.yml` describes the research program, the keyword
-   pre-filter, agencies to skip, the score below which a grant is not worth an
-   email, and the deadline horizons.
+1. `config/research_profile.yml` describes the research program, the
+   applicant type's Grants.gov codes, the keyword pre-filter, agencies to skip,
+   the score below which a grant is not worth an email, and the deadline
+   horizons.
 2. `python main.py` runs two steps. **Ingest** downloads the daily Grants.gov
    extract (about 83,000 records), keeps the ones still open (not past their
-   close date and not archived), drops excluded agencies, applies the keyword
-   pre-filter, scores what is unscored with an OpenAI-compatible model, writes
-   a CSV and upserts Postgres. **Notify** then emails each recipient whatever
-   they have not been told yet (see [Email](#email)). Notify runs even when
-   the download fails, and the run exits non-zero if either step failed.
+   close date and not archived), drops excluded agencies, scores what is
+   unscored with an OpenAI-compatible model (every open grant goes to the
+   model; the keyword pre-filter applies only when no model is set up),
+   writes a CSV and upserts Postgres. **Notify** then emails each recipient
+   whatever they have not been told yet (see [Email](#email)). Notify runs
+   even when the download fails, and the run exits non-zero if either step
+   failed.
 3. The dashboard (`src/web/app.py`, deployed on Vercel) reads Postgres: a
    90-day timeline, grants grouped by deadline, relevance scores with the
    model's reason, and a Track button for grants the group intends to pursue.
@@ -70,6 +73,15 @@ grants it has not seen; the first run is capped by
 later runs. Changing the profile summary or the model rescores everything, and so does
 a release that changes the scoring prompt (`SCORER_VERSION`).
 
+Keywords do not decide what the model sees: the keyword filter dropped
+relevant grants whose descriptions are short, so with a model every open
+grant is scored and `MATCHED_KEYWORDS` is only a hint on the dashboard. The
+one rule applied first is a fact from Grants.gov: set `applicant_codes` in
+the profile (for example `["06"]` for a public university) and a grant whose
+codes are known and leave that type out is scored 0 ("Not open to ...") with
+no model call, but is still loaded. Grants that list unrestricted (99) or
+"others" (25), or no codes, always go to the model.
+
 ### Running it
 
 ```bash
@@ -103,9 +115,10 @@ next run, a rerun sends nothing twice, and two schedulers can both run (a
 lease in `notify_lock` keeps them from sending at the same moment). Emails
 are trimmed to stay under Gmail's ~102 KB clipping limit, carry a one-click
 unsubscribe link when `GRANTS_DASHBOARD_URL` is set, and go to each recipient
-separately. Until scoring is set up, every new keyword match is announced,
-most keyword hits first, so the profile's `keywords` are what decide what
-you hear about; name your research fields there.
+separately. Until scoring is set up, every grant that matches at least
+`keyword_threshold` keywords (and never fewer than one) is announced, most
+hits first, so the profile's `keywords` are what decide what you hear about;
+name your research fields there.
 
 Recipients live in the `recipients` table. `python main.py recipients
 add|remove|list` manages them, and addresses in `GRANTS_NOTIFY_RECIPIENTS`

@@ -508,6 +508,8 @@ class TestPipelineStats:
 
         fake_extract.last_extract_path = Path("/data") / self.EXTRACT_FILE
         monkeypatch.setenv("GRANTS_DATA_SOURCE", "extract")
+        monkeypatch.delenv("GRANTS_LLM_MODEL", raising=False)  # keywords decide, as without a model server
+        monkeypatch.delenv("OPENAI_MODEL", raising=False)
         monkeypatch.setattr(pipeline, "gen_extract", fake_extract)
         monkeypatch.setattr(pipeline, "process_extract_xml", lambda path: [{"id": 1}, {"id": 2}, {"id": 3}])
         monkeypatch.setattr(pipeline, "load_profile", lambda: Profile(summary="Grid resilience."))

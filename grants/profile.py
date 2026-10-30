@@ -22,6 +22,29 @@ _DEFAULT_REMINDER_DAYS = [30, 14, 7, 2]
 _WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 _OVERVIEW_CHOICES = set(_WEEKDAYS) | {"daily", "never"}
 
+# Grants.gov's applicant types, as listed in the daily extract's EligibleApplicants.
+APPLICANT_CODES = {
+    "00": "State governments",
+    "01": "County governments",
+    "02": "City or township governments",
+    "04": "Special district governments",
+    "05": "Independent school districts",
+    "06": "Public and State controlled institutions of higher education",
+    "07": "Native American tribal governments (Federally recognized)",
+    "08": "Public housing authorities/Indian housing authorities",
+    "11": "Native American tribal organizations (other than Federally recognized tribal governments)",
+    "12": "Nonprofits having a 501(c)(3) status with the IRS, other than institutions of higher education",
+    "13": "Nonprofits that do not have a 501(c)(3) status with the IRS, other than institutions of higher education",
+    "20": "Private institutions of higher education",
+    "21": "Individuals",
+    "22": "For-profit organizations other than small businesses",
+    "23": "Small businesses",
+    "25": "Others (see the eligibility text)",
+    "99": "Unrestricted (open to any type of entity)",
+}
+# A grant that lists either of these can't be ruled out from its codes alone.
+_OPEN_CODES = frozenset({"25", "99"})
+
 
 @dataclass
 class Profile:
@@ -36,6 +59,7 @@ class Profile:
     reminder_days: List[int] = field(default_factory=lambda: list(_DEFAULT_REMINDER_DAYS))
     overview_day: str = "monday"
     include_forecasted: bool = True
+    applicant_codes: List[str] = field(default_factory=list)
     source: Optional[Path] = None
 
     @property
@@ -60,6 +84,20 @@ class Profile:
                 return True
         return False
 
+    def excludes_applicants(self, record_codes: object) -> bool:
+        """True when a grant's Grants.gov applicant codes are known and leave this applicant out.
+
+        Never true without ``applicant_codes``, without codes on the record, or
+        when the record lists a code outside ``APPLICANT_CODES``: those are
+        unknown, and an unknown grant is kept.
+        """
+        if not self.applicant_codes:
+            return False
+        codes = {_applicant_code(item) for item in _as_list(record_codes)}  # None for one that isn't a number
+        if not codes or not codes.issubset(APPLICANT_CODES):
+            return False
+        return not codes & (set(self.applicant_codes) | _OPEN_CODES)
+
     def as_prompt_text(self) -> str:
         parts = [self.summary.strip()]
         if self.institution:
@@ -75,6 +113,25 @@ def _as_list(value: Any) -> List[str]:
     if isinstance(value, str):
         return [item.strip() for item in value.split(",") if item.strip()]
     return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _applicant_code(value: Any) -> Optional[str]:
+    """A two-digit applicant code from ``value``, or None. YAML reads an unquoted 06 as 6."""
+    try:
+        return f"{int(str(value).strip()):02d}"
+    except ValueError:
+        return None
+
+
+def _applicant_codes(value: Any) -> List[str]:
+    codes = set()
+    for item in _as_list([value] if isinstance(value, (int, float)) else value):  # `applicant_codes: 06`
+        code = _applicant_code(item)
+        if code in APPLICANT_CODES:
+            codes.add(code)
+        else:
+            logger("warning", f"applicant_codes: '{item}' is not a Grants.gov applicant code; ignoring it")
+    return sorted(codes)
 
 
 def _as_int(value: Any, default: int) -> int:
@@ -161,6 +218,7 @@ def load_profile(path: str | os.PathLike[str] | None = None) -> Profile:
         reminder_days=reminder_days or list(_DEFAULT_REMINDER_DAYS),
         overview_day=_overview_day(_env("GRANTS_OVERVIEW_DAY") or raw.get("overview_day")),
         include_forecasted=_as_bool(_env("GRANTS_INCLUDE_FORECAST"), _as_bool(raw.get("include_forecasted"), True)),
+        applicant_codes=_applicant_codes(raw.get("applicant_codes")),
         source=location if location.exists() else None,
     )
     return profile

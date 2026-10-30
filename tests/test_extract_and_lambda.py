@@ -70,6 +70,17 @@ class TestParseExtract:
         assert len(records) == 1
         assert records[0]["OPPORTUNITY_STATUS"] == "Posted"
 
+    def test_applicant_codes_are_sorted_and_left_out_when_the_extract_lists_none(self, tmp_path):
+        codes = "".join(f"<EligibleApplicants>{code}</EligibleApplicants>" for code in ("25", "06", "25"))
+        xml_file = tmp_path / "extract.xml"
+        xml_file.write_text(
+            _SAMPLE_XML.replace("<Description>Community", f"{codes}<Description>Community"), encoding="utf-8"
+        )
+        posted, forecast = process_extract_xml(xml_file)
+        assert posted["ELIGIBLE_APPLICANT_CODES"] == ["06", "25"]
+        assert "ELIGIBLE_APPLICANT_CODES" not in forecast  # unknown, so the grant is kept
+        assert "ELIGIBLE_APPLICANTS" not in posted  # the export's free-text field is not touched
+
     def test_missing_file_returns_empty(self, tmp_path):
         assert process_extract_xml(tmp_path / "nope.xml") == []
 

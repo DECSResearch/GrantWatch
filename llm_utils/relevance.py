@@ -60,6 +60,8 @@ REASON_FIELD = "RELEVANCE_REASON"
 MODEL_FIELD = "RELEVANCE_MODEL"
 PROFILE_FIELD = "RELEVANCE_PROFILE"
 SCORED_AT_FIELD = "RELEVANCE_SCORED_AT"
+# The "model" name on a score a rule wrote, with no model call (see score_by_rule).
+RULE_MODEL = "rule"
 
 # Bump whenever _SYSTEM_PROMPT or the text _record_block sends changes. It is
 # part of the score cache key, so a bump rescores every grant once (under the
@@ -537,6 +539,20 @@ def score_records(
         f"unscored {outcome.failed}, deferred {outcome.deferred}",
     )
     return outcome
+
+
+def score_by_rule(records: Sequence[Dict[str, Any]], profile: Profile, reason: str) -> List[Dict[str, Any]]:
+    """Copies of ``records`` scored 0 with ``reason``, and no model call.
+
+    Stored under their own key (``score_key`` with the model "rule"), so a
+    later run with a model never reads one back as a cached model score.
+    """
+    key = score_key(profile, RULE_MODEL)
+    scored_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    scored = [dict(record) for record in records]
+    for record in scored:
+        _apply(record, {"score": 0, "reason": reason}, key, RULE_MODEL, scored_at)
+    return scored
 
 
 def _apply(record: Dict[str, Any], result: Dict[str, Any], key: str, model: str, scored_at: Any) -> None:

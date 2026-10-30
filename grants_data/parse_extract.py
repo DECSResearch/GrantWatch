@@ -102,6 +102,7 @@ def _map_record(element: ElementTree.Element, status: str) -> Dict[str, object]:
         _texts(element, "FundingInstrumentType"), _FUNDING_INSTRUMENT_TYPES
     )
     opportunity_category = _text(element, "OpportunityCategory")
+    applicant_codes = sorted(set(_texts(element, "EligibleApplicants")))
 
     if status == "Forecasted":
         posted_date = _format_date(_text(element, "EstimatedSynopsisPostDate"))
@@ -110,7 +111,7 @@ def _map_record(element: ElementTree.Element, status: str) -> Dict[str, object]:
         posted_date = _format_date(_text(element, "PostDate"))
         close_date = _format_date(_text(element, "CloseDate"))
 
-    return {
+    record = {
         "OPPORTUNITY_ID": opportunity_id,
         "OPPORTUNITY_NUMBER": _text(element, "OpportunityNumber"),
         "OPPORTUNITY_TITLE": _text(element, "OpportunityTitle"),
@@ -154,6 +155,12 @@ def _map_record(element: ElementTree.Element, status: str) -> Dict[str, object]:
             element, "AdditionalInformationOnEligibility"
         ),
     }
+    # Grants.gov's applicant-type codes (see grants.profile.APPLICANT_CODES). The
+    # key is left out when the extract lists none, which the eligibility
+    # pre-check reads as "unknown".
+    if applicant_codes:
+        record["ELIGIBLE_APPLICANT_CODES"] = applicant_codes
+    return record
 
 
 def process_extract_xml(
