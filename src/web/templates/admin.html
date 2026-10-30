@@ -55,7 +55,7 @@
   .tools { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; font-size: 15px; color: var(--mist); }
   .verdict { margin: 14px 0 0; font-size: 20px; font-weight: 600; max-width: 60ch; }
   .verdict:empty { display: none; }
-  .message { margin: 28px 0 0; padding: 12px 14px; border-left: 3px solid var(--signal); background: var(--well); font-size: 15px; }
+  .message { margin: 28px 0 0; padding: 12px 14px; border-left: 3px solid var(--signal); background: var(--well); font-size: 15px; overflow-wrap: anywhere; }
   .message.quiet { border-left-color: var(--fog); color: var(--mist); }
   .message .link { margin-left: 12px; }
 
@@ -89,7 +89,7 @@
   .check input { width: 16px; height: 16px; margin: 0; accent-color: var(--spruce); }
 
   .warnings { margin: 24px 0 0; padding: 0; list-style: none; }
-  .warnings li { padding: 10px 14px; border-left: 3px solid var(--signal); background: var(--well); font-size: 15px; }
+  .warnings li { padding: 10px 14px; border-left: 3px solid var(--signal); background: var(--well); font-size: 15px; overflow-wrap: anywhere; }
   .warnings li + li { margin-top: 8px; }
 
   /* How the daily run is doing */
@@ -136,7 +136,7 @@
   pre.log span.error { border-left-color: var(--signal); }
 
   /* Team and settings */
-  .team p { margin: 0 0 8px; max-width: 78ch; }
+  .team p { margin: 0 0 8px; max-width: 78ch; overflow-wrap: anywhere; }
   .team .scroll { margin-top: 14px; }
   .settings { display: grid; grid-template-columns: max-content 1fr; gap: 6px 24px; margin: 0; font-size: 15px; }
   .settings dt { color: var(--mist); }
