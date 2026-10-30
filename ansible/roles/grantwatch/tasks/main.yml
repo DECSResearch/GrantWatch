@@ -25,6 +25,8 @@
       type: Opaque
       stringData: "{{ item.data }}"
   loop:
+    # Empty keys are dropped, except GRANTS_ADMIN_USERS: state=present patches an
+    # existing Secret, so leaving it out would keep the last admins' access.
     - name: grantwatch-cred
       data: >-
         {{ {
@@ -34,13 +36,13 @@
           'POSTGRES_URL': 'postgresql://grantwatch:' ~ (db_password | urlencode) ~ '@grantwatch-db.' ~ namespace ~ '.svc:5432/grantwatch',
           'GRANTS_SECRET_KEY': secret_key,
           'GRANTS_DASHBOARD_URL': dashboard_url,
-          'GRANTS_ADMIN_USERS': admin_users | default([]) | join(','),
           'GRANTS_NOTIFY_RECIPIENTS': notify_recipients | default(''),
           'GRANTS_EMAIL_FROM': email_from | default(''),
           'GRANTS_SMTP_HOST': smtp_host | default(''),
           'GRANTS_SMTP_USER': smtp_user | default(''),
           'GRANTS_SMTP_PASSWORD': smtp_password | default(''),
-        } | dict2items | rejectattr('value', 'equalto', '') | items2dict }}
+        } | dict2items | rejectattr('value', 'equalto', '') | items2dict
+           | combine({'GRANTS_ADMIN_USERS': admin_users | default([]) | join(',')}) }}
     - name: grantwatch-profile
       data:
         research_profile.local.yml: "{{ lookup('ansible.builtin.file', profile_file) }}"
