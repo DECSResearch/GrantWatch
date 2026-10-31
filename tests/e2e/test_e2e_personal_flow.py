@@ -18,7 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from grants.members import personal_profile
-from harness import DASHBOARD_URL, MODEL, SCORES, closed_port, new_section, plain_text, read_email, synopsis
+from harness import DASHBOARD_URL, MEMBER_TAG, MODEL, SCORES, closed_port, new_section, plain_text, read_email, synopsis
 from llm_utils.relevance import personal_key, score_key
 from web import app as webapp
 
@@ -63,6 +63,27 @@ def row(client, opp_id, **params):
 def at_their_floor(client):
     """The list as the page asks for it: at the floor `/api/profile` gives the member."""
     return listing(client, min_score=client.get("/api/profile").json()["me"]["min_score"])
+
+
+def team_lines(opp_id):
+    """The two lines an email shows under a grant the team scored: the summary and the reason, as the scripted model writes them."""
+    return f"  {opp_id} funds the group's research.", f"  {opp_id} fits the group's profile as scripted."
+
+
+SAYS = ("relevance_score", "relevance_reason", "summary")
+
+
+def team_columns(row):
+    """What a grant row holds of the team's alone: its summary and every relevance_* value."""
+    return {k: v for k, v in row.items() if k.startswith("relevance_") or k == "summary"}
+
+
+def team_says(day_zero, opp_id):
+    """A grant's score, reason and summary as the team's pass left them: day 0's, or the scripted ones for NEW, which arrives on day 1."""
+    if opp_id != NEW:
+        return {k: day_zero.grants[opp_id][k] for k in SAYS}
+    summary, reason = (line.strip() for line in team_lines(NEW))
+    return {"relevance_score": 4, "relevance_reason": reason, "summary": summary}
 
 
 def examples(request):
@@ -285,6 +306,13 @@ class TestTheDailyRun:
         assert {r["relevance_profile"] for r in day_one.grants.values() if r["relevance_model"] != "rule"} == {key}
         assert day_one.grants[NEW]["relevance_score"] == 4 and not any(str(r["relevance_profile"]).endswith(":p1") for r in day_one.grants.values())
 
+    def test_what_the_model_wrote_for_her_is_never_written_to_the_grants_table(self, day_one, day_zero):
+        """Day 0 is read before her pass, so a summary or reason her pass wrote onto a grant would differ from it."""
+        for opp_id, before in day_zero.grants.items():
+            assert team_columns(day_one.grants[opp_id]) == team_columns(before), opp_id
+        assert {k: day_one.grants[NEW][k] for k in SAYS} == team_says(day_zero, NEW)  # the team's, though she was asked about it after
+        assert not [opp_id for opp_id, r in day_one.grants.items() if MEMBER_TAG in f"{r['summary']} {r['relevance_reason']}"]
+
     def test_her_requests_carry_her_description_as_data_and_the_team_ones_do_not(self, day_one):
         mine = [r for r in day_one.requests if r["profile"] == ANA_TEXT]
         assert sorted(n for r in mine for n in r["numbers"]) == sorted(SENT + [NEW])
@@ -324,13 +352,29 @@ class TestTheDashboard:
         assert (cara["E2E-NOKW"]["my_verdict"], cara["E2E-NOKW"]["hidden"], cara["E2E-NOKW"]["votes_down"]) == (None, False, 0)
         assert (cara["E2E-BULLETS"]["hidden"], cara["E2E-BULLETS"]["votes_down"]) == (True, 1) and ana["E2E-BULLETS"]["hidden"] is False
 
-    def test_the_teammate_still_sees_exactly_the_teams_scores(self, day_one):
+    def test_the_teammate_still_sees_exactly_the_teams_scores(self, day_one, day_zero):
         assert day_one.cara_all["scores"] == "team" and day_one.cara_me["using"] == "team" and day_one.cara_me["has_profile"] is False
-        shown = {r["opp_id"]: r["relevance_score"] for r in day_one.cara_all["results"]}
-        assert shown and shown == {opp: day_one.grants[opp]["relevance_score"] for opp in shown}
+        shown = {r["opp_id"]: r for r in day_one.cara_all["results"]}
+        assert shown and set(shown) - set(day_zero.grants) == {NEW}
+        for opp_id, r in shown.items():  # against day 0, which is read before the pass that scored hers
+            assert {k: r[k] for k in SAYS} == team_says(day_zero, opp_id), opp_id
+        assert not [opp_id for opp_id, r in shown.items() if MEMBER_TAG in f"{r['summary']} {r['relevance_reason']}"]
+
+    def test_her_rows_carry_the_reason_written_for_her_and_the_summary_the_team_has(self, day_one, day_zero):
+        rows = {r["opp_id"]: r for r in day_one.ana_all["results"]}
+        own = {opp_id: r for opp_id, r in rows.items() if r["relevance_model"] == MODEL}
+        assert len(own) == 12 and set(own) == set(rows) - {"E2E-STATES"}  # the three DURIP calls are one row
+        assert all(r["relevance_reason"].endswith(MEMBER_TAG) for r in own.values())
+        assert rows["E2E-STATES"]["relevance_reason"] == day_zero.grants["E2E-STATES"]["relevance_reason"]  # a rule's reason is the same for everyone
+        assert {opp_id: r["summary"] for opp_id, r in rows.items()} == {opp_id: team_says(day_zero, opp_id)["summary"] for opp_id in rows}  # the summary describes the grant: one, for everyone
 
     def test_the_detail_of_a_grant_has_the_score_of_the_list(self, day_one):
         assert (day_one.detail["ana"]["relevance_score"], day_one.detail["cara"]["relevance_score"]) == (5, 2)
+
+    def test_the_detail_of_a_grant_has_each_ones_own_reason_and_the_same_summary(self, day_one, day_zero):
+        ana, cara, team = day_one.detail["ana"], day_one.detail["cara"], team_says(day_zero, "E2E-BROAD")
+        assert {k: cara[k] for k in SAYS} == team | {"relevance_score": 2} and MEMBER_TAG not in f"{cara['summary']} {cara['relevance_reason']}"
+        assert ana["relevance_reason"] == team["relevance_reason"] + MEMBER_TAG and ana["summary"] == team["summary"]
 
 
 class TestTheEmail:
@@ -342,6 +386,12 @@ class TestTheEmail:
         mine = {"E2E-BULLETS": 5, "E2E-ENTITY": 5, "E2E-PLACEHOLDER": 5, "DURIP-AFOSR-26": 4, "E2E-FORECAST": 4, "E2E-BROAD": 5, "E2E-NOCODES": 5, NEW: 4}
         assert new_grants(emailed.mails[ANA]) == entries(titles, mine)  # not E2E-TRUSTED (she scores it 0) and not E2E-NOKW (her Not for us)
 
+    def test_her_email_has_the_reason_written_for_her_under_the_summary_the_team_has(self, emailed):
+        summary, reason = team_lines("E2E-BROAD")
+        lines = emailed.texts[ANA].splitlines()
+        assert summary in lines and reason + MEMBER_TAG in lines and reason not in lines
+        assert MEMBER_TAG in emailed.htmls[ANA]
+
     def test_her_footer_is_for_her_profile(self, emailed):
         assert OWN in emailed.texts[ANA] and OWN in emailed.htmls[ANA]
         assert TEAM not in emailed.texts[ANA] and "Want matches" not in emailed.texts[ANA] and "start after the next daily run" not in emailed.texts[ANA]
@@ -350,6 +400,12 @@ class TestTheEmail:
         titles = day_zero.titles | {NEW: "A Brand New Network Authentication Program"}
         team = {"E2E-TRUSTED": 4, "E2E-NOKW": 5, "E2E-ENTITY": 5, "E2E-PLACEHOLDER": 5, "DURIP-AFOSR-26": 4, "E2E-FORECAST": 4, NEW: 4}
         assert new_grants(emailed.mails[CARA]) == entries(titles, team)  # Ana's Not for us on E2E-NOKW is not the team's
+
+    def test_cara_is_told_what_the_model_wrote_for_the_team_and_nothing_written_for_ana(self, emailed):
+        lines = emailed.texts[CARA].splitlines()
+        for opp_id in ("E2E-NOKW", "E2E-ENTITY", NEW):
+            assert set(team_lines(opp_id)) <= set(lines), opp_id
+        assert MEMBER_TAG not in emailed.texts[CARA] and MEMBER_TAG not in emailed.htmls[CARA]
 
     def test_her_footer_is_the_teams_and_invites_her_to_write_her_own(self, emailed):
         assert TEAM in emailed.texts[CARA] and INVITE in emailed.texts[CARA]
@@ -430,6 +486,12 @@ class TestTheDayAfterAnOutage:
         for message in recovered.mails.values():
             assert new_grants(message) == [("4/5", "A Late Network Authentication Program")]
 
+    def test_each_is_told_what_the_model_wrote_for_them(self, recovered):
+        summary, reason = team_lines(LATE)
+        ana, cara = (plain_text(recovered.mails[to]).splitlines() for to in (ANA, CARA))
+        assert summary in ana and reason + MEMBER_TAG in ana and reason not in ana
+        assert summary in cara and reason in cara and not [line for line in cara if MEMBER_TAG in line]
+
 
 class TestRemovingTheProfile:
     def test_it_takes_her_profile_and_scores_and_puts_her_on_the_teams_view(self, removed):
@@ -453,3 +515,7 @@ class TestRemovingTheProfile:
         for text in removed.texts.values():
             assert TEAM in text and INVITE in text and OWN not in text
         assert new_grants(removed.mails[ANA]) == [("4/5", "A Last Network Authentication Program")]
+
+    def test_nothing_written_for_her_is_left_in_either_email(self, removed):
+        for text in removed.texts.values():
+            assert set(team_lines(LAST)) <= set(text.splitlines()) and MEMBER_TAG not in text
