@@ -25,7 +25,8 @@ The rules:
   counts as announced once any of its postings was, so every posting is
   recorded when the row is shown, and its score is its best posting's. The
   row is led by the best scored posting the eligibility rules did not rule
-  out, or by a tracked one; a ruled-out posting only follows it.
+  out, or by a tracked one; a ruled-out posting only follows it, and leads
+  only a program of ruled-out postings alone.
 * The team's votes (see grants.feedback) are summed over a program's postings.
   A program the team marked Not for us is left out of the new grants and the
   overview, unless it is tracked. One marked Relevant counts as meeting the
@@ -33,7 +34,9 @@ The rules:
 * A member with a profile of their own is planned from their own scores and votes (see
   Personal and personalise). Their score and reason replace the team's, a rule's 0 still wins,
   and the votes are theirs alone. A grant their profile has not scored is not announced to
-  them, whatever they marked, until it is, and the keyword fallback is never theirs. While
+  them, whatever they marked, until it is, and the keyword fallback is never theirs. A program
+  is announced to them, or listed in their overview, only through a posting their profile has
+  scored, so a ruled-out sibling never stands in for an unscored one. While
   nothing at all is scored for their profile they get the team's scores and their own votes.
   When their own data could not be read they get only the reminders, deadline changes and
   withdrawn notices, with no scores shown, and nothing is recorded for new grants or the
@@ -342,11 +345,17 @@ def plan_email(
     groups = [] if unread else group_postings(postings)  # nothing is announced from scores that could not be read
     programs = [[by_id[group.lead], *(by_id[o] for o in group.also)] for group in groups]
 
-    def row(members: List[GrantState]) -> GrantState:
+    def row(members: List[GrantState]) -> Optional[GrantState]:
         # A posting the eligibility codes ruled out (score 0 by rule) ranks above an unscored one
         # but must not stand for the program: lead with one that may apply, unless it is tracked.
-        # For a member's own scores it must also be one their profile has scored, if there is one.
-        lead = next((g for g in members if g.watched or (not g.by_rule and (g.score is not None or not own))), members[0])
+        # For a member's own scores it must also be one their profile has scored. When there is none,
+        # the program has no row for them (None), unless every posting is ruled out: then a rule's 0
+        # is the whole answer and the first stands for it.
+        lead = next((g for g in members if g.watched or (not g.by_rule and (g.score is not None or not own))), None)
+        if lead is None:
+            if own and not all(g.by_rule for g in members):
+                return None
+            lead = members[0]
         return replace(lead, also=tuple(g for g in members if g is not lead)) if len(members) > 1 else lead
 
     def verdict(members: List[GrantState]) -> int:
@@ -376,8 +385,8 @@ def plan_email(
             rank, qualifies = max(rank or 0, min_score if scoring_active else needed), True
         if qualifies:
             chosen = row(members)
-            if own and chosen.score is None:
-                continue  # their profile has not scored it, whatever they marked: it is announced once it has
+            if chosen is None:
+                continue  # their profile has scored none of it, whatever they marked: it is announced once it has
             fresh.append((rank, chosen))
     # Those closing within URGENT_DAYS first, soonest first; then the rest, best first.
     urgent = sorted((f for f in fresh if f[1].urgent(today)), key=lambda f: (_date_key(f[1].close_date), -f[0], f[1].title, f[1].opp_id))
@@ -391,12 +400,11 @@ def plan_email(
     plan.overview_due = overview_due(last_overview, today, settings.overview_day)
     if plan.overview_due:
         horizons = sorted({int(h) for h in settings.horizons if int(h) > 0}) or [7, 30, 60, 90]
-        candidates = [
+        rows = (
             row(m) for m in programs
             if (any(relevant(g) for g in m) or verdict(m) > 0) and not declined(m) and m[0].firm_deadline(today)
-        ]
-        if own:  # a grant their profile has not scored is listed only if tracked, like a new one
-            candidates = [g for g in candidates if g.score is not None or g.watched]
+        )
+        candidates = [g for g in rows if g is not None]  # a program their profile has not scored is listed only if tracked, like a new one
         lower = -1
         for upper in horizons:
             members = [g for g in candidates if lower < (g.days_left(today) or 0) <= upper]

@@ -185,6 +185,61 @@ class TestAProgramsLead:
         assert sorted(r.opp_id for r in store.rows) == ["D0", "D1", "D2"]
 
 
+def joint_call():
+    """A (the team scores it 5, their profile has not yet) and B, which the eligibility rules ruled out, in one program."""
+    a = replace(_grant("A", 20, score=5), title="Joint call (JC)", agency_code="X-1")
+    b = replace(_grant("B", 20, score=0, by_rule=True), title="Joint call (JC)", agency_code="X-2", reason="rule says no")
+    return [a, b]
+
+
+class TestARuledOutPostingNeverStandsForAnUnscoredOne:
+    """B's rule 0 ranks above A's missing score, but a program whose only candidate is unscored for them is not announced."""
+
+    def test_such_a_program_is_held_back_and_not_recorded_even_when_they_marked_it_relevant(self):
+        store = MemoryStore([ALICE], [*joint_call(), _grant("OTHER", 25, score=1)], {ALICE.email: own({"OTHER": 5}, {"A": 1})})
+        out = CaptureTransport()
+        config = NotifySettings(overview_day="never", min_score=4)
+        _run(store, out, config=config)
+        assert sections(out.messages[-1]) == {NEW_TITLE: ["OTHER"]} and "rule says no" not in plain_text(out.messages[-1])
+        assert sorted(r.opp_id for r in store.rows) == ["OTHER"]
+        store.personal_data[ALICE.email] = own({"OTHER": 5, "A": (5, "fits her")}, {"A": 1})
+        _run(store, out, MONDAY + timedelta(days=1), config=config)
+        text = plain_text(out.messages[-1])
+        assert sections(out.messages[-1]) == {NEW_TITLE: ["Joint call (JC)"]} and "fits her" in text and "Also posted by: NSF (https://x/B)" in text
+        assert sorted(r.opp_id for r in store.rows) == ["A", "B", "OTHER"]
+
+    def test_so_is_it_at_a_threshold_of_zero_with_no_vote_at_all(self):
+        store = MemoryStore([ALICE], [*joint_call(), _grant("OTHER", 25, score=1)], {ALICE.email: own({"OTHER": 5})})
+        out = CaptureTransport()
+        config = NotifySettings(overview_day="never", min_score=0)
+        _run(store, out, config=config)
+        assert sections(out.messages[-1]) == {NEW_TITLE: ["OTHER"]} and sorted(r.opp_id for r in store.rows) == ["OTHER"]
+        store.personal_data[ALICE.email] = own({"OTHER": 5, "A": 0})
+        _run(store, out, MONDAY + timedelta(days=1), config=config)
+        text = plain_text(out.messages[-1])
+        assert sections(out.messages[-1]) == {NEW_TITLE: ["Joint call (JC)"]} and "Also posted by: NSF (https://x/B)" in text and "rule says no" not in text
+
+    def test_the_overview_leaves_it_out_until_a_posting_of_theirs_is_scored(self):
+        grants = [*joint_call(), _grant("OTHER", 25, score=1)]
+        store = MemoryStore([ALICE], grants, {ALICE.email: own({"OTHER": 5}, {"A": 1})})
+        store.rows += [SentRecord(ALICE.id, g.opp_id, NEW, -1, g.close_date, None) for g in grants]  # told already, so only the overview lists them
+        out = CaptureTransport()
+        config = NotifySettings(overview_day="daily", min_score=4)
+        _run(store, out, config=config)
+        assert sections(out.messages[-1]) == {"Closes in 8 to 30 days": ["OTHER"]}
+        store.personal_data[ALICE.email] = own({"OTHER": 5, "A": 5}, {"A": 1})
+        _run(store, out, MONDAY + timedelta(days=1), config=config)
+        assert sections(out.messages[-1]) == {"Closes in 8 to 30 days": ["Joint call (JC)", "OTHER"]}
+        assert "Also posted by: NSF (https://x/B)" in plain_text(out.messages[-1])
+
+    def test_a_program_of_ruled_out_postings_only_keeps_a_ruled_out_row_at_a_threshold_of_zero(self):
+        ruled_out = [replace(g, score=0, by_rule=True, reason="rule says no") for g in joint_call()]
+        store = MemoryStore([ALICE], ruled_out, {ALICE.email: own({"Z": 5})})
+        out = CaptureTransport()
+        _run(store, out, config=NotifySettings(overview_day="never", min_score=0))
+        assert sections(out.messages[-1]) == {NEW_TITLE: ["Joint call (JC)"]} and "[0/5] Joint call (JC)" in plain_text(out.messages[-1])
+
+
 class TestUntilTheFirstScore:
     def test_a_member_with_no_score_yet_gets_the_teams_scores(self):
         store = MemoryStore([ALICE], [replace(_grant("A", 40, score=5), reason="team reason")], {ALICE.email: own()})
@@ -314,6 +369,15 @@ def settings_for(min_score, max_new=30, overview="daily"):
     return NotifySettings(min_score=min_score, max_new=max_new, overview_day=overview, keyword_threshold=1, dashboard_url="https://gw.example.edu")
 
 
+def stands_for_their_program(row, mine):
+    """Whether the posting a row shows is one their profile scored, or a rule's 0 in a program of ruled-out postings only.
+
+    The other postings of the program ride along behind it unscored, as "Also posted by". A ruled-out posting may not
+    stand for a program that has a posting which is not ruled out, since that posting is the one they have no score for.
+    """
+    return (row.opp_id in mine.scores and not row.by_rule) or all(p.by_rule for p in (row, *row.also))
+
+
 class TestProperties:
     @settings(max_examples=150, **SLOW)
     @given(data=st.data(), pool=pools(), min_score=st.integers(0, 5), a_has_profile=st.booleans())
@@ -351,13 +415,11 @@ class TestProperties:
             assert g.net_votes == mine.votes.get(g.opp_id, 0)
         for g in [n.grant for n in plan.new]:
             assert g.score is not None
+        for notice in plan.new:
+            assert not notice.grant.watched and stands_for_their_program(notice.grant, mine)
         for _, members in plan.overview:
             for g in members:
-                assert g.watched or g.score is not None  # a tracked grant is the team's, scored or not
-        for notice in plan.new:
-            assert not notice.grant.watched and (notice.grant.by_rule or notice.grant.opp_id in mine.scores)
-            posted = [notice.grant, *notice.grant.also]
-            assert any(p.opp_id in mine.scores or p.by_rule for p in posted)
+                assert g.watched or stands_for_their_program(g, mine)  # a tracked grant is the team's, scored or not
 
     @settings(max_examples=200, **SLOW)
     @given(data=st.data(), pool=pools(), min_score=st.integers(0, 5))
