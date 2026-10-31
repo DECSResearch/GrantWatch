@@ -1209,6 +1209,19 @@ class TestAdminPage:
         assert "profileLabel(r)" in people and "coverageLabel(r.coverage)" in people
         assert "summary" not in people and "profile_text" not in people  # the text of a profile is not something the table reads
 
+    def test_the_grants_gov_row_shows_the_personal_steps_totals_after_the_funnel(self):
+        row = webapp.ADMIN_HTML.split("function grantsRow(data) {")[1].split("\n  }\n")[0]
+        funnel, personal, small = (row.index(text) for text in ("lines.push(funnel(", "lines.push(personalLine(", 'text: "From the run of "'))
+        assert funnel < personal < small
+        # the newest personal run that recorded totals, never an older run's beside a newer one's failure
+        assert 'data.runs.find((r) => r.step === "personal" && statsOf(r).personal)' in row
+
+    def test_a_personal_run_is_not_a_square_on_the_strip_or_a_warning(self):
+        strip = webapp.ADMIN_HTML.split("function renderStrip(runs) {")[1].split("\n  }\n")[0]
+        assert 'const byDay = { ingest: {}, notify: {} };' in strip and '["ingest", "notify"].forEach' in strip
+        # the step never changes the exit code of the others, so a failure of it is not one of the page's warnings (#55: no other new warnings)
+        assert _warnings(runs=[_run("personal", "failed", "boom"), _run("notify"), _run()]) == []
+
     def test_the_keyword_lines_say_so_when_keywords_do_not_filter(self):
         team = webapp.ADMIN_HTML.split("function renderTeam(data) {")[1].split("\n  }\n")[0]
         assert "data.health.scores_every_grant" in team and "Keywords do not filter; every open grant is scored." in team

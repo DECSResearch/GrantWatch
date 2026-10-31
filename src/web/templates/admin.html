@@ -341,6 +341,22 @@
   function coverageLabel(coverage) {
     return coverage && isNum(coverage.scored) && isNum(coverage.open) ? num(coverage.scored) + " of " + num(coverage.open) : "–";
   }
+
+  // The "Personal profiles" line of the Grants.gov row: the totals one personal step recorded (stats.personal), or "" if the run has none.
+  // "time limit" is what the step records when it began no new turn for want of time (grants.personal.score_people).
+  function personalLine(run) {
+    const totals = statsOf(run).personal;
+    if (!totals || typeof totals !== "object" || Array.isArray(totals)) return "";
+    const stopped = typeof totals.stopped === "string" ? totals.stopped.replace(/\.+$/, "") : "";
+    if (stopped.startsWith("skipped: ")) return "Personal profiles: skipped, " + stopped.slice("skipped: ".length) + ".";
+    if (totals.people === 0 && !stopped) return "Personal profiles: nobody has written one yet.";
+    const parts = isNum(totals.people) ? [plural(totals.people, "person", "people")] : [];
+    ["scored", "failed", "pending"].forEach((key) => { if (isNum(totals[key])) parts.push(num(totals[key]) + " " + key); });
+    let text = "Personal profiles: " + (parts.join(", ") || "no numbers recorded") + ".";
+    if (stopped === "time limit") text += " Stopped at the time limit.";
+    else if (stopped) text += " Stopped: " + stopped + ".";
+    return text;
+  }
   // END rules
 
   /* ---------- verdict, strip, warnings ---------- */
@@ -486,6 +502,8 @@
       const stats = statsOf(source);
       lines.push((SOURCES[stats.source] || "Source not recorded") + (stats.source_file ? ", " + stats.source_file : ""));
       lines.push(funnel(stats, data.profile, data.health));
+      // The newest personal run that recorded totals, as the ingest above is the newest that recorded its numbers.
+      lines.push(personalLine(data.runs.find((r) => r.step === "personal" && statsOf(r).personal)));
       lines.push({ text: "From the run of " + when(source.started_at) + ".", className: "small" });
     } else {
       lines.push("No run has recorded its numbers yet.");

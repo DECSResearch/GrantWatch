@@ -88,3 +88,81 @@ class TestCoverageCell:
     def test_the_cell_always_reads_scored_of_open(self, open_grants, data):
         scored = data.draw(st.integers(0, open_grants))
         assert call(["coverageLabel", {"open": open_grants, "scored": scored}]) == [f"{scored:,} of {open_grants:,}"]
+
+
+def run(**personal):
+    """A personal step's run record: its totals in ``stats.personal``."""
+    return {"step": "personal", "state": "ok", "stats": {"personal": personal}}
+
+
+def line(*runs):
+    return call(*(["personalLine", r] for r in runs))
+
+
+class TestPersonalProfilesLine:
+    TOTALS = {"people": 3, "scored": 120, "failed": 2, "pending": 40, "stopped": None}
+
+    def test_the_totals_of_the_step(self):
+        assert line(run(**self.TOTALS)) == ["Personal profiles: 3 people, 120 scored, 2 failed, 40 pending."]
+
+    def test_one_person_and_thousands(self):
+        assert line(run(people=1, scored=1_200, failed=0, pending=0, stopped=None)) == ["Personal profiles: 1 person, 1,200 scored, 0 failed, 0 pending."]
+
+    def test_it_says_when_the_time_stop_was_reached(self):
+        assert line(run(**{**self.TOTALS, "stopped": "time limit"})) == ["Personal profiles: 3 people, 120 scored, 2 failed, 40 pending. Stopped at the time limit."]
+
+    def test_any_other_stop_is_given_as_the_step_recorded_it(self):
+        outage = run(**{**self.TOTALS, "stopped": "the model is unavailable: cannot reach http://10.0.0.5:18100: Connection error."})
+        early = run(**{**self.TOTALS, "stopped": "1 of 3 members stopped early: scoring failed: boom"})
+        assert line(outage, early) == [
+            "Personal profiles: 3 people, 120 scored, 2 failed, 40 pending. Stopped: the model is unavailable: cannot reach http://10.0.0.5:18100: Connection error.",
+            "Personal profiles: 3 people, 120 scored, 2 failed, 40 pending. Stopped: 1 of 3 members stopped early: scoring failed: boom.",
+        ]
+
+    def test_a_skipped_step_says_why_and_shows_no_zeros(self):
+        skipped = run(people=0, scored=0, failed=0, pending=0, stopped="skipped: the team's scoring stopped: cannot reach http://x: down")
+        assert line(skipped) == ["Personal profiles: skipped, the team's scoring stopped: cannot reach http://x: down."]
+
+    def test_nobody_with_a_profile_is_said_so(self):
+        assert line(run(people=0, scored=0, failed=0, pending=0, stopped=None)) == ["Personal profiles: nobody has written one yet."]
+
+    def test_a_run_with_no_totals_has_no_line(self):
+        bare = [None, {}, {"step": "personal", "stats": None}, {"step": "personal", "stats": {}}, {"step": "personal", "stats": {"personal": None}},
+                {"step": "personal", "stats": {"personal": [1, 2]}}, {"step": "personal", "stats": {"personal": "3 people"}}, {"step": "personal", "stats": [1]}]
+        assert line(*bare) == [""] * len(bare)
+
+    def test_a_number_that_is_missing_is_left_out_rather_than_made_up(self):
+        assert line(run(people=2, scored=5), run(), run(people="2", scored=None, failed=True, pending="x")) == [
+            "Personal profiles: 2 people, 5 scored.", "Personal profiles: no numbers recorded.", "Personal profiles: no numbers recorded.",
+        ]
+
+    def test_the_step_records_exactly_the_word_the_line_looks_for(self):
+        """Run the real pass past its deadline and read what it recorded, so a renamed stop cannot silently stop showing."""
+        from grants.personal import Member, score_people
+        from grants.profile import Profile
+        from llm_utils.relevance import LLMSettings
+
+        member = Member("ana@und.edu", "I build battery models for grid-scale storage, mostly lithium chemistries.")
+        record = {"OPPORTUNITY_NUMBER": "G-1", "CLOSE_DATE": "2026-12-01"}
+        totals = score_people(
+            [member], [record], Profile(summary="Cyber-physical security research"), LLMSettings.from_env(), deadline=0.0,
+            clock=lambda: 1.0, scored_numbers=lambda email, key: set(), votes_of=lambda emails: [],
+        )
+        assert totals.stopped == "time limit" and totals.pending == 1
+        assert line({"step": "personal", "stats": {"personal": totals.as_dict()}}) == ["Personal profiles: 1 person, 0 scored, 0 failed, 1 pending. Stopped at the time limit."]
+
+    @settings(max_examples=30, deadline=None)
+    @given(
+        totals=st.fixed_dictionaries({k: st.integers(0, 100_000) for k in ("people", "scored", "failed", "pending")}),
+        stopped=st.one_of(st.none(), st.just("time limit"), st.text(min_size=1, max_size=40).filter(lambda t: t.strip(".") and t != "time limit" and not t.startswith("skipped: "))),
+    )
+    def test_every_number_is_in_the_line_and_the_time_stop_is_named_only_when_it_was_reached(self, totals, stopped):
+        text = line(run(**totals, stopped=stopped))[0]
+        if totals["people"] == 0 and stopped is None:
+            assert text == "Personal profiles: nobody has written one yet."
+            return
+        assert text.startswith("Personal profiles: ")
+        for key in ("scored", "failed", "pending"):
+            assert f"{totals[key]:,} {key}" in text
+        assert ("Stopped at the time limit." in text) == (stopped == "time limit")
+        assert ("Stopped: " in text) == (stopped not in (None, "time limit"))
