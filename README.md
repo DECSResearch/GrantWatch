@@ -487,8 +487,9 @@ Configure these (see `.env.example`):
    without it.
 
    `tests/e2e/` runs the real flow (ingest through a model over HTTP, the email,
-   the dashboard and admin APIs, a vote, and the failure paths) against a real
-   Postgres and a fake model server. It is skipped unless `GRANTS_TEST_POSTGRES_URL`
+   the dashboard and admin APIs, votes, a member's own profile from the first
+   save to their email, what a visitor is shown, and the failure paths) against
+   a real Postgres and a fake model server. It is skipped unless `GRANTS_TEST_POSTGRES_URL`
    is set to a database you can create schemas in, for example
    `GRANTS_TEST_POSTGRES_URL=postgresql://you@localhost:5432/grantwatch_e2e_tests pytest tests/e2e -q`.
    Each test module makes its own schema and drops it afterwards. CI runs it
