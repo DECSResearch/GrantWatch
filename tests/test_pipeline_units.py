@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from grants_data.date_filter_data import date_filter_json_data
 from grants_data.keyword_filter_data import filter_grants_by_keywords
 from grants_data.normalize import normalize_records, strip_html
-from llm_utils.gpt_summarizer import description_summarizer
+from llm_utils.gpt_summarizer import SUMMARY_CHARS, cut_summary, description_summarizer
 
 
 class TestStripHtml:
@@ -142,6 +142,30 @@ class TestSummarizer:
     def test_short_description_kept_verbatim(self):
         out = description_summarizer([{"FUNDING_DESCRIPTION": "Short text."}])
         assert out[0]["SUMMARY"] == "Short text."
+
+
+class TestCutSummary:
+    """``cut_summary`` is the cut alone, for text that is already plain (the stored description)."""
+
+    @given(raw=st.text(max_size=900))
+    def test_it_is_the_summary_the_pipeline_writes_for_a_description_it_has_stripped(self, raw):
+        stored = strip_html(raw)  # what the loader keeps as the description
+        assert cut_summary(stored) == description_summarizer([{"FUNDING_DESCRIPTION": raw}])[0]["SUMMARY"]
+
+    @given(words=st.lists(st.text(alphabet="abcdefgh<>&;", min_size=1, max_size=12), max_size=120))
+    def test_reading_only_the_start_of_the_description_gives_the_same_summary(self, words):
+        stored = strip_html(" ".join(words))  # already one line, as the loader stores it
+        assert cut_summary(stored[: SUMMARY_CHARS + 1]) == cut_summary(stored)
+
+    def test_the_text_is_not_stripped_a_second_time(self):
+        # Escaped markup in the source is plain text once the loader has unescaped it, and stays text.
+        stored = strip_html("Use &lt;b&gt;bold&lt;/b&gt; sparingly")
+        assert stored == "Use <b>bold</b> sparingly" and cut_summary(stored) == stored
+
+    def test_a_long_description_is_cut_with_an_ellipsis_and_a_short_one_is_folded_to_a_line(self):
+        out = cut_summary("word " * 200)
+        assert out.endswith("...") and out[:-3] == ("word " * 200)[:SUMMARY_CHARS].rstrip()
+        assert cut_summary("short  and\n spaced") == "short and spaced"
 
 
 class TestDropClosed:

@@ -10,14 +10,23 @@ from typing import Dict, List
 from grants_data.normalize import strip_html
 from logs.status_logger import logger
 
-_MAX_SUMMARY_LENGTH = 320
+SUMMARY_CHARS = 320
+
+
+def cut_summary(plain: str) -> str:
+    """``plain`` text (tags already removed) on one line, cut to the length of a fallback summary.
+
+    The public grant list uses this on the stored description, which is already plain text, so
+    it reads the same words the fallback below would have put in ``grants.summary``.
+    """
+    cleaned = " ".join(plain.split())
+    if len(cleaned) <= SUMMARY_CHARS:
+        return cleaned
+    return f"{cleaned[:SUMMARY_CHARS].rstrip()}..."
 
 
 def _summarise_text(text: str) -> str:
-    cleaned = " ".join(strip_html(text).split())
-    if len(cleaned) <= _MAX_SUMMARY_LENGTH:
-        return cleaned
-    return f"{cleaned[:_MAX_SUMMARY_LENGTH].rstrip()}..."
+    return cut_summary(strip_html(text))
 
 
 def description_summarizer(records: List[Dict[str, object]]) -> List[Dict[str, object]]:
