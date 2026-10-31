@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from grants.display import PUBLIC_DETAIL_FIELDS
 from grants.members import save_member_profile
 from grants.sql_utils import open_grant_sql
+from llm_utils.gpt_summarizer import description_summarizer
 from notifications import store
 from web import app as webapp
 
@@ -23,6 +24,7 @@ ANA, BEN = "ana@und.edu", "ben@und.edu"
 DURIP = ["DURIP-AFOSR-26", "DURIP-ARMY-26", "DURIP-ONR-26"]
 ALLOWED = set(PUBLIC_DETAIL_FIELDS) | {"also_posted", "superseded_by"}
 LONG = ("A long call for proposals. " * 40).strip()  # more than 320 characters
+SPACED = "y" * 320 + " and the call goes on well past what a one-sentence summary shows."  # the 321st character is a space
 # What only the team's side of the database says. None of it may appear in anything a visitor is sent.
 ZEBRA = "zebra"
 PATHS = [
@@ -46,6 +48,7 @@ def story(world):
     world.reset()
     assert world.ingest() == 0
     world.query("UPDATE grants SET description = %s WHERE opp_id = 'E2E-PLACEHOLDER'", (LONG,))
+    world.query("UPDATE grants SET description = %s WHERE opp_id = 'E2E-BROAD'", (SPACED,))
     client = TestClient(webapp.app, base_url="http://localhost")
     ids = [row["opp_id"] for row in world.query("SELECT opp_id FROM grants ORDER BY opp_id")]
     paths = PATHS + [f"/api/grants/{opp_id}" for opp_id in ids]
@@ -142,6 +145,11 @@ class TestTheList:
         assert rows["E2E-NOKW"]["summary"] == story.descriptions["E2E-NOKW"] == "Funds reliable control software for the operators of critical infrastructure and their university partners."
         assert rows["E2E-PLACEHOLDER"]["summary"] == LONG[:320].rstrip() + "..."
 
+    def test_the_summary_is_cut_as_the_pipeline_cuts_it_when_a_space_falls_where_the_cut_ends(self, story):
+        rows = {r["opp_id"]: r for r in body(story, "/api/grants?limit=1000")[1]["results"]}
+        assert story.descriptions["E2E-BROAD"] == SPACED
+        assert rows["E2E-BROAD"]["summary"] == "y" * 320 + "..." == description_summarizer([{"FUNDING_DESCRIPTION": SPACED}])[0]["SUMMARY"]
+
     def test_the_limit_takes_the_first_in_the_public_order_and_a_full_list_counts_all(self, story):
         _, listed = body(story, "/api/grants?limit=3")
         assert [r["opp_id"] for r in listed["results"]] == story.expected_order[:3]
@@ -173,6 +181,7 @@ class TestTheRest:
         status, grant = body(story, "/api/grants/E2E-PLACEHOLDER")
         assert status == 200 and set(grant) == set(PUBLIC_DETAIL_FIELDS)
         assert grant["description"] == LONG and grant["summary"] == LONG[:320].rstrip() + "..."
+        assert body(story, "/api/grants/E2E-BROAD")[1]["summary"] == "y" * 320 + "..."
 
     def test_an_unknown_grant_is_a_404(self, story):
         assert story.before["/api/grants/NO-SUCH-GRANT"][0] == 404
