@@ -183,6 +183,7 @@ def rule(css, selector):
 
 
 STYLE = INDEX.split("<style>")[1].split("</style>")[0]
+NO_NODE = shutil.which("node") is None
 
 
 class TestPageScript:
@@ -305,8 +306,34 @@ class TestVoting:
     def test_the_strip_leaves_out_what_the_list_leaves_out(self):
         assert "const inRange = visible().filter(" in script()
 
-    def test_signing_out_drops_the_marks_that_were_the_members(self):
-        assert "loadGrants();  // the marks shown were the signed-in member's own" in script()
+
+
+class TestSignOut:
+    @staticmethod
+    def sign_out(logout_fails):
+        """What the page's own ``signOut`` does under node: the requests it makes, and whether it reloaded."""
+        function = re.search(r"async function signOut\(\) \{.*?\n  \}\n", script(), re.S).group(0)
+        program = f"""
+        const calls = []; let reloaded = 0;
+        const fetch = async (url, init) => {{ calls.push([url, init && init.method]); if ({json.dumps(logout_fails)}) throw new Error("offline"); return {{ ok: true }}; }};
+        const location = {{ reload() {{ reloaded += 1; }} }};
+        {function}
+        signOut().then(() => console.log(JSON.stringify({{ calls, reloaded }})));
+        """
+        done = subprocess.run(["node", "-e", program], capture_output=True, text=True)
+        assert done.returncode == 0, done.stderr
+        return json.loads(done.stdout)
+
+    @pytest.mark.skipif(NO_NODE, reason="node is not installed")
+    @pytest.mark.parametrize("logout_fails", [False, True])
+    def test_signing_out_reloads_the_page_so_none_of_the_members_stays_on_screen(self, logout_fails):
+        # Redrawn in place the scores, marks and profile text of the member would stay in the page's memory and on a shared screen.
+        # The reload is not conditional on the request: if it failed, the reloaded page shows the truth, that they are still signed in.
+        assert self.sign_out(logout_fails) == {"calls": [["/api/logout", "POST"]], "reloaded": 1}
+
+    def test_it_does_nothing_else_after_the_request(self):
+        out = script().split("async function signOut() {")[1].split("\n  }\n")[0]
+        assert out.rstrip().endswith("location.reload();") and "loadGrants(" not in out and "renderAccount(" not in out
 
 
 class TestSignInOff:

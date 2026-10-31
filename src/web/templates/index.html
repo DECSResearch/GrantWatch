@@ -667,12 +667,11 @@
     }
   }
 
+  // Reload rather than redraw in place: the scores, marks and profile on screen were the member's own,
+  // and a shared screen must not keep them.
   async function signOut() {
     await fetch("/api/logout", { method: "POST" }).catch(() => {});
-    state.session.email = null;
-    els.loginFeedback.textContent = "";
-    renderAccount();
-    loadGrants();  // the marks shown were the signed-in member's own
+    location.reload();
   }
 
   let timer = null;
