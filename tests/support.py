@@ -105,6 +105,10 @@ def sections(message: EmailMessage) -> Dict[str, List[str]]:
     return dict(out)
 
 
+# What fetch_member_state says of a member on the team's profile.
+TEAM_MEMBER = {"has_profile": False, "summary": None, "updated_at": None, "has_scores": False}
+
+
 class FakeCursor:
     def __init__(self, db):
         self.db = db

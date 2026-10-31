@@ -25,6 +25,7 @@ from grants.display import (  # noqa: E402
 from grants.queries import serialize_row  # noqa: E402
 from notifications.digest import render_email  # noqa: E402
 from notifications.planner import GrantState, NotifySettings, Recipient, plan_email  # noqa: E402
+from support import TEAM_MEMBER  # noqa: E402
 from web import app as webapp  # noqa: E402
 
 TODAY = date(2026, 9, 14)
@@ -332,6 +333,7 @@ class TestApi:
         monkeypatch.setattr(webapp, "query_grants", lambda query: list(rows))
         monkeypatch.setattr(webapp, "fetch_vote_counts", lambda opp_ids, email=None: {})
         monkeypatch.setattr(webapp, "_viewer", lambda request: Recipient(id=1, email="me@und.edu", unsubscribe_token="t"))  # signed in: a visitor would get the public list
+        monkeypatch.setattr(webapp, "fetch_member_state", lambda email: dict(TEAM_MEMBER))
         body = TestClient(webapp.app, base_url="http://localhost").get("/api/grants").json()
         assert body["count"] == len(body["results"]) == len(rows) - 4
         durip = next(r for r in body["results"] if r["opp_id"] == "N0001426SF003")

@@ -26,7 +26,7 @@ from grants.display import days_until_deadline  # noqa: E402
 from grants.profile import Profile  # noqa: E402
 from grants.queries import GrantQuery, build_grants_sql, count_grants, data_status  # noqa: E402
 from notifications.planner import Recipient  # noqa: E402
-from support import patched  # noqa: E402
+from support import TEAM_MEMBER, patched  # noqa: E402
 from web import app as webapp  # noqa: E402
 
 MEMBER = Recipient(id=1, email="me@und.edu", unsubscribe_token="t")
@@ -106,13 +106,14 @@ class TestFitCount:
     def test_the_profile_route_asks_for_the_team_threshold(self, monkeypatch):
         asked = []
 
-        def status(min_score=None):
+        def status(min_score=None, scores_for=None):
             asked.append(min_score)
             return {"total": 3, "open": 3, "scored": 3, "watched": 0, "fit_count": 2, "data_as_of": "2026-10-30T06:00:00"}
 
         monkeypatch.setattr(webapp, "_profile", lambda: Profile(summary="Cyber research.", min_score_to_notify=3))
         monkeypatch.setattr(webapp, "data_status", status)
         monkeypatch.setattr(webapp, "_viewer", lambda request: MEMBER)  # signed in: a visitor is not told the team's threshold
+        monkeypatch.setattr(webapp, "fetch_member_state", lambda email: dict(TEAM_MEMBER))
         body = TestClient(webapp.app, base_url="http://localhost").get("/api/profile").json()
         assert asked == [3] and body["min_score"] == 3 and body["data"]["fit_count"] == 2
 
@@ -140,6 +141,7 @@ class TestGrantsTotal:
             monkeypatch.setattr(webapp, "query_grants", query)
             monkeypatch.setattr(webapp, "count_grants", count)
             monkeypatch.setattr(webapp, "_viewer", lambda request: MEMBER)  # signed in: a visitor's list has its own tests
+            monkeypatch.setattr(webapp, "fetch_member_state", lambda email: dict(TEAM_MEMBER))
             return TestClient(webapp.app, base_url="http://localhost").get(f"/api/grants?limit={limit}").json()
 
         return run, seen
@@ -164,6 +166,7 @@ class TestGrantsTotal:
         rows = listing(min(n, limit))  # the query never returns more than its limit
         matching = len(rows) + extra if len(rows) == limit else None
         with patch.object(webapp, "fetch_vote_counts", lambda ids, email=None: {}), patch.object(webapp, "_viewer", lambda request: MEMBER), \
+                patch.object(webapp, "fetch_member_state", lambda email: dict(TEAM_MEMBER)), \
                 patch.object(webapp, "query_grants", lambda q: list(rows)), patch.object(webapp, "count_grants", lambda q: matching):
             body = TestClient(webapp.app, base_url="http://localhost").get(f"/api/grants?limit={limit}").json()
         assert body["total"] >= len(rows) >= body["count"]

@@ -30,10 +30,11 @@ from .document_checker_routes import router as document_checker_router
 from grants.admin import admin_status, llm_check, run_log
 from grants.display import group_rows, public_rows
 from grants.feedback import with_feedback
+from grants.personal import current_key
 from grants.profile import Profile, load_profile
 from grants.queries import (
-    GrantQuery, count_grants, count_public_grants, data_status, get_grant, get_public_grant, public_status, query_grants,
-    query_public_grants,
+    GrantQuery, count_grants, count_public_grants, data_status, fetch_member_state, get_grant, get_public_grant, member_coverage,
+    public_status, query_grants, query_public_grants,
 )
 from grants.sql_utils import (
     add_to_watchlist, clear_vote, ensure_schema, fetch_relevant_ids, fetch_vote_counts, list_watchlist, record_vote,
@@ -297,6 +298,21 @@ def admin_run_log(run_id: int = PathParam(ge=1, le=2_147_483_647), _admin: str =
     return log
 
 
+def _own_view(email: str) -> Dict[str, Any]:
+    """A member's profile state (``fetch_member_state``) and ``using``: whose scores they are shown.
+
+    Their own once a score is stored for their profile (any key: an old score stands until the daily
+    run replaces it, as in their email), the team's before that and for a member with no profile.
+    """
+    state = fetch_member_state(email)
+    state["using"] = "mine" if state["has_profile"] and state["has_scores"] else "team"
+    return state
+
+
+def _scores_for(email: str, own: Dict[str, Any]) -> Optional[str]:
+    return email if own["using"] == "mine" else None
+
+
 def _public_list_on() -> bool:
     """Whether visitors may see a list at all.
 
@@ -319,11 +335,18 @@ def _public_profile() -> Dict[str, Any]:
 
 @app.get("/api/profile")
 def profile_info(request: Request) -> Dict[str, Any]:
-    if _viewer(request) is None:
+    viewer = _viewer(request)
+    if viewer is None:
         return _public_profile()
     profile = _profile()
     try:
-        status = data_status(profile.min_score_to_notify)
+        own = _own_view(viewer.email)
+    except Exception as exc:
+        raise _db_error("reading your profile", exc) from exc
+    floor = viewer.min_score if viewer.min_score is not None else profile.min_score_to_notify
+    try:
+        # The status line counts the grants at their floor by the scores they are shown.
+        status = data_status(floor, scores_for=_scores_for(viewer.email, own))
     except Exception as exc:
         logger.warning("Could not read data status: %s", exc)
         status = None
@@ -336,11 +359,34 @@ def profile_info(request: Request) -> Dict[str, Any]:
         "horizons": profile.deadline_horizons,
         "include_forecasted": profile.include_forecasted,
         "data": status,
+        "me": _me(viewer, own, profile, floor, status),
     }
 
 
-def _with_votes(rows: List[Dict[str, Any]], email: str) -> List[Dict[str, Any]]:
-    """The rows with the team's votes on each and ``email``'s own; the vote fields are null when they cannot be read."""
+def _me(viewer: Recipient, own: Dict[str, Any], team: Profile, floor: int, status: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """What the page needs to know about the signed-in member: their profile, their default floor, and what is scored for it."""
+    coverage = {"open": int(status["open"]) if status else 0, "scored": 0}
+    if own["has_profile"]:
+        key = current_key(viewer.email, own["summary"], team, LLMSettings.from_env().model)
+        try:
+            coverage = member_coverage(viewer.email, key)
+        except Exception as exc:
+            logger.warning("Could not count what is scored for %s: %s", viewer.email, exc)
+    updated = own["updated_at"]
+    return {
+        "has_profile": own["has_profile"],
+        "updated_at": updated.isoformat() if updated else None,
+        "min_score": floor,
+        "coverage": coverage,
+        "using": own["using"],
+    }
+
+
+def _with_votes(rows: List[Dict[str, Any]], email: str, personal: bool = False) -> List[Dict[str, Any]]:
+    """The rows with the team's votes on each and ``email``'s own; the vote fields are null when they cannot be read.
+
+    For a ``personal`` member (a profile of their own) the team's counts are left out: their vote decides for them.
+    """
     ids = [opp_id for row in rows for opp_id in (row["opp_id"], *(a["opp_id"] for a in row["also_posted"]))]
     try:
         counts: Optional[Dict[str, Any]] = fetch_vote_counts(ids, email)
@@ -349,17 +395,18 @@ def _with_votes(rows: List[Dict[str, Any]], email: str) -> List[Dict[str, Any]]:
     except Exception as exc:
         logger.warning("Could not read the team's votes: %s", exc)
         counts = None
-    return with_feedback(rows, counts)
+    return with_feedback(rows, counts, personal=personal)
 
 
-def _team_relevant() -> Tuple[str, ...]:
-    """The postings of programs the team marked Relevant on balance; none when the votes cannot be read.
+def _team_relevant(own: Optional[str] = None) -> Tuple[str, ...]:
+    """The postings of programs the team marked Relevant on balance, or ``own``'s own marks for a member with a profile of
+    their own; none when the votes cannot be read.
 
     Read before the grants are, and guarded like ``_with_votes``: before the first ingest there is no
     grant_feedback table, and that must not fail the list.
     """
     try:
-        return tuple(fetch_relevant_ids())
+        return tuple(fetch_relevant_ids(own) if own else fetch_relevant_ids())
     except UndefinedTable:
         return ()  # the daily job has not created grant_feedback yet
     except Exception as exc:
@@ -394,6 +441,10 @@ def get_grants(
             due_from=due_from, due_to=due_to, limit=limit, today=date.today(),
         ))
 
+    try:
+        own = _own_view(viewer.email)
+    except Exception as exc:
+        raise _db_error("fetching grants", exc) from exc
     query = GrantQuery(
         q=q,
         min_score=min_score,
@@ -405,8 +456,9 @@ def get_grants(
         due_from=due_from,
         due_to=due_to,
         limit=limit,
-        team_relevant=_team_relevant() if min_score else (),  # only a score floor can leave them out
+        team_relevant=_team_relevant(viewer.email if own["has_profile"] else None) if min_score else (),  # only a score floor can leave them out
         today=date.today(),
+        scores_for=_scores_for(viewer.email, own),
     )
     try:
         rows = query_grants(query)
@@ -415,7 +467,7 @@ def get_grants(
         results = group_rows(rows)
     except Exception as exc:
         raise _db_error("fetching grants", exc) from exc
-    return {"results": _with_votes(results, viewer.email), "count": len(results), "total": total}
+    return {"results": _with_votes(results, viewer.email, own["has_profile"]), "count": len(results), "total": total, "scores": own["using"]}
 
 
 def _public_grants(query: GrantQuery) -> Dict[str, Any]:
@@ -433,11 +485,14 @@ def _public_grants(query: GrantQuery) -> Dict[str, Any]:
 
 @app.get("/api/grants/{opp_id:path}")
 def grant_detail(opp_id: str, request: Request) -> Dict[str, Any]:
-    visitor = _viewer(request) is None
-    if visitor and not _public_list_on():
+    viewer = _viewer(request)
+    if viewer is None and not _public_list_on():
         raise HTTPException(status_code=404, detail="Grant not found.")
     try:
-        grant = get_public_grant(opp_id) if visitor else get_grant(opp_id)
+        if viewer is None:
+            grant = get_public_grant(opp_id)
+        else:
+            grant = get_grant(opp_id, scores_for=_scores_for(viewer.email, _own_view(viewer.email)))
     except Exception as exc:
         raise _db_error("fetching the grant", exc) from exc
     if grant is None:

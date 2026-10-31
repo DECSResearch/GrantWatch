@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from grants.display import PUBLIC_DETAIL_FIELDS  # noqa: E402
 from notifications.planner import Recipient  # noqa: E402
+from support import TEAM_MEMBER  # noqa: E402
 from web import app as webapp  # noqa: E402
 from web import auth  # noqa: E402
 
@@ -161,7 +162,8 @@ class TestVisitorList:
         sign_in(client)
         monkeypatch.setattr(webapp, "query_grants", lambda q: [])
         monkeypatch.setattr(webapp, "fetch_vote_counts", lambda ids, email=None: {})
-        assert client.get("/api/grants").json() == {"results": [], "count": 0, "total": 0}  # reached the member's query, not the public one
+        monkeypatch.setattr(webapp, "fetch_member_state", lambda email: dict(TEAM_MEMBER))
+        assert client.get("/api/grants").json() == {"results": [], "count": 0, "total": 0, "scores": "team"}  # reached the member's query, not the public one
 
     @settings(max_examples=60, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
     @given(
@@ -211,7 +213,8 @@ class TestVisitorProfile:
     def test_a_member_still_gets_the_whole_profile(self, web, monkeypatch):
         client, _ = web
         sign_in(client)
-        monkeypatch.setattr(webapp, "data_status", lambda min_score=None: {"open": 1})
+        monkeypatch.setattr(webapp, "data_status", lambda min_score=None, scores_for=None: {"open": 1})
+        monkeypatch.setattr(webapp, "fetch_member_state", lambda email: dict(TEAM_MEMBER))
         body = client.get("/api/profile").json()
         assert {"summary", "institution", "min_score", "horizons", "data"} <= set(body)
 

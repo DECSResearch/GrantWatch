@@ -31,6 +31,7 @@ from grants_data import pipeline  # noqa: E402
 from llm_utils import relevance  # noqa: E402
 from llm_utils.relevance import SCORER_VERSION, LLMSettings, RelevanceScorer, score_key, score_records  # noqa: E402
 from notifications.planner import GrantState, NotifySettings, Recipient, plan_email  # noqa: E402
+from support import TEAM_MEMBER  # noqa: E402
 from web import app as webapp  # noqa: E402
 from web import auth  # noqa: E402
 
@@ -921,6 +922,7 @@ def web(monkeypatch):
     monkeypatch.setattr(webapp, "fetch_vote_counts", counts)
     monkeypatch.setattr(webapp, "ensure_schema", lambda: setattr(state, "schema", state.schema + 1))
     monkeypatch.setattr(webapp, "fetch_relevant_ids", relevant)
+    monkeypatch.setattr(webapp, "fetch_member_state", lambda email: dict(TEAM_MEMBER))
     monkeypatch.setattr(webapp, "query_grants", query)
     monkeypatch.setattr(webapp, "count_grants", count)
     return TestClient(webapp.app, base_url="http://localhost"), state
