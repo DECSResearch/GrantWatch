@@ -272,8 +272,9 @@ class TestArchivedGrants:
 
     def test_no_close_date_is_left_out_too(self):
         email = _archived(None)
-        assert "NSF; archived on Sep 13, 2026" in email.text
+        assert "NSF; archived on Sep 13, 2026" in email.text and "archived on Sep 13, 2026" in email.html
         assert "before its" not in email.text and "no date" not in email.text
+        assert "before its" not in email.html and "no date" not in email.html
 
     @given(st.integers(0, 40000))
     def test_the_close_date_is_named_only_when_it_is_firm(self, offset):
