@@ -309,13 +309,15 @@ def fetch_vote_counts(opp_ids: Sequence[str], email: Optional[str] = None) -> Di
         return {opp_id: Votes(int(up), int(down), mine) for opp_id, up, down, mine in cur.fetchall()}
 
 
-# The grants that could be folded with a posting: those that share its close date, and the posting
-# itself, which is a program of one when it has no date.
-_PROGRAMS_OF_SQL = """
-    SELECT opp_id, title, agency_code, close_date::date
-    FROM grants
-    WHERE opp_id = ANY(%s)
-       OR close_date::date IN (SELECT close_date::date FROM grants WHERE opp_id = ANY(%s));
+# The open grants that could be folded with a posting: those that share its close date, and the
+# posting itself, which is a program of one when it has no date. Only open ones, as the planner
+# groups only those, so a closed or archived sibling's votes do not count toward the program.
+_PROGRAMS_OF_SQL = f"""
+    SELECT g.opp_id, g.title, g.agency_code, g.close_date::date
+    FROM grants g
+    WHERE ({open_grant_sql("g")})
+      AND (g.opp_id = ANY(%s)
+           OR g.close_date::date IN (SELECT close_date::date FROM grants WHERE opp_id = ANY(%s)));
 """
 
 

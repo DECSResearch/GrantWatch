@@ -90,6 +90,15 @@ def story(world):
     s.floor.durip_before = floor(5)
     client.post("/api/feedback", json={"opp_id": "DURIP-ARMY-26", "verdict": 1})  # the 3; the program's best posting scores 4
     s.floor.durip_marked = floor(5)
+    # A fourth posting of the program closed early (archived yesterday), so it is not open and not in the email's program.
+    world.query(
+        "INSERT INTO grants (opp_id, title, agency_code, close_date, archive_date) "
+        "SELECT 'DURIP-OLD-26', title, 'DOD-OLD', close_date, CURRENT_DATE - 1 FROM grants WHERE opp_id = 'DURIP-ARMY-26'"
+    )
+    world.query("INSERT INTO grant_feedback (opp_id, email, verdict) VALUES ('DURIP-OLD-26', 'bo@und.edu', -1)")
+    s.floor.durip_archived_sibling = floor(5)
+    world.query("DELETE FROM grant_feedback WHERE opp_id = 'DURIP-OLD-26'")
+    world.query("DELETE FROM grants WHERE opp_id = 'DURIP-OLD-26'")
     world.query("INSERT INTO grant_feedback (opp_id, email, verdict) VALUES ('DURIP-ONR-26', 'bo@und.edu', -1)")
     s.floor.durip_tied = floor(5)  # a Not for us on another posting of the program, from someone else
     world.query("DELETE FROM grant_feedback WHERE email = 'bo@und.edu'")
@@ -167,6 +176,12 @@ class TestScoreFloor:
         row = by_id(story.floor.durip_marked)["DURIP-AFOSR-26"]
         assert {a["opp_id"] for a in row["also_posted"]} == {"DURIP-ARMY-26", "DURIP-ONR-26"}  # the marked posting's siblings too
         assert (row["my_verdict"], row["my_vote_opp_id"], row["team_verdict"]) == (1, "DURIP-ARMY-26", 1)
+
+    def test_a_posting_that_is_no_longer_open_does_not_vote_on_the_program(self, story):
+        # The email groups the open postings only, so a Not for us on an archived one does not tie the program's Relevant.
+        listed = by_id(story.floor.durip_archived_sibling)
+        assert "DURIP-AFOSR-26" in listed and "DURIP-OLD-26" not in listed
+        assert {a["opp_id"] for a in listed["DURIP-AFOSR-26"]["also_posted"]} == {"DURIP-ARMY-26", "DURIP-ONR-26"}
 
     def test_a_program_is_judged_on_all_its_postings_votes(self, story):
         assert not [opp for opp in by_id(story.floor.durip_tied) if opp.startswith("DURIP")]  # a Relevant and a Not for us: a tie

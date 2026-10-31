@@ -430,7 +430,9 @@ resolutions win over the text above.
   it.
   - `GET /api/grants` reads the postings of every program whose votes, summed
     over its postings, come out ahead (`relevant_postings`, run on
-    `group_postings`, so it folds as the planner does), and `_where` adds
+    `group_postings`, so it folds as the planner does, over the open grants
+    only: a closed or archived sibling neither joins the program nor votes on
+    it), and `_where` adds
     `OR g.opp_id = ANY(...)` to the `min_score` condition, as it does for a
     tracked grant. `count_grants` shares that condition. All of the program's
     postings pass, so the row folds as it would at any floor.
