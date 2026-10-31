@@ -17,7 +17,7 @@ import main
 from grants.members import clean_summary, delete_member_profile, personal_profile, save_member_profile
 from grants.personal import Member, fetch_members, write_scores
 from grants.sql_utils import ensure_schema
-from harness import MODEL, NOT_SENT, SCORES, synopsis
+from harness import MEMBER_TAG, MODEL, NOT_SENT, SCORES, synopsis
 from llm_utils.relevance import personal_key, score_key
 from web import app as webapp
 
@@ -79,7 +79,7 @@ class TestFirstRun:
         by = {(r["email"], r["opp_id"]): r for r in first.scores}
         assert by[(ALICE, "E2E-BROAD")]["score_key"] == keys(ALICE_TEXT) and by[(BOB, "E2E-BROAD")]["score_key"] == keys(BOB_TEXT)
         assert keys(ALICE_TEXT).endswith(":p1") and by[(ALICE, "E2E-BROAD")]["model"] == MODEL
-        assert by[(ALICE, "E2E-BROAD")]["reason"] == "E2E-BROAD fits the group's profile as scripted." and by[(ALICE, "E2E-BROAD")]["scored_at"] is not None
+        assert by[(ALICE, "E2E-BROAD")]["reason"] == f"E2E-BROAD fits the group's profile as scripted.{MEMBER_TAG}" and by[(ALICE, "E2E-BROAD")]["scored_at"] is not None
 
     def test_each_member_gets_their_own_scores(self, first):
         by = {(r["email"], r["opp_id"]): r["score"] for r in first.scores}

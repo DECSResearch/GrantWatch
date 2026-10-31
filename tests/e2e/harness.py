@@ -46,6 +46,9 @@ SCORES: Dict[str, int] = {
 }
 DEFAULT_SCORE = 1
 MODEL = "fake-model"
+# What the model adds to the summary and reason it writes for a member's own profile, and never to the team's.
+# So a test can tell whose answer a viewer was shown: a grant's team text must never carry it.
+MEMBER_TAG = " (for a member)"
 
 # Test-only settings of the environment the suite runs in (see conftest.py).
 ADMIN_USER = "e2eadmin"
@@ -154,7 +157,8 @@ class FakeLLM:
     from ``profile_scores``: text found in the description -> scores that replace the usual ones for
     those numbers. A request for the team, or for a description no text matches, uses ``scores``.
     The marker is looked for in the description only, never in the rest of the prompt: a vote's title
-    or the team's summary may well contain the same word.
+    or the team's summary may well contain the same word. The summary and reason written for a member end
+    with ``MEMBER_TAG``; the team's do not.
 
     ``sent`` and ``request_for`` take ``profile=``: a member's description, or None for the team's
     requests; left out, they cover every request.
@@ -235,12 +239,13 @@ class FakeLLM:
         if mode == "truncated":
             content, finish = '{"scores": [{"opportunity_number": "', "length"
         else:
+            tag = MEMBER_TAG if profile is not None else ""
             answers = [
                 {
                     "opportunity_number": number,
                     "score": scores.get(number, DEFAULT_SCORE),
-                    "summary": f"{number} funds the group's research.",
-                    "reason": f"{number} fits the group's profile as scripted.",
+                    "summary": f"{number} funds the group's research.{tag}",
+                    "reason": f"{number} fits the group's profile as scripted.{tag}",
                 }
                 for number in numbers
             ]

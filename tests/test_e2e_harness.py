@@ -21,7 +21,7 @@ from grants.members import personal_profile  # noqa: E402
 from grants.profile import Profile, load_profile  # noqa: E402
 from grants.sql_utils import _DSN_ENV_VARS  # noqa: E402
 from grants_data.parse_extract import process_extract_xml  # noqa: E402
-from harness import CLEARED_ENV, MODEL, NOT_SENT, PROFILE, SCORES, FakeLLM, closed_port, render_extract, suite_environment, synopsis  # noqa: E402
+from harness import CLEARED_ENV, MEMBER_TAG, MODEL, NOT_SENT, PROFILE, SCORES, FakeLLM, closed_port, render_extract, suite_environment, synopsis  # noqa: E402
 from llm_utils.relevance import LLMSettings, score_records  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -166,6 +166,17 @@ class TestFakeLLM:
         llm.reset()
         assert llm.profile_scores == {}
 
+    def test_what_the_model_writes_for_a_member_is_tagged_and_what_it_writes_for_the_team_is_not(self, llm):
+        """So a test can tell whose summary and reason a viewer was shown."""
+        llm.reset()
+        base = Profile(summary="The team does security research.")
+        mine = personal_profile(base, "I study battery chemistry in depth, as a researcher in the field.")
+        team = score_records(records_for(["E2E-BROAD"]), base, settings=settings_for(llm)).records[0]
+        member = score_records(records_for(["E2E-BROAD"]), mine, settings=settings_for(llm), personal=True).records[0]
+        assert (team["SUMMARY"], team["RELEVANCE_REASON"]) == ("E2E-BROAD funds the group's research.", "E2E-BROAD fits the group's profile as scripted.")
+        assert (member["SUMMARY"], member["RELEVANCE_REASON"]) == (team["SUMMARY"] + MEMBER_TAG, team["RELEVANCE_REASON"] + MEMBER_TAG)
+        assert MEMBER_TAG.strip() and MEMBER_TAG not in team["SUMMARY"] + team["RELEVANCE_REASON"]
+
     @settings(max_examples=30, deadline=None)
     @given(
         plan=st.lists(
@@ -194,6 +205,10 @@ class TestFakeLLM:
             records = score_records(records_for(numbers), profile, settings=settings_for(llm), personal=topic is not None).records
             table = 5 if topic in ("battery", "security") else None
             assert {r["OPPORTUNITY_NUMBER"]: r["RELEVANCE_SCORE"] for r in records} == {n: SCORES[n] if table is None else table for n in numbers}
+            tag = "" if topic is None else MEMBER_TAG  # a member's answers are tagged, even one whose text matches no table
+            assert {r["OPPORTUNITY_NUMBER"]: (r["SUMMARY"], r["RELEVANCE_REASON"]) for r in records} == {
+                n: (f"{n} funds the group's research.{tag}", f"{n} fits the group's profile as scripted.{tag}") for n in numbers
+            }
         asked = {description(topic) for topic, _ in plan}
         for text in asked:
             expected = [n for topic, numbers in plan if description(topic) == text for n in numbers]
