@@ -283,26 +283,54 @@ def clear_vote(opp_id: str, email: str) -> bool:
         return cur.rowcount > 0
 
 
+def team_voter_sql(alias: str = "f") -> str:
+    """SQL condition for a grant_feedback row (as ``alias``) that is the team's vote.
+
+    A member with a profile of their own (``member_profiles``) votes for themselves only: the
+    team's counts, verdicts and scorer examples leave their votes out. A vote is the team's again
+    when its author's profile is deleted, because nothing is copied: the rows are the same.
+    """
+    return f"NOT EXISTS (SELECT 1 FROM member_profiles p WHERE p.email = {alias}.email)"
+
+
+_VOTE_COLUMNS = "opp_id, email, verdict, title, agency, summary, created_at"
+
+
 def fetch_votes() -> List[Dict[str, Any]]:
-    """Every vote, with the grant's title, agency and summary as they were when it was cast."""
-    query = "SELECT opp_id, email, verdict, title, agency, summary, created_at FROM grant_feedback;"
+    """The team's votes (not those of members with a profile of their own; see ``fetch_member_votes``).
+
+    Each has the grant's title, agency and summary as they were when it was cast.
+    """
+    query = f"SELECT {_VOTE_COLUMNS} FROM grant_feedback f WHERE {team_voter_sql('f')};"
     with db_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(query)
         return [dict(row) for row in cur.fetchall()]
 
 
+def fetch_member_votes(emails: Sequence[str]) -> List[Dict[str, Any]]:
+    """The votes of these members, in the shape of ``fetch_votes``, whether or not they have a profile of their own."""
+    if not emails:
+        return []
+    with db_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(f"SELECT {_VOTE_COLUMNS} FROM grant_feedback WHERE email = ANY(%s);", (list(emails),))
+        return [dict(row) for row in cur.fetchall()]
+
+
 def fetch_vote_counts(opp_ids: Sequence[str], email: Optional[str] = None) -> Dict[str, Votes]:
-    """The votes on these grants, and ``email``'s own verdict on each; a grant nobody voted on is left out."""
+    """The team's votes on these grants, and ``email``'s own verdict on each; a grant nobody voted on is left out.
+
+    The counts are the team's (see ``team_voter_sql``); the verdict is ``email``'s whoever they are.
+    """
     if not opp_ids:
         return {}
-    query = """
-        SELECT opp_id,
-               COUNT(*) FILTER (WHERE verdict = 1),
-               COUNT(*) FILTER (WHERE verdict = -1),
-               MAX(verdict) FILTER (WHERE email = %s)
-        FROM grant_feedback
-        WHERE opp_id = ANY(%s)
-        GROUP BY opp_id;
+    query = f"""
+        SELECT f.opp_id,
+               COUNT(*) FILTER (WHERE f.verdict = 1 AND {team_voter_sql("f")}),
+               COUNT(*) FILTER (WHERE f.verdict = -1 AND {team_voter_sql("f")}),
+               MAX(f.verdict) FILTER (WHERE f.email = %s)
+        FROM grant_feedback f
+        WHERE f.opp_id = ANY(%s)
+        GROUP BY f.opp_id;
     """
     with db_connection() as conn, conn.cursor() as cur:
         cur.execute(query, (email, list(opp_ids)))
@@ -321,14 +349,18 @@ _PROGRAMS_OF_SQL = f"""
 """
 
 
+_TEAM_NETS_SQL = f"SELECT opp_id, SUM(verdict)::int FROM grant_feedback f WHERE {team_voter_sql('f')} GROUP BY opp_id;"
+
+
 def fetch_relevant_ids() -> List[str]:
     """Every posting of each program the team marked Relevant on balance (see ``relevant_postings``).
 
     A program's votes are summed over its open postings, so a Not for us on an open sibling counts.
+    Only the team's votes count (see ``team_voter_sql``).
     Raises ``UndefinedTable`` until the first run has created grant_feedback.
     """
     with db_connection() as conn, conn.cursor() as cur:
-        cur.execute("SELECT opp_id, SUM(verdict)::int FROM grant_feedback GROUP BY opp_id;")
+        cur.execute(_TEAM_NETS_SQL)
         nets = {opp_id: int(net) for opp_id, net in cur.fetchall()}
         liked = [opp_id for opp_id, net in nets.items() if net > 0]
         if not liked:

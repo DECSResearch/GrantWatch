@@ -425,17 +425,38 @@ class TestSqlHelpers:
         db = self.patch(monkeypatch, rows=[("A", 2, 1, -1), ("B", 0, 3, None)])
         assert sql_utils.fetch_vote_counts(["A", "B", "C"], "me@und.edu") == {"A": Votes(2, 1, -1), "B": Votes(0, 3, None)}
         sql, params = db.executed[0]
-        assert "WHERE opp_id = ANY(%s)" in sql and "FILTER (WHERE email = %s)" in sql
+        assert "WHERE f.opp_id = ANY(%s)" in sql and "FILTER (WHERE f.email = %s)" in sql  # their own verdict, whoever they are
         assert params == ("me@und.edu", ["A", "B", "C"])
+
+    def test_the_counts_leave_out_the_votes_of_members_with_a_profile_of_their_own_but_not_the_viewers_verdict(self, monkeypatch):
+        db = self.patch(monkeypatch, rows=[])
+        sql_utils.fetch_vote_counts(["A"], "me@und.edu")
+        sql = " ".join(db.executed[0][0].split())
+        team = sql_utils.team_voter_sql("f")
+        assert f"COUNT(*) FILTER (WHERE f.verdict = 1 AND {team})" in sql and f"COUNT(*) FILTER (WHERE f.verdict = -1 AND {team})" in sql
+        assert "MAX(f.verdict) FILTER (WHERE f.email = %s)" in sql and sql.count(team) == 2  # only the two counts are the team's
 
     def test_no_grants_no_query(self, monkeypatch):
         db = self.patch(monkeypatch)
         assert sql_utils.fetch_vote_counts([], "me@und.edu") == {} and db.executed == []
 
-    def test_every_vote_is_fetched_with_the_text_it_was_cast_with(self, monkeypatch):
+    def test_the_teams_votes_are_fetched_with_the_text_they_were_cast_with(self, monkeypatch):
         db = self.patch(monkeypatch, rows=[{"opp_id": "A"}])
         assert sql_utils.fetch_votes() == [{"opp_id": "A"}]
-        assert "title, agency, summary, created_at FROM grant_feedback" in db.executed[0][0]
+        sql = " ".join(db.executed[0][0].split())
+        assert sql == f"SELECT opp_id, email, verdict, title, agency, summary, created_at FROM grant_feedback f WHERE {sql_utils.team_voter_sql('f')};"
+        assert sql_utils.team_voter_sql("f") == "NOT EXISTS (SELECT 1 FROM member_profiles p WHERE p.email = f.email)"
+
+    def test_the_votes_of_named_members_come_in_the_same_shape(self, monkeypatch):
+        db = self.patch(monkeypatch, rows=[{"opp_id": "A"}])
+        assert sql_utils.fetch_member_votes(["me@und.edu", "you@und.edu"]) == [{"opp_id": "A"}]
+        sql, params = db.executed[0]
+        assert sql == "SELECT opp_id, email, verdict, title, agency, summary, created_at FROM grant_feedback WHERE email = ANY(%s);"
+        assert params == (["me@und.edu", "you@und.edu"],)  # no profile condition: this is who they asked for
+
+    def test_no_members_no_query(self, monkeypatch):
+        db = self.patch(monkeypatch)
+        assert sql_utils.fetch_member_votes([]) == [] and db.executed == []
 
 
 class VoteDb:
@@ -444,6 +465,7 @@ class VoteDb:
     def __init__(self, grants):
         self.grants = grants  # opp_id -> (title, agency_code, close date)
         self.votes = {}  # (opp_id, email) -> verdict
+        self.profiles = set()  # emails with a profile of their own: their votes are not the team's
         self.connections = 0
         self.statements = []
 
@@ -469,10 +491,11 @@ class VoteDb:
                 elif sql == " ".join(sql_utils._PROGRAM_SQL.split()):
                     close = db.grants.get(params[0], (None, None, None))[2]
                     self.rows = [(opp, *grant) for opp, grant in db.grants.items() if close is not None and grant[2] == close]
-                elif sql.startswith("SELECT opp_id, SUM(verdict)::int FROM grant_feedback GROUP BY opp_id"):
+                elif sql == " ".join(sql_utils._TEAM_NETS_SQL.split()):
                     totals = {}
-                    for (opp, _), verdict in db.votes.items():
-                        totals[opp] = totals.get(opp, 0) + verdict
+                    for (opp, email), verdict in db.votes.items():
+                        if email not in db.profiles:
+                            totals[opp] = totals.get(opp, 0) + verdict
                     self.rows = sorted(totals.items())
                 elif sql == " ".join(sql_utils._PROGRAMS_OF_SQL.split()):
                     liked = set(params[0])
@@ -651,6 +674,40 @@ class TestRelevantIds:
         reads, connections = len(db.statements), db.connections
         assert sql_utils.fetch_relevant_ids() == []
         assert len(db.statements) - reads == 1 and db.connections - connections == 1  # the sums, and nothing about programs
+
+    def test_a_members_own_vote_does_not_count_for_the_team_until_their_profile_is_deleted(self, db):
+        sql_utils.record_vote("D-ONR", "me@und.edu", 1)
+        db.profiles.add("me@und.edu")
+        assert sql_utils.fetch_relevant_ids() == []  # theirs decides for them only
+        sql_utils.record_vote("D-ARMY", "you@und.edu", 1)
+        assert sql_utils.fetch_relevant_ids() == ["D-AFOSR", "D-ARMY", "D-ONR"]  # the team's own vote still does
+        db.profiles.discard("me@und.edu")
+        db.votes[("D-ARMY", "you@und.edu")] = -1
+        assert sql_utils.fetch_relevant_ids() == []  # one each way
+        db.profiles.add("you@und.edu")
+        assert sql_utils.fetch_relevant_ids() == ["D-AFOSR", "D-ARMY", "D-ONR"]  # only me@, back on the team, is left
+        db.profiles.clear()
+        assert sql_utils.fetch_relevant_ids() == []  # their votes returned to the team
+
+    @given(
+        st.lists(st.tuples(st.sampled_from(["vote", "clear"]), st.sampled_from(sorted(PROGRAM_OF)), st.sampled_from(PEOPLE), st.sampled_from([1, -1])), max_size=25),
+        st.sets(st.sampled_from(PEOPLE)),
+    )
+    def test_whatever_was_pressed_only_the_votes_of_members_without_a_profile_decide(self, ops, owners):
+        with pytest.MonkeyPatch.context() as mp:
+            db = VoteDb(PROGRAM_GRANTS)
+            mp.setattr(sql_utils, "get_connection", db.connection)
+            latest = {}
+            for action, opp, email, verdict in ops:
+                if action == "vote":
+                    sql_utils.record_vote(opp, email, verdict)
+                    latest[(email, PROGRAM_OF[opp])] = verdict
+                else:
+                    sql_utils.clear_vote(opp, email)
+                    latest.pop((email, PROGRAM_OF[opp]), None)
+            db.profiles.update(owners)
+            ahead = {p for p in set(PROGRAM_OF.values()) if sum(v for (email, q), v in latest.items() if q == p and email not in owners) > 0}
+            assert sql_utils.fetch_relevant_ids() == sorted(opp for opp, program in PROGRAM_OF.items() if program in ahead)
 
     @given(st.lists(st.tuples(st.sampled_from(["vote", "clear"]), st.sampled_from(sorted(PROGRAM_OF)), st.sampled_from(PEOPLE), st.sampled_from([1, -1])), max_size=25))
     def test_whatever_was_pressed_the_listed_postings_are_those_of_the_programs_the_team_is_ahead_on(self, ops):

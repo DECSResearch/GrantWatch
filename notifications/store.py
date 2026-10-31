@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from psycopg2.extras import RealDictCursor, execute_values
 
-from grants.sql_utils import db_connection, ensure_schema, listed_sql, open_grant_sql
+from grants.sql_utils import db_connection, ensure_schema, listed_sql, open_grant_sql, team_voter_sql
 from llm_utils.relevance import RULE_MODEL
 from notifications.planner import GrantState, Recipient, SentRecord
 
@@ -155,7 +155,9 @@ class PostgresStore:
                    (w.opp_id IS NOT NULL) AS watched, {listed_sql("g")} AS listed
             FROM grants g
             LEFT JOIN grant_watchlist w ON w.opp_id = g.opp_id
-            LEFT JOIN (SELECT opp_id, SUM(verdict)::int AS net FROM grant_feedback GROUP BY opp_id) f ON f.opp_id = g.opp_id
+            LEFT JOIN (
+                SELECT opp_id, SUM(verdict)::int AS net FROM grant_feedback v WHERE {team_voter_sql("v")} GROUP BY opp_id
+            ) f ON f.opp_id = g.opp_id
             WHERE ({open_grant_sql("g")}) OR w.opp_id IS NOT NULL;
         """
         with db_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:

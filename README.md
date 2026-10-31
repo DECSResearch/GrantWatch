@@ -172,6 +172,10 @@ new vote replaces the old one; the votes are in the `grant_feedback` table).
 A program posted by several services is one grant to vote on: a person's vote
 sits on one of its postings, and voting or taking the vote back through any
 posting replaces or removes it on the others.
+A member who has a research profile of their own (a row in
+`member_profiles`) votes for themselves only: their votes are left out of the
+team's counts, verdicts, hidden grants and scorer examples, and are the examples
+for their own scoring instead. Deleting the profile returns them to the team.
 `GET /api/grants` adds `my_verdict` (null when signed out), `my_vote_opp_id`
 (the posting that holds the viewer's vote, else the row's own, which is where a
 new vote goes), `votes_up`, `votes_down`, `team_verdict` (1, -1, or 0 for none
