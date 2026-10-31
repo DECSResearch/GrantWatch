@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 # A close date further out than this is a placeholder, not a deadline.
 FIRM_DEADLINE_DAYS = 5 * 365
@@ -219,3 +219,51 @@ def group_rows(rows: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
         row["superseded_by"] = {"opp_id": group.newer, "url": by_id[group.newer].get("url")} if group.newer else None
         out.append(row)
     return out
+
+
+# What a visitor who is not signed in may see of a grant: Grants.gov's own facts (the stage is read
+# from its title and text, and the summary is its description cut short) and nothing GrantWatch
+# holds about the team. An allow list, never a deny list: a field added to the API later stays
+# hidden from visitors until someone adds it here.
+PUBLIC_FIELDS = (
+    "opp_id", "title", "stage", "opportunity_status", "forecasted", "opportunity_category", "funding_categories",
+    "agency", "agency_code", "url", "post_date", "close_date", "archive_date", "days_left", "firm_deadline",
+    "summary", "award_ceiling", "estimated_total_funding",
+)
+PUBLIC_DETAIL_FIELDS = PUBLIC_FIELDS + ("description",)
+PUBLIC_ALSO_FIELDS = ("opp_id", "agency", "url")  # an entry of ``also_posted``: no ``watched``
+PUBLIC_NEWER_FIELDS = ("opp_id", "url")  # ``superseded_by``
+_SCALARS = (str, int, float, bool, type(None))
+
+
+def _only(source: Mapping[str, Any], fields: Iterable[str]) -> Dict[str, Any]:
+    """The listed fields of ``source`` that are present and plain values; a nested one could carry anything."""
+    return {key: source[key] for key in fields if key in source and isinstance(source[key], _SCALARS)}
+
+
+def public_row(row: Mapping[str, Any], *, detail: bool = False) -> Dict[str, Any]:
+    """``row`` (an API row, grouped or not) cut down to what a visitor may see; ``detail`` adds the description.
+
+    Nothing outside the allow list survives at any depth: not a score, a reason, a keyword, whether
+    the team tracks it or has marked it, nor a field nobody has thought of yet.
+    """
+    out = _only(row, PUBLIC_DETAIL_FIELDS if detail else PUBLIC_FIELDS)
+    also = row.get("also_posted")
+    if isinstance(also, (list, tuple)):
+        out["also_posted"] = [_only(entry, PUBLIC_ALSO_FIELDS) for entry in also if isinstance(entry, Mapping)]
+    newer = row.get("superseded_by")
+    if isinstance(newer, Mapping):
+        out["superseded_by"] = _only(newer, PUBLIC_NEWER_FIELDS)
+    elif "superseded_by" in row and newer is None:
+        out["superseded_by"] = None
+    return out
+
+
+def public_rows(rows: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    """API rows folded into one row per program, as a visitor sees them.
+
+    The allow list is applied before ``group_rows`` reads the rows, so which posting leads a
+    program cannot depend on a score or on tracking (it falls back to the lowest opportunity
+    number), and again on what it makes, which adds ``also_posted`` with a ``watched`` flag.
+    """
+    return [public_row(row) for row in group_rows([public_row(row) for row in rows])]
