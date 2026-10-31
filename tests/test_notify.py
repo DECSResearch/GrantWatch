@@ -109,6 +109,17 @@ class TestKeywordFallback:
         assert sections(out.messages[-1]) == {"Closes in 31 to 60 days": ["D1 (DURIP)"]}
         assert "0/5" not in plain_text(out.messages[-1]) and "why D0" not in plain_text(out.messages[-1])
 
+    def test_the_overview_row_of_a_program_is_its_tracked_posting_even_when_the_rules_ruled_it_out(self):
+        postings = [
+            replace(_grant("D0", 40, score=0, by_rule=True, watched=True), title="Grant D0 (DURIP)", agency_code="DOD-0"),
+            replace(_grant("D1", 40, score=None, matches=3), title="Grant D1 (DURIP)", agency_code="DOD-1"),
+        ]
+        store, out = MemoryStore([ME], postings), CaptureTransport()
+        store.rows += [SentRecord(ME.id, g.opp_id, NEW, -1, g.close_date, None) for g in postings]  # told already, so only the overview lists it
+        _run(store, out, MONDAY, NotifySettings(overview_day="daily"))
+        assert sections(out.messages[-1]) == {"Closes in 31 to 60 days": ["D0 (DURIP)"]}  # the team's own grant, not the one that may apply
+        assert "; tracked" in plain_text(out.messages[-1])
+
     def test_the_overview_leaves_out_a_ruled_out_grant(self):
         grants = [_grant("RULED", 20, score=0, by_rule=True, matches=2), _grant("HIT", 21, score=None, matches=1)]
         store, out = MemoryStore([ME], grants), CaptureTransport()

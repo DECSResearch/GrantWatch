@@ -362,6 +362,7 @@ def test_a_posting_the_rules_ruled_out_never_stands_for_a_program_that_has_anoth
     for row in rows:
         assert {row.opp_id, *(a.opp_id for a in row.also)} == {g.opp_id for g in members}  # the whole program, once
         assert row.watched or not row.by_rule or all(g.by_rule for g in members)
+        assert row.watched == any(g.watched for g in members)  # a tracked posting leads, even one the rules ruled out
     if all(g.by_rule for g in members):
         assert plan.new == []  # nothing that may apply: the program is not announced
 
