@@ -43,8 +43,15 @@ def _is_empty(value: object) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
+# Grants.gov leaves entities such as &apos; in the title text. Unescaped here,
+# once, as the record enters the pipeline. The description is not: strip_html
+# unescapes it after removing its tags, and a second pass would turn an
+# escaped "&lt;b&gt;" into a tag.
+_UNESCAPED_KEYS = ("OPPORTUNITY_TITLE", "AGENCY")
+
+
 def normalize_records(records: List[Dict[str, object]]) -> List[Dict[str, object]]:
-    """Fill canonical keys from source-specific aliases; leaves originals intact."""
+    """Fill canonical keys from source-specific aliases and unescape titles; leaves originals intact."""
     normalized: List[Dict[str, object]] = []
     for record in records:
         merged = dict(record)
@@ -56,5 +63,8 @@ def normalize_records(records: List[Dict[str, object]]) -> List[Dict[str, object
                 if not _is_empty(value):
                     merged[canonical] = value
                     break
+        for key in _UNESCAPED_KEYS:
+            if isinstance(merged.get(key), str):
+                merged[key] = html.unescape(merged[key])
         normalized.append(merged)
     return normalized

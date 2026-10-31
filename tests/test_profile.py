@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import textwrap
 
+from grants import profile as profile_module
 from grants.profile import Profile, load_profile
 from llm_utils.keywords_gen import keyword_extractor
+from llm_utils.relevance import score_key
 
 
 def _write(tmp_path, body: str):
@@ -13,10 +15,21 @@ def _write(tmp_path, body: str):
     return path
 
 
+def _team_profile_installed(tmp_path, monkeypatch):
+    """Make this look like the team's machine: a filled local profile, and GRANTS_PROFILE_FILE pointing at one."""
+    local = tmp_path / "research_profile.local.yml"
+    local.write_text('summary: Real work.\nkeywords: [grid]\napplicant_codes: ["06"]\n', encoding="utf-8")
+    monkeypatch.setattr(profile_module, "_LOCAL_PATH", local)
+    monkeypatch.setenv("GRANTS_PROFILE_FILE", str(local))
+    for name in ("GRANTS_PROFILE_SUMMARY", "GRANTS_KEYWORDS"):  # the other overrides a .env can set
+        monkeypatch.delenv(name, raising=False)
+
+
 class TestLoadProfile:
-    def test_template_is_not_configured(self):
-        profile = load_profile()
-        assert profile.source is not None
+    def test_template_is_not_configured(self, tmp_path, monkeypatch):
+        _team_profile_installed(tmp_path, monkeypatch)
+        profile = load_profile(profile_module._DEFAULT_PATH)
+        assert profile.source == profile_module._DEFAULT_PATH
         assert profile.is_configured is False
         assert profile.keywords == ["research", "education", "innovation", "technology", "infrastructure"]
         assert profile.deadline_horizons == [7, 30, 60, 90]
@@ -70,6 +83,14 @@ class TestLoadProfile:
         c = Profile(summary="B")
         assert a.fingerprint() == b.fingerprint()
         assert a.fingerprint() != c.fingerprint()
+
+    def test_score_key_adds_the_model_to_the_fingerprint(self):
+        profile = Profile(summary="A")
+        assert score_key(profile, "m1").startswith(profile.fingerprint())
+        assert score_key(profile, "m1") != score_key(profile, "m2")
+        # What does not reach the scorer's prompt does not rescore anything.
+        assert score_key(profile, "m1") == score_key(Profile(summary="A", keywords=["y"], keyword_threshold=3), "m1")
+        assert score_key(profile, "m1") != score_key(Profile(summary="A", institution="UND"), "m1")
 
     def test_prompt_text_includes_institution(self):
         profile = Profile(summary="Grid work.", institution="UND", applicant_type="public university")

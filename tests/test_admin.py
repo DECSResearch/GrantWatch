@@ -12,7 +12,7 @@ import string
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlsplit
@@ -146,14 +146,73 @@ class TestWarnings:
 
     def test_unscored_grants_only_matter_when_scoring_is_on(self):
         found = _warnings(_health(open_unscored=12))
-        assert found == [
-            "12 open grants have no relevance score yet; the model server may be unreachable, "
-            "or the per-run cap left them for later."
-        ]
+        assert found == ["12 open grants have no relevance score yet: no ingest has recorded why."]
         assert _warnings(_health(open_unscored=12), scoring_on=False) == []
 
     def test_one_unscored_grant(self):
         assert _warnings(_health(open_unscored=1))[0].startswith("1 open grant has no relevance score yet")
+
+    def test_unscored_grants_waiting_for_the_cap(self):
+        found = _warnings(_health(open_unscored=5), runs=[_run(stats={"kept": 400, "failed": 0, "deferred": 5})])
+        assert found == ["5 open grants have no relevance score yet: 5 waiting for the per-run cap."]
+
+    def test_unscored_grants_that_failed_are_retried(self):
+        found = _warnings(_health(open_unscored=1), runs=[_run(stats={"failed": 1, "deferred": 0})])
+        assert found == ["1 open grant has no relevance score yet: 1 could not be scored in the last successful ingest and is retried next run."]
+
+    def test_unscored_grants_can_be_both_failed_and_deferred(self):
+        found = _warnings(_health(open_unscored=1_240), runs=[_run(stats={"failed": 40, "deferred": 1_200})])
+        assert found == [
+            "1,240 open grants have no relevance score yet: 40 could not be scored in the last successful ingest "
+            "and are retried next run; 1,200 waiting for the per-run cap."
+        ]
+
+    def test_an_unreachable_model_is_named_and_the_batches_it_skipped_are_not_counted_as_failures(self):
+        stats = {"failed": 30, "deferred": 0, "scoring_abort": "cannot reach http://10.0.0.5:18100: Connection error."}
+        found = _warnings(_health(open_unscored=30), runs=[_run(stats=stats)])
+        assert found == [
+            f"Scoring stopped during the newest ingest: {stats['scoring_abort']}",
+            "30 open grants have no relevance score yet: the model server could not be reached in the last successful ingest.",
+        ]
+
+    def test_a_scorer_that_stopped_for_another_reason_is_not_called_unreachable(self):
+        for reason in ("authentication failed: bad key", "the model used all 600 completion tokens before answering"):
+            found = _warnings(_health(open_unscored=3), runs=[_run(stats={"failed": 3, "scoring_abort": reason})])
+            assert found[-1] == "3 open grants have no relevance score yet: scoring stopped early in the last successful ingest."
+
+    def test_the_cause_comes_from_the_ingest_that_finished_not_a_newer_one_that_is_going_or_failed(self):
+        good = _run(stats={"failed": 0, "deferred": 7})
+        expected = "7 open grants have no relevance score yet: 7 waiting for the per-run cap."
+        assert _warnings(_health(open_unscored=7), runs=[_run(state="running"), good]) == [expected]
+        assert _warnings(_health(open_unscored=7), runs=[_run(state="failed", detail="boom"), good]) == [
+            "The newest ingest run failed. boom", expected,
+        ]
+
+    def test_unscored_grants_with_no_numbers_to_explain_them(self):
+        quiet = "3 open grants have no relevance score yet: no ingest has recorded why."
+        for stats in (None, {}, {"scored": 9, "failed": 0, "deferred": 0}, {"failed": "x", "deferred": True}):
+            assert _warnings(_health(open_unscored=3), runs=[_run(stats=stats)]) == [quiet]
+        assert _warnings(_health(open_unscored=3), runs=[_run("notify")]) == [quiet]
+
+    @settings(max_examples=100, deadline=None)
+    @given(
+        unscored=st.integers(1, 5_000),
+        failed=st.one_of(st.none(), st.integers(0, 5_000), st.text(max_size=5)),
+        deferred=st.one_of(st.none(), st.integers(0, 5_000), st.booleans()),
+        abort=st.one_of(st.none(), st.just(""), st.text(max_size=40), st.just("cannot reach http://x: down").map(lambda t: t + "!")),
+    )
+    def test_one_unscored_sentence_whose_cause_follows_the_numbers(self, unscored, failed, deferred, abort):
+        stats = {key: value for key, value in (("failed", failed), ("deferred", deferred), ("scoring_abort", abort)) if value is not None}
+        found = [w for w in _warnings(_health(open_unscored=unscored), runs=[_run(stats=stats)]) if "no relevance score yet" in w]
+        assert len(found) == 1 and found[0].startswith(f"{unscored:,} open grant")
+        cause = found[0].split(" yet: ", 1)[1]
+        count = lambda value: value if isinstance(value, int) and not isinstance(value, bool) else 0
+        reached = bool(abort) and abort.startswith("cannot reach")
+        assert ("could not be reached" in cause) == reached
+        assert ("scoring stopped early" in cause) == (bool(abort) and not reached)
+        assert ("could not be scored" in cause) == (not abort and count(failed) > 0)
+        assert ("waiting for the per-run cap" in cause) == (count(deferred) > 0)
+        assert ("no ingest has recorded why" in cause) == (not abort and count(failed) == 0 and count(deferred) == 0)
 
     def test_nobody_to_email(self):
         assert _warnings(recipients=0) == ["Nobody gets email yet: there are no active recipients."]
@@ -248,6 +307,10 @@ class FakeDb:
 STARTED = datetime(2026, 9, 14, 12, 30, tzinfo=timezone.utc)
 
 
+def _posting(opp_id, title, agency_code, declined=False, close=date(2026, 11, 6), emailed=True):
+    return {"opp_id": opp_id, "title": title, "agency_code": agency_code, "close_date": close, "emailed": emailed, "declined": declined}
+
+
 def _answers(token="tok-1"):
     return {
         admin._RUNS_SQL: [
@@ -262,7 +325,15 @@ def _answers(token="tok-1"):
         admin._HEALTH_SQL: [{
             "data_as_of": STARTED, "data_age_seconds": 2 * HOUR, "open": 10, "open_scored": 8, "open_unscored": 2, "watched": 1,
             "last_ok_ingest_age_seconds": 2 * HOUR, "last_ok_notify_age_seconds": 600.0, "last_sent": STARTED,
+            "feedback_votes": 7,
         }],
+        # Three postings of one program and three plain grants went out as new: four programs, one marked Not for us.
+        # A grant closing the same day that was never emailed is not one of them.
+        admin._FEEDBACK_SQL: [
+            _posting("D-AFOSR", "Instrumentation Program (DURIP)", "AFOSR"), _posting("D-ARMY", "Instrumentation Program (DURIP)", "ARMY", declined=True),
+            _posting("D-ONR", "Instrumentation Program (DURIP)", "ONR"), _posting("P-1", "One", "NSF"), _posting("P-2", "Two", "NIH"),
+            _posting("P-3", "Three", "DOE"), _posting("X-1", "Four", "NASA", emailed=False),
+        ],
         admin._RECIPIENTS_SQL: [
             {"email": "a@und.edu", "name": None, "min_score": None, "active": True, "unsubscribed_at": None,
              "last_emailed": STARTED, "unsubscribe_token": token},
@@ -297,10 +368,16 @@ class TestAdminStatus:
         assert status["emails"][0]["day"] == "2026-09-14"
         assert status["warnings"] == [
             "The newest ingest run did not finish.",
-            "2 open grants have no relevance score yet; the model server may be unreachable, "
-            "or the per-run cap left them for later.",
+            "2 open grants have no relevance score yet: no ingest has recorded why.",
         ]
         assert [w for w in status["warnings"] if "recipients" in w] == []  # one active recipient
+
+    def test_the_page_is_told_whether_keywords_filter_anything(self, fake_db, monkeypatch):
+        assert admin.admin_status()["health"]["scores_every_grant"] is False  # a profile, but no model
+        monkeypatch.setenv("GRANTS_LLM_MODEL", "qwen")
+        assert admin.admin_status()["health"]["scores_every_grant"] is True
+        monkeypatch.setattr(admin, "load_profile", lambda: Profile())  # a model, but no profile summary yet
+        assert admin.admin_status()["health"]["scores_every_grant"] is False
 
     def test_a_run_replaced_by_a_newer_one_did_not_finish_however_young(self, fake_db):
         assert admin.admin_status()["runs"][2]["state"] == "did not finish"
@@ -371,19 +448,86 @@ class TestAdminStatus:
         assert not any("GRANTS_TIMEZONE" in w for w in status["warnings"])
         assert "GRANTS_TIMEZONE" not in caplog.text
 
+    def test_feedback_is_a_block_of_its_own_not_part_of_the_health_numbers(self, fake_db):
+        status = admin.admin_status()
+        assert status["feedback"] == {"votes": 7, "emailed": 4, "declined": 1, "days": 30}
+        assert not any(name.startswith("feedback") for name in status["health"])
+
+    def test_feedback_reads_the_postings_emailed_as_new_in_the_last_30_days_and_the_grants_that_could_be_folded_with_them(self):
+        assert "(SELECT COUNT(*) FROM grant_feedback) AS feedback_votes" in " ".join(admin._HEALTH_SQL.split())
+        assert "feedback_emailed" not in admin._HEALTH_SQL and "feedback_declined" not in admin._HEALTH_SQL  # counted per program below
+        sql = " ".join(admin._FEEDBACK_SQL.split())
+        assert "WITH emailed AS ( SELECT DISTINCT opp_id FROM notifications WHERE kind = 'new' AND sent_at > NOW() - INTERVAL '30 days' )" in sql
+        assert "SELECT e.opp_id, g.title, g.agency_code, g.close_date::date AS close_date, TRUE AS emailed FROM emailed e LEFT JOIN grants g ON g.opp_id = e.opp_id" in sql
+        # a posting that left the table is still counted; so is a sibling added after the program was announced, which was never emailed
+        assert "UNION ALL SELECT g.opp_id, g.title, g.agency_code, g.close_date::date, FALSE FROM grants g" in sql
+        assert "WHERE NOT EXISTS (SELECT 1 FROM emailed e WHERE e.opp_id = g.opp_id)" in sql
+        assert "AND g.close_date::date IN (SELECT g2.close_date::date FROM emailed e JOIN grants g2 ON g2.opp_id = e.opp_id)" in sql
+        assert "EXISTS (SELECT 1 FROM grant_feedback f WHERE f.opp_id = p.opp_id AND f.verdict = -1) AS declined" in sql
+
+    def test_a_program_emailed_as_three_postings_counts_once_and_is_declined_when_any_posting_is(self):
+        rows = [_posting(f"D-{a}", "Instrumentation Program (DURIP)", a, declined=a == "ONR") for a in ("AFOSR", "ARMY", "ONR")]
+        assert admin.feedback_programs(rows) == (1, 1)  # one row the team saw and rejected, not "1 of the 3 grants emailed"
+        assert admin.feedback_programs([dict(r, declined=False) for r in rows]) == (1, 0)
+
+    def test_a_not_for_us_on_a_sibling_that_was_never_emailed_declines_the_program(self):
+        # The sibling was posted after the program went out, so it has no notification, but it scores higher and leads the row.
+        rows = [
+            _posting("A-ARMY", "Instrumentation Program (DURIP)", "ARMY"),
+            _posting("B-NAVY", "Instrumentation Program (DURIP)", "NAVY", declined=True, emailed=False),
+        ]
+        assert admin.feedback_programs(rows) == (1, 1)
+        assert admin.feedback_programs([dict(r, declined=False) for r in rows]) == (1, 0)
+
+    def test_a_program_none_of_whose_postings_was_emailed_is_not_counted_whatever_its_votes(self):
+        rows = [_posting(f"D-{a}", "Instrumentation Program (DURIP)", a, declined=True, emailed=False) for a in ("ARMY", "NAVY")]
+        rows.append(_posting("P-1", "One", "NSF"))
+        assert admin.feedback_programs(rows) == (1, 0)
+
+    def test_plain_grants_programs_of_other_days_and_grants_that_left_the_table_each_count_once(self):
+        rows = [
+            _posting("A", "One", "NSF", declined=True), _posting("B", "Two", "NIH"),
+            _posting("D1", "Program (DURIP)", "AFOSR"), _posting("D2", "Program (DURIP)", "ONR", close=date(2026, 12, 1)),  # another day
+            {"opp_id": "GONE", "title": None, "agency_code": None, "close_date": None, "emailed": True, "declined": True},
+        ]
+        assert admin.feedback_programs(rows) == (5, 2)
+        assert admin.feedback_programs([]) == (0, 0)
+
+    @given(st.lists(st.tuples(st.booleans(), st.booleans()), min_size=1, max_size=5))
+    def test_a_program_is_counted_when_any_posting_was_emailed_and_declined_when_any_posting_has_a_not_for_us(self, flags):
+        rows = [_posting(f"D{i}", "Call (DURIP)", f"AG{i}", declined=declined, emailed=emailed) for i, (emailed, declined) in enumerate(flags)]
+        counted = any(emailed for emailed, _ in flags)
+        assert admin.feedback_programs(rows) == (int(counted), int(counted and any(declined for _, declined in flags)))
+
+    @given(st.lists(st.tuples(st.sampled_from(["A", "B", "C"]), st.sampled_from(["", " (DURIP)", " (MURI)"]), st.sampled_from([date(2026, 11, 6), date(2026, 11, 13), None]),
+                              st.booleans(), st.booleans()), max_size=15, unique_by=lambda t: t[:3]), st.data())
+    def test_the_share_counts_programs_never_more_than_postings_and_does_not_depend_on_order(self, picks, data):
+        rows = [
+            _posting(f"G{i}", f"Call{tag}", agency, declined=declined, close=close, emailed=emailed)
+            for i, (agency, tag, close, declined, emailed) in enumerate(picks)
+        ]
+        emailed, declined = admin.feedback_programs(rows)
+        assert declined <= emailed <= sum(1 for r in rows if r["emailed"])  # a program is emailed through a posting, never on its own
+        assert declined <= sum(1 for r in rows if r["declined"])  # and declined by a posting
+        assert (emailed == 0) == (not any(r["emailed"] for r in rows))
+        assert admin.feedback_programs(data.draw(st.permutations(rows))) == (emailed, declined)
+        assert admin.feedback_programs([dict(r, declined=True) for r in rows]) == (emailed, emailed)  # every posting marked: every program declined
+        assert admin.feedback_programs([dict(r, declined=False) for r in rows]) == (emailed, 0)
+
     def test_the_profile_and_settings_come_with_it(self, fake_db):
         status = admin.admin_status()
         assert status["profile"]["summary"] == "x" and status["profile"]["configured"] is True
         assert status["settings"]["data_source"] == "extract"
 
     def test_a_fresh_database_reports_an_empty_page(self, monkeypatch):
-        answers = {admin._RUNS_SQL: [], admin._HEALTH_SQL: [{}], admin._RECIPIENTS_SQL: [], admin._EMAILS_SQL: []}
+        answers = {admin._RUNS_SQL: [], admin._HEALTH_SQL: [{}], admin._FEEDBACK_SQL: [], admin._RECIPIENTS_SQL: [], admin._EMAILS_SQL: []}
         monkeypatch.setattr(admin, "db_connection", FakeDb(answers).connection)
         monkeypatch.setattr(admin, "_ensure_runs_table", lambda: None)
         monkeypatch.setattr(admin, "load_profile", lambda: Profile())
         status = admin.admin_status()
         assert status["runs"] == [] and status["emails"] == []
         assert status["health"]["open"] is None and status["health"]["scoring_on"] is False
+        assert status["feedback"] == {"votes": None, "emailed": 0, "declined": 0, "days": 30}
         assert status["warnings"] == ["No daily run has been recorded yet.", "Nobody gets email yet: there are no active recipients."]
         json.dumps(status)
 
@@ -398,7 +542,7 @@ class TestAdminStatus:
 
     def test_the_schema_check_looks_for_the_table_and_the_newest_column(self):
         sql = " ".join(admin._SCHEMA_STALE_SQL.split())
-        assert "to_regclass('job_runs') IS NULL" in sql
+        assert "to_regclass('job_runs') IS NULL" in sql and "to_regclass('grant_feedback') IS NULL" in sql
         assert "information_schema.columns" in sql and "column_name = 'stats'" in sql
 
 
@@ -964,6 +1108,24 @@ class TestAdminPage:
     @pytest.mark.parametrize("sink", ["innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval("])
     def test_the_page_never_puts_data_in_as_html(self, sink):
         assert sink not in webapp.ADMIN_HTML
+
+    def test_the_team_section_has_a_feedback_line(self):
+        team = webapp.ADMIN_HTML.split("function renderTeam(data) {")[1].split("\n  }\n")[0]
+        assert "data.feedback" in team and "marked Not for us" in team and "Feedback: no votes yet." in team
+
+    def test_the_keyword_lines_say_so_when_keywords_do_not_filter(self):
+        team = webapp.ADMIN_HTML.split("function renderTeam(data) {")[1].split("\n  }\n")[0]
+        assert "data.health.scores_every_grant" in team and "Keywords do not filter; every open grant is scored." in team
+        assert '"A grant needs "' in team  # still said when keywords decide
+        funnel = webapp.ADMIN_HTML.split("function funnel(stats, profile, health) {")[1].split("\n  }\n")[0]
+        assert 'if (!(health && health.scores_every_grant)) step("matched"' in funnel  # no matched count in that mode
+        assert "funnel(stats, data.profile, data.health)" in webapp.ADMIN_HTML
+
+    def test_the_emails_table_names_an_overview_without_a_cadence(self):
+        """Every overview row is written only when the email showed one (digest.overview_shown), and the
+        profile's day may have changed since, so the label claims nothing about "weekly"."""
+        emails = webapp.ADMIN_HTML.split("function renderEmails(data) {")[1].split("\n  }\n")[0]
+        assert 'if (r.overview) parts.push("overview");' in emails and "weekly" not in emails
 
     def test_the_page_clears_nodes_with_replaceChildren(self):
         assert "replaceChildren()" in webapp.ADMIN_HTML

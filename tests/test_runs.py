@@ -508,6 +508,8 @@ class TestPipelineStats:
 
         fake_extract.last_extract_path = Path("/data") / self.EXTRACT_FILE
         monkeypatch.setenv("GRANTS_DATA_SOURCE", "extract")
+        monkeypatch.delenv("GRANTS_LLM_MODEL", raising=False)  # keywords decide, as without a model server
+        monkeypatch.delenv("OPENAI_MODEL", raising=False)
         monkeypatch.setattr(pipeline, "gen_extract", fake_extract)
         monkeypatch.setattr(pipeline, "process_extract_xml", lambda path: [{"id": 1}, {"id": 2}, {"id": 3}])
         monkeypatch.setattr(pipeline, "load_profile", lambda: Profile(summary="Grid resilience."))
@@ -518,10 +520,11 @@ class TestPipelineStats:
         monkeypatch.setattr(pipeline, "filter_grants_by_keywords", lambda records, *args: records[:2])
         monkeypatch.setattr(pipeline, "load_cached", lambda fingerprint: {})
         monkeypatch.setattr(pipeline, "fetch_relevance", lambda fingerprint: {})
+        monkeypatch.setattr(pipeline, "fetch_votes", lambda: [])
         monkeypatch.setattr(pipeline, "save_cached", lambda *args: None)
         monkeypatch.setattr(
             pipeline, "score_records",
-            lambda records, profile, already_scored: ScoringOutcome(records=records, enabled=True, scored=1, cached=0, failed=1, deferred=0),
+            lambda records, profile, already_scored, settings, feedback: ScoringOutcome(records=records, enabled=True, scored=1, cached=0, failed=1, deferred=0),
         )
         monkeypatch.setattr(pipeline, "description_summarizer", lambda records: records)
         monkeypatch.setattr(pipeline, "_write_csv", lambda records: Path("grants.csv"))
@@ -585,7 +588,7 @@ class TestPipelineStats:
     def test_a_stopped_scorer_is_carried_into_the_stats(self, stubbed, monkeypatch):
         monkeypatch.setattr(
             pipeline, "score_records",
-            lambda records, profile, already_scored: ScoringOutcome(
+            lambda records, profile, already_scored, settings, feedback: ScoringOutcome(
                 records=records, enabled=True, failed=2, abort_reason="cannot reach http://10.0.0.5:18100: Connection error."
             ),
         )

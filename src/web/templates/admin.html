@@ -16,6 +16,7 @@
     --ink: #15221c;
     --mist: #5b6660;
     --fog: #d6dbd7;
+    --line: #858f8a;
     --spruce: #1e5a44;
     --spruce-soft: #dfeae4;
     --signal: #b3261e;
@@ -30,6 +31,7 @@
       --ink: #e6eae7;
       --mist: #97a39d;
       --fog: #2a3630;
+      --line: #66736d;
       --spruce: #6fbf9a;
       --spruce-soft: #1c2f27;
       --signal: #f08a7e;
@@ -125,7 +127,7 @@
   .runs tr.logrow td, .runs tr.logrow { border-top: 0; }
   .runs tr.logrow td { padding: 0 0 12px; }
   .runs tr.run.target { background: var(--spruce-soft); }
-  .toggle { background: none; border: 1px solid var(--fog); border-radius: 4px; padding: 3px 10px; color: var(--spruce); font-size: 13px; cursor: pointer; white-space: nowrap; }
+  .toggle { background: none; border: 1px solid var(--line); border-radius: 4px; padding: 3px 10px; color: var(--spruce); font-size: 13px; cursor: pointer; white-space: nowrap; }
   .toggle:hover { border-color: var(--spruce); }
 
   /* A run's log */
@@ -431,7 +433,7 @@
     return row;
   }
 
-  function funnel(stats, profile) {
+  function funnel(stats, profile, health) {
     const parts = [];
     const step = (key, text) => { if (isNum(stats[key])) parts.push(text(stats[key])); };
     const keepForecasts = profile && profile.include_forecasted;
@@ -443,7 +445,11 @@
     if (exclusions || (isNum(stats.after_agency) && stats.after_agency !== (keepForecasts ? stats.open : stats.after_forecast))) {
       step("after_agency", (n) => num(n) + " after agency exclusions");
     }
-    step("matched", (n) => num(n) + " matched keywords");
+    // A model scores every open grant (sent_to_model); without one, keywords decide (matched).
+    // Keywords filter nothing in the first case, so an older run's matched count is left out.
+    step("ineligible", (n) => num(n) + " not open to your applicant type (scored 0)");
+    step("sent_to_model", (n) => num(n) + " candidates for scoring");
+    if (!(health && health.scores_every_grant)) step("matched", (n) => num(n) + " matched keywords");
     return parts.join(", ");
   }
 
@@ -463,7 +469,7 @@
     if (source) {
       const stats = statsOf(source);
       lines.push((SOURCES[stats.source] || "Source not recorded") + (stats.source_file ? ", " + stats.source_file : ""));
-      lines.push(funnel(stats, data.profile));
+      lines.push(funnel(stats, data.profile, data.health));
       lines.push({ text: "From the run of " + when(source.started_at) + ".", className: "small" });
     } else {
       lines.push("No run has recorded its numbers yet.");
@@ -746,7 +752,9 @@
     else box.append(el("p", "The research profile has not been written yet, so scoring is off."));
     if (p.institution) box.append(el("p", "Institution: " + p.institution + "."));
     const threshold = p.keyword_threshold;
-    box.append(el("p", "Keywords: " + (p.keywords || []).join(", ") + ". A grant needs " + plural(threshold, "match", "matches") + "."));
+    const everyGrant = data.health && data.health.scores_every_grant;
+    const rule = everyGrant ? "Keywords do not filter; every open grant is scored." : "A grant needs " + plural(threshold, "match", "matches") + ".";
+    box.append(el("p", "Keywords: " + (p.keywords || []).join(", ") + ". " + rule));
     const rules = [
       "Emails grants scoring " + p.min_score + " or higher.",
       "Reminders " + words(p.reminder_days) + " days before.",
@@ -756,6 +764,11 @@
       "The dashboard looks ahead " + words(p.horizons) + " days.",
     ];
     box.append(el("p", rules.join(" ")));
+    const fb = data.feedback || {};
+    const marked = !fb.emailed ? "No grants were emailed in the last " + plural(fb.days, "day") + "."
+      : num(fb.declined) + " of the " + plural(fb.emailed, "grant") + " emailed in the last " + plural(fb.days, "day")
+        + " (" + Math.round(100 * (fb.declined || 0) / fb.emailed) + "%) " + (fb.declined === 1 ? "was" : "were") + " marked Not for us.";
+    box.append(el("p", fb.votes ? "Feedback: " + plural(fb.votes, "vote") + ". " + marked : "Feedback: no votes yet."));
 
     fillTable($("people"), ["Person", "Status", "Own threshold", "Last email"], data.recipients.map((r) => {
       const who = el("td", r.name || r.email, "email");
@@ -776,7 +789,7 @@
       if (r.reminder) parts.push(plural(r.reminder, "reminder"));
       if (r.changed) parts.push(plural(r.changed, "deadline change"));
       if (r.removed) parts.push(plural(r.removed, "tracked grant", "tracked grants") + " no longer open");
-      if (r.overview) parts.push("weekly overview");
+      if (r.overview) parts.push("overview");
       return [el("td", dayOnly(r.day), "nowrap num"), el("td", r.email, "email"), el("td", parts.join(", ") || "–")];
     }), "No email has been sent yet.");
   }

@@ -1,10 +1,14 @@
 import os
 from contextlib import contextmanager
+from datetime import date, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
+
+from grants.display import Posting, program_of
+from grants.feedback import Votes, clean_text, relevant_postings
 
 _SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
 
@@ -124,15 +128,15 @@ def open_grant_sql(alias: str = "g") -> str:
     )
 
 
-def fetch_relevance(profile_fingerprint: str) -> Dict[str, Dict[str, Any]]:
-    """Scores already stored for this profile, keyed by opportunity number."""
+def fetch_relevance(key: str) -> Dict[str, Dict[str, Any]]:
+    """Scores already stored under this score key (``relevance.score_key``), keyed by opportunity number."""
     query = """
         SELECT opp_id, relevance_score, relevance_reason, summary, relevance_model, relevance_scored_at
         FROM grants
         WHERE relevance_profile = %s AND relevance_score IS NOT NULL;
     """
     with db_connection() as conn, conn.cursor() as cur:
-        cur.execute(query, (profile_fingerprint,))
+        cur.execute(query, (key,))
         rows = cur.fetchall()
     return {
         opp_id: {
@@ -159,9 +163,9 @@ def fetch_upcoming(
     conditions = [
         open_grant_sql("g"),
         "g.close_date IS NOT NULL",
-        "g.close_date < CURRENT_DATE + (%s || ' days')::interval",
+        "g.close_date <= %s",  # inclusive: a grant closing exactly `days` out is within `days`
     ]
-    params: List[Any] = [int(days)]
+    params: List[Any] = [date.today() + timedelta(days=int(days))]
 
     if not include_forecasted:
         conditions.append("g.opportunity_status <> 'Forecasted'")
@@ -224,3 +228,111 @@ def list_watchlist() -> List[Dict[str, Any]]:
     with db_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(query)
         return [dict(row) for row in cur.fetchall()]
+
+
+# The grants that share a close date with one grant: every posting it could be folded with.
+_PROGRAM_SQL = """
+    SELECT opp_id, title, agency_code, close_date::date
+    FROM grants
+    WHERE close_date::date = (SELECT close_date::date FROM grants WHERE opp_id = %s);
+"""
+
+
+def _program_opp_ids(cur: Any, opp_id: str) -> List[str]:
+    """``opp_id`` and the other postings of its program, whatever filter the person was looking through.
+
+    Read from every grant, not from the rows the dashboard showed, so a search or a score
+    floor that hides a sibling does not leave that sibling's vote behind.
+    """
+    cur.execute(_PROGRAM_SQL, (opp_id,))
+    postings = [Posting(opp_id=o, title=t or "", agency_code=a or "", close=c) for o, t, a, c in cur.fetchall()]
+    return list(program_of(opp_id, postings))
+
+
+def record_vote(opp_id: str, email: str, verdict: int) -> bool:
+    """Store ``email``'s verdict (1 or -1) on a grant, replacing their earlier one; False when there is no such grant.
+
+    A person has one vote per program, so their votes on the program's other postings
+    are removed in the same transaction. The title, agency and summary are copied from
+    the grants row, cleaned, so the vote can still serve as an example after the grant
+    leaves the extract.
+    """
+    query = """
+        INSERT INTO grant_feedback (opp_id, email, verdict, title, agency, summary)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (opp_id, email) DO UPDATE SET verdict = EXCLUDED.verdict, created_at = NOW();
+    """
+    with db_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT title, agency, summary FROM grants WHERE opp_id = %s;", (opp_id,))
+        row = cur.fetchone()
+        if row is None:
+            return False
+        title, agency, summary = (clean_text(value) or None for value in row)
+        others = [other for other in _program_opp_ids(cur, opp_id) if other != opp_id]
+        if others:
+            cur.execute("DELETE FROM grant_feedback WHERE email = %s AND opp_id = ANY(%s);", (email, others))
+        cur.execute(query, (opp_id, email, verdict, title, agency, summary))
+    return True
+
+
+def clear_vote(opp_id: str, email: str) -> bool:
+    """Take back ``email``'s own vote on a grant's program, whichever posting it sits on; False when they had none."""
+    with db_connection() as conn, conn.cursor() as cur:
+        ids = _program_opp_ids(cur, opp_id)
+        cur.execute("DELETE FROM grant_feedback WHERE email = %s AND opp_id = ANY(%s);", (email, ids))
+        return cur.rowcount > 0
+
+
+def fetch_votes() -> List[Dict[str, Any]]:
+    """Every vote, with the grant's title, agency and summary as they were when it was cast."""
+    query = "SELECT opp_id, email, verdict, title, agency, summary, created_at FROM grant_feedback;"
+    with db_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(query)
+        return [dict(row) for row in cur.fetchall()]
+
+
+def fetch_vote_counts(opp_ids: Sequence[str], email: Optional[str] = None) -> Dict[str, Votes]:
+    """The votes on these grants, and ``email``'s own verdict on each; a grant nobody voted on is left out."""
+    if not opp_ids:
+        return {}
+    query = """
+        SELECT opp_id,
+               COUNT(*) FILTER (WHERE verdict = 1),
+               COUNT(*) FILTER (WHERE verdict = -1),
+               MAX(verdict) FILTER (WHERE email = %s)
+        FROM grant_feedback
+        WHERE opp_id = ANY(%s)
+        GROUP BY opp_id;
+    """
+    with db_connection() as conn, conn.cursor() as cur:
+        cur.execute(query, (email, list(opp_ids)))
+        return {opp_id: Votes(int(up), int(down), mine) for opp_id, up, down, mine in cur.fetchall()}
+
+
+# The open grants that could be folded with a posting: those that share its close date, and the
+# posting itself, which is a program of one when it has no date. Only open ones, as the planner
+# groups only those, so a closed or archived sibling's votes do not count toward the program.
+_PROGRAMS_OF_SQL = f"""
+    SELECT g.opp_id, g.title, g.agency_code, g.close_date::date
+    FROM grants g
+    WHERE ({open_grant_sql("g")})
+      AND (g.opp_id = ANY(%s)
+           OR g.close_date::date IN (SELECT close_date::date FROM grants WHERE opp_id = ANY(%s)));
+"""
+
+
+def fetch_relevant_ids() -> List[str]:
+    """Every posting of each program the team marked Relevant on balance (see ``relevant_postings``).
+
+    A program's votes are summed over its open postings, so a Not for us on an open sibling counts.
+    Raises ``UndefinedTable`` until the first run has created grant_feedback.
+    """
+    with db_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT opp_id, SUM(verdict)::int FROM grant_feedback GROUP BY opp_id;")
+        nets = {opp_id: int(net) for opp_id, net in cur.fetchall()}
+        liked = [opp_id for opp_id, net in nets.items() if net > 0]
+        if not liked:
+            return []  # a program with no posting on the plus side cannot come out ahead
+        cur.execute(_PROGRAMS_OF_SQL, (liked, liked))
+        postings = [Posting(opp_id=o, title=t or "", agency_code=a or "", close=c) for o, t, a, c in cur.fetchall()]
+    return relevant_postings(postings, nets)

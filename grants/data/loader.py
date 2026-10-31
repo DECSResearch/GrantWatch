@@ -10,6 +10,7 @@ from typing import Any, Dict, Iterable, Set
 
 from grants.sql_utils import db_connection
 from grants_data.normalize import strip_html
+from llm_utils.relevance import RULE_MODEL
 
 from logs.status_logger import logger
 
@@ -128,8 +129,10 @@ _UPSERT = """
         close_date = EXCLUDED.close_date,
         archive_date = EXCLUDED.archive_date,
         description = EXCLUDED.description,
-        -- A model-written summary replaces the old one; a truncated fallback never does.
+        -- A model-written summary replaces the old one; a truncated fallback never does. A rule
+        -- score (the last parameter) carries no model summary, only that fallback.
         summary = CASE WHEN EXCLUDED.relevance_score IS NOT NULL
+                            AND EXCLUDED.relevance_model IS DISTINCT FROM %s
                        THEN EXCLUDED.summary
                        ELSE COALESCE(grants.summary, EXCLUDED.summary) END,
         agency = COALESCE(EXCLUDED.agency, grants.agency),
@@ -200,6 +203,7 @@ def load_grants_from_records(records: Iterable[Dict[str, Any]]) -> LoadSummary:
                     record.get("RELEVANCE_MODEL") or None,
                     record.get("RELEVANCE_PROFILE") or None,
                     _parse_timestamp(record.get("RELEVANCE_SCORED_AT")),
+                    RULE_MODEL,
                 ),
             )
             row = cur.fetchone()

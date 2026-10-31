@@ -47,6 +47,21 @@ CREATE TABLE IF NOT EXISTS grant_watchlist (
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+-- The team's verdict on a grant: 1 Relevant, -1 Not for us, one row per person
+-- per grant (a new vote replaces the old one). The title, agency and summary
+-- are copied from the grant when the vote is cast, so it can still serve as an
+-- example for the scorer after the grant leaves the extract.
+CREATE TABLE IF NOT EXISTS grant_feedback (
+    opp_id TEXT NOT NULL,
+    email TEXT NOT NULL,
+    verdict SMALLINT NOT NULL CHECK (verdict IN (-1, 1)),
+    title TEXT,
+    agency TEXT,
+    summary TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (opp_id, email)
+);
+
 -- People who get the email. The team is managed with `python main.py
 -- recipients`; GRANTS_NOTIFY_RECIPIENTS is merged in without undoing an
 -- unsubscribe.

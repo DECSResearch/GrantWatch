@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from grants.data.loader import LoadSummary, load_grants_from_records
 from grants.profile import Profile, load_profile
-from grants.sql_utils import fetch_relevance
+from grants.sql_utils import fetch_relevance, fetch_votes
 
 from grants_data.date_filter_data import date_filter_json_data, drop_closed_grants
 from grants_data.download_extract import gen_extract
@@ -23,7 +23,7 @@ from grants_data.retention import keep_limit, prune_old_files
 from grants_data.keyword_filter_data import filter_grants_by_keywords
 from llm_utils.gpt_summarizer import description_summarizer
 from llm_utils.keywords_gen import keyword_extractor
-from llm_utils.relevance import SCORE_FIELD, score_records
+from llm_utils.relevance import SCORE_FIELD, LLMSettings, score_by_rule, score_key, score_records
 from llm_utils.relevance_cache import load_cached, save_cached
 from logs.status_logger import logger
 
@@ -158,19 +158,39 @@ def _drop_excluded_agencies(records: List[Dict[str, Any]], profile: Profile) -> 
     return kept
 
 
-def _score_relevance(records: List[Dict[str, Any]], profile: Profile) -> List[Dict[str, Any]]:
-    fingerprint = profile.fingerprint()
-    cached = load_cached(fingerprint)
+def _split_by_eligibility(records: List[Dict[str, Any]], profile: Profile) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Split into (open to the profile's applicant type or unknown, known to leave it out), order kept."""
+    eligible: List[Dict[str, Any]] = []
+    excluded: List[Dict[str, Any]] = []
+    for record in records:
+        (excluded if profile.excludes_applicants(record.get("ELIGIBLE_APPLICANT_CODES")) else eligible).append(record)
+    if excluded:
+        logger("info", f"Eligibility codes: {len(excluded)} of {len(records)} records are not open to this applicant type")
+    return eligible, excluded
+
+
+def _score_relevance(
+    records: List[Dict[str, Any]], profile: Profile, settings: Optional[LLMSettings] = None
+) -> List[Dict[str, Any]]:
+    settings = settings or LLMSettings.from_env()
+    key = score_key(profile, settings.model)
+    cached = load_cached(key)
     try:
-        cached.update(fetch_relevance(fingerprint))
+        cached.update(fetch_relevance(key))
     except Exception as exc:
         logger("warning", f"Could not read stored relevance scores from the database: {exc}")
-    outcome = score_records(records, profile, already_scored=cached)
+    votes: List[Dict[str, Any]] = []
+    if settings.enabled and profile.is_configured:
+        try:
+            votes = fetch_votes()
+        except Exception as exc:
+            logger("warning", f"Could not read the team's votes from the database: {exc}")
+    outcome = score_records(records, profile, already_scored=cached, settings=settings, feedback=votes)
     onlyTheGoodStuff.last_stats.update(  # type: ignore[attr-defined]
         scored=outcome.scored, cached=outcome.cached, failed=outcome.failed, deferred=outcome.deferred
     )
     if outcome.new_entries:
-        save_cached(fingerprint, outcome.new_entries)
+        save_cached(key, outcome.new_entries)
     if outcome.abort_reason:
         onlyTheGoodStuff.last_stats["scoring_abort"] = outcome.abort_reason  # type: ignore[attr-defined]
     return outcome.records
@@ -226,14 +246,30 @@ def onlyTheGoodStuff() -> Tuple[bool, List[Dict[str, object]]]:
     agency_filtered = _drop_excluded_agencies(status_sorted_data, profile)
     stats["after_agency"] = len(agency_filtered)
 
-    keyword_json_data = filter_grants_by_keywords(agency_filtered, "FUNDING_DESCRIPTION", keywords, threshold)
-    stats["matched"] = len(keyword_json_data)
-    if len(keyword_json_data) == 0:
-        logger("warning", "No data found after keyword filtering.")
-        return _finish(True, [], reason="No grants matched the profile keywords.")
-    logger("info", f"Filtered keyword length: {len(keyword_json_data)}")
-
-    scored_data = _score_relevance(keyword_json_data, profile)
+    settings = LLMSettings.from_env()
+    if settings.enabled and profile.is_configured:
+        # The model sees every open grant: keywords miss relevant ones, so here they only
+        # fill in MATCHED_KEYWORDS for display. Grants.gov's applicant codes are facts, so
+        # a grant that leaves this applicant out is scored 0 by rule and never sent.
+        if len(agency_filtered) == 0:
+            logger("warning", "No data found after agency exclusions.")
+            return _finish(True, [], reason="No grants were left after agency exclusions.")
+        candidates, not_open = _split_by_eligibility(
+            filter_grants_by_keywords(agency_filtered, "FUNDING_DESCRIPTION", keywords, 0), profile
+        )
+        if profile.applicant_codes:
+            stats["ineligible"] = len(not_open)
+        stats["sent_to_model"] = len(candidates)
+        why = f"Not open to {profile.applicant_type or 'your applicant type'} (Grants.gov eligibility codes)"
+        scored_data = _score_relevance(candidates, profile, settings) + score_by_rule(not_open, profile, why)
+    else:
+        keyword_json_data = filter_grants_by_keywords(agency_filtered, "FUNDING_DESCRIPTION", keywords, threshold)
+        stats["matched"] = len(keyword_json_data)
+        if len(keyword_json_data) == 0:
+            logger("warning", "No data found after keyword filtering.")
+            return _finish(True, [], reason="No grants matched the profile keywords.")
+        logger("info", f"Filtered keyword length: {len(keyword_json_data)}")
+        scored_data = _score_relevance(keyword_json_data, profile, settings)
 
     summarized_json_data = description_summarizer(scored_data)
     if summarized_json_data is None or len(summarized_json_data) == 0:

@@ -9,16 +9,19 @@ questions about the same data.
 
 ## How it fits together
 
-1. `config/research_profile.yml` describes the research program, the keyword
-   pre-filter, agencies to skip, the score below which a grant is not worth an
-   email, and the deadline horizons.
+1. `config/research_profile.yml` describes the research program, the
+   applicant type's Grants.gov codes, the keyword pre-filter, agencies to skip,
+   the score below which a grant is not worth an email, and the deadline
+   horizons.
 2. `python main.py` runs two steps. **Ingest** downloads the daily Grants.gov
    extract (about 83,000 records), keeps the ones still open (not past their
-   close date and not archived), drops excluded agencies, applies the keyword
-   pre-filter, scores what is unscored with an OpenAI-compatible model, writes
-   a CSV and upserts Postgres. **Notify** then emails each recipient whatever
-   they have not been told yet (see [Email](#email)). Notify runs even when
-   the download fails, and the run exits non-zero if either step failed.
+   close date and not archived), drops excluded agencies, scores what is
+   unscored with an OpenAI-compatible model (every open grant goes to the
+   model; the keyword pre-filter applies only when no model is set up),
+   writes a CSV and upserts Postgres. **Notify** then emails each recipient
+   whatever they have not been told yet (see [Email](#email)). Notify runs
+   even when the download fails, and the run exits non-zero if either step
+   failed.
 3. The dashboard (`src/web/app.py`, deployed on Vercel) reads Postgres: a
    90-day timeline, grants grouped by deadline, relevance scores with the
    model's reason, and a Track button for grants the group intends to pursue.
@@ -67,7 +70,17 @@ those, and tolerates reasoning tags and code fences. Scores are cached per
 profile in the database and in `grants_data/cache/`, so each run only scores
 grants it has not seen; the first run is capped by
 `GRANTS_RELEVANCE_MAX_PER_RUN` (soonest deadlines first) and catches up on
-later runs. Changing the profile summary rescores everything.
+later runs. Changing the profile summary or the model rescores everything, and so does
+a release that changes the scoring prompt (`SCORER_VERSION`).
+
+Keywords do not decide what the model sees: the keyword filter dropped
+relevant grants whose descriptions are short, so with a model every open
+grant is scored and `MATCHED_KEYWORDS` is only a hint on the dashboard. The
+one rule applied first is a fact from Grants.gov: set `applicant_codes` in
+the profile (for example `["06"]` for a public university) and a grant whose
+codes are known and leave that type out is scored 0 ("Not open to ...") with
+no model call, but is still loaded. Grants that list unrestricted (99) or
+"others" (25), or no codes, always go to the model.
 
 ### Running it
 
@@ -102,9 +115,10 @@ next run, a rerun sends nothing twice, and two schedulers can both run (a
 lease in `notify_lock` keeps them from sending at the same moment). Emails
 are trimmed to stay under Gmail's ~102 KB clipping limit, carry a one-click
 unsubscribe link when `GRANTS_DASHBOARD_URL` is set, and go to each recipient
-separately. Until scoring is set up, every new keyword match is announced,
-most keyword hits first, so the profile's `keywords` are what decide what
-you hear about; name your research fields there.
+separately. Until scoring is set up, every grant that matches at least
+`keyword_threshold` keywords (and never fewer than one) is announced, most
+hits first, so the profile's `keywords` are what decide what you hear about;
+name your research fields there.
 
 Recipients live in the `recipients` table. `python main.py recipients
 add|remove|list` manages them, and addresses in `GRANTS_NOTIFY_RECIPIENTS`
@@ -131,14 +145,51 @@ PYTHONPATH=. uvicorn web.app:app --app-dir src --reload   # http://localhost:800
 API: `GET /api/grants` (`q`, `min_score`, `closing_within`,
 `include_forecasted`, `watched_only`, `limit`), `GET /api/grants/{id}`,
 `GET /api/watchlist`, `GET /api/profile`, and for signed-in team members
-`POST /api/watchlist` and `DELETE /api/watchlist/{id}`. Sign-in:
+`POST /api/watchlist` and `DELETE /api/watchlist/{id}`, and
+`POST /api/feedback` (`{"opp_id": ..., "verdict": 1}` for Relevant or `-1` for
+Not for us) and `DELETE /api/feedback/{id}`. Sign-in:
 `POST /api/login` emails a link to a recipient, `GET /auth` sets the session,
 `GET /api/session`, `POST /api/logout`. `GET|POST /unsubscribe?token=` serves
 the links in the emails (a GET only asks; mail scanners fetch links).
 
-Reading is open to anyone with the URL; changing the tracked list needs
-`GRANTS_SECRET_KEY` on the server and a sign-in. Without the key the
-dashboard is read-only.
+`closing_within=N` includes a grant closing exactly N days out. `/api/grants`
+reports `total` (how many postings matched, before `limit`) beside
+`count` (the rows returned, a program posted by several services as one), and
+`/api/profile` reports `data.fit_count`, the open grants scoring at least the
+team threshold. The page opens on any closing date. When `limit` cuts the list
+short it says "Showing N grants from the first 500 of M postings", where N is
+the rows drawn and M is `total`.
+
+Reading is open to anyone with the URL; changing the tracked list or voting
+needs `GRANTS_SECRET_KEY` on the server and a sign-in. Without the key the
+dashboard is read-only: it hides Track and the vote buttons, and marks the
+grants the MCP server tracked with a plain "Tracked" label.
+
+### Team feedback
+
+A team member can mark a grant Relevant or Not for us (one vote each, and a
+new vote replaces the old one; the votes are in the `grant_feedback` table).
+A program posted by several services is one grant to vote on: a person's vote
+sits on one of its postings, and voting or taking the vote back through any
+posting replaces or removes it on the others.
+`GET /api/grants` adds `my_verdict` (null when signed out), `my_vote_opp_id`
+(the posting that holds the viewer's vote, else the row's own, which is where a
+new vote goes), `votes_up`, `votes_down`, `team_verdict` (1, -1, or 0 for none
+or a tie) and `hidden` (the team said Not for us and nobody tracks it) to each
+row. The votes work on the team's side of the pipeline directly, without
+rescoring anything:
+
+- a grant the team marked Not for us is left out of the email's new grants and
+  weekly overview, unless it is tracked; one marked Relevant counts as meeting
+  the score threshold; a tie is no verdict. A program posted by several
+  services is judged on its open postings' votes together. The dashboard's
+  score bar (`min_score`) lets a grant or program the team marked Relevant
+  through, like a tracked grant, so new grants the email lists because of the
+  team's mark also show on the default dashboard;
+- up to 10 marked grants (5 of each, the most recent first) go to the model
+  with every scoring request as examples, so grants scored from then on lean
+  toward what the team wants. They are not part of the score cache key, so
+  voting never rescores old grants.
 
 ## Admin page
 
@@ -151,8 +202,10 @@ break?". It is read-only and shows:
   database, a live check of the model server (with a "Check now" button), and
   email;
 - the last 15 days of runs, each with its numbers and the log lines it wrote;
-- the team (research profile, thresholds, recipients), the emails sent per
-  day, and the settings that shape a run. No keys or passwords.
+- the team (research profile, thresholds, recipients, how many votes there
+  are and what share of the grants emailed in the last 30 days someone marked
+  Not for us, counting a program posted by several services once), the emails
+  sent per day, and the settings that shape a run. No keys or passwords.
 
 It asks for HTTP Basic credentials: each person has a named account in
 `GRANTS_ADMIN_USERS`, one `name:scrypt$...` entry per person (comma or newline
@@ -273,6 +326,18 @@ Configure these (see `.env.example`):
    npm run dev
    ```
    Visit `http://localhost:3000`. The UI will call the backend at `NEXT_PUBLIC_DOC_CHECKER_API` (defaults to `http://localhost:8000`).
+3. **Tests**
+   ```bash
+   pip install -r requirements-dev.txt
+   pytest tests/ -q
+   ```
+   `tests/e2e/` runs the real flow (ingest through a model over HTTP, the email,
+   the dashboard and admin APIs, a vote, and the failure paths) against a real
+   Postgres and a fake model server. It is skipped unless `GRANTS_TEST_POSTGRES_URL`
+   is set to a database you can create schemas in, for example
+   `GRANTS_TEST_POSTGRES_URL=postgresql://you@localhost:5432/grantwatch_e2e_tests pytest tests/e2e -q`.
+   Each test module makes its own schema and drops it afterwards. CI runs it
+   against a `postgres:16` service.
 
 ## AWS Deployment
 1. **Package the Lambda**

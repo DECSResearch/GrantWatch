@@ -1,0 +1,243 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A small Grants.gov daily extract for the end-to-end tests, in the extract's own format.
+  {{+N}} / {{-N}} is a date N days from the day the test runs (MMDDYYYY, as Grants.gov writes
+  it); tests/e2e/harness.py renders them. Every close date is at least 2 days from a boundary
+  the code treats differently (today, 7, 30, 60 and 90 days), so a run that straddles midnight
+  or a time zone reads the same. The one fixed date is the placeholder close date, 2076.
+
+  The "profile" keywords are cyber, security and trusted. What each grant is for:
+    E2E-TRUSTED      urgent, a 4: comes first in the email though it scores lower than the next
+    E2E-NOKW         urgent, a 5, and its description has no profile keyword
+    E2E-BULLETS      a 5; the "Institutions of Higher Education" bullet is past character 700
+    E2E-ENTITY       a 5; the title is escaped twice, as Grants.gov sometimes sends it
+    E2E-PLACEHOLDER  a 5; close date in 2076 and a ceiling of 999,999,999
+    DURIP-*          one program posted by three services, same close date
+    EXP-2020/2026    a solicitation and its renewal, six years apart
+    E2E-BROAD        a broad call, a 2
+    E2E-STATES       only state governments may apply: the pre-check scores it 0 itself
+    E2E-NOCODES      no EligibleApplicants at all: kept, goes to the model
+    E2E-CLOSED       closed five days ago: dropped
+    E2E-FORECAST     a forecast: estimated dates
+-->
+<Grants xmlns="http://apply.grants.gov/system/OpportunityDetail-V1.0">
+    <OpportunitySynopsisDetail_1_0>
+        <OpportunityID>800001</OpportunityID>
+        <OpportunityTitle>Foundations of Trusted Systems</OpportunityTitle>
+        <OpportunityNumber>E2E-TRUSTED</OpportunityNumber>
+        <OpportunityCategory>D</OpportunityCategory>
+        <FundingInstrumentType>G</FundingInstrumentType>
+        <CategoryOfFundingActivity>ST</CategoryOfFundingActivity>
+        <EligibleApplicants>06</EligibleApplicants>
+        <EligibleApplicants>20</EligibleApplicants>
+        <AgencyCode>DOD-AFRL</AgencyCode>
+        <AgencyName>Air Force Research Laboratory</AgencyName>
+        <PostDate>{{-20}}</PostDate>
+        <CloseDate>{{+12}}</CloseDate>
+        <AwardCeiling>750000</AwardCeiling>
+        <Description>Research on trusted computing platforms and cyber resilience for embedded systems.</Description>
+    </OpportunitySynopsisDetail_1_0>
+    <OpportunitySynopsisDetail_1_0>
+        <OpportunityID>800002</OpportunityID>
+        <OpportunityTitle>Dependable Control Software for Critical Infrastructure</OpportunityTitle>
+        <OpportunityNumber>E2E-NOKW</OpportunityNumber>
+        <OpportunityCategory>D</OpportunityCategory>
+        <FundingInstrumentType>G</FundingInstrumentType>
+        <CategoryOfFundingActivity>EN</CategoryOfFundingActivity>
+        <EligibleApplicants>06</EligibleApplicants>
+        <AgencyCode>DOE-SC</AgencyCode>
+        <AgencyName>Department of Energy Office of Science</AgencyName>
+        <PostDate>{{-15}}</PostDate>
+        <CloseDate>{{+20}}</CloseDate>
+        <Description>Funds reliable control software for the operators of critical infrastructure and their university partners.</Description>
+    </OpportunitySynopsisDetail_1_0>
+    <OpportunitySynopsisDetail_1_0>
+        <OpportunityID>800003</OpportunityID>
+        <OpportunityTitle>Cybersecurity Innovation for Research Infrastructure</OpportunityTitle>
+        <OpportunityNumber>E2E-BULLETS</OpportunityNumber>
+        <OpportunityCategory>D</OpportunityCategory>
+        <FundingInstrumentType>G</FundingInstrumentType>
+        <CategoryOfFundingActivity>ST</CategoryOfFundingActivity>
+        <EligibleApplicants>25</EligibleApplicants>
+        <AdditionalInformationOnEligibility>Who May Submit Proposals: The categories of proposers eligible to submit proposals to the National Science Foundation are identified in the NSF Proposal and Award Policies and Procedures Guide, Chapter I.E. Unaffiliated individuals may not submit, and a proposal from an organization that is not eligible is returned without review. Before a proposal is prepared, the organization should confirm its registration is current in the federal award systems, because a lapse blocks the submission and cannot be repaired after the deadline has passed. Proposals may be submitted by the following: - For-profit organizations: U.S.-based commercial organizations, including small businesses, with strong capabilities in scientific or engineering research or education. - Non-profit, non-academic organizations: Independent museums, observatories, research laboratories, professional societies and similar organizations in the U.S. that are directly associated with educational or research activities. - Institutions of Higher Education: Universities and two- and four-year colleges (including community colleges) accredited in, and having a campus located in the U.S., acting on behalf of their faculty members. - Federal agencies and laboratories: Only through a separate arrangement with the program.</AdditionalInformationOnEligibility>
+        <AgencyCode>NSF</AgencyCode>
+        <AgencyName>National Science Foundation</AgencyName>
+        <PostDate>{{-60}}</PostDate>
+        <CloseDate>{{+45}}</CloseDate>
+        <Description>Supports cyber security practice for the scientific community and its research cyberinfrastructure.</Description>
+    </OpportunitySynopsisDetail_1_0>
+    <OpportunitySynopsisDetail_1_0>
+        <OpportunityID>800004</OpportunityID>
+        <OpportunityTitle>Cyber Research &amp;amp; Workforce Education</OpportunityTitle>
+        <OpportunityNumber>E2E-ENTITY</OpportunityNumber>
+        <OpportunityCategory>D</OpportunityCategory>
+        <FundingInstrumentType>G</FundingInstrumentType>
+        <CategoryOfFundingActivity>ED</CategoryOfFundingActivity>
+        <EligibleApplicants>06</EligibleApplicants>
+        <EligibleApplicants>20</EligibleApplicants>
+        <AgencyCode>DOC-NIST</AgencyCode>
+        <AgencyName>National Institute of Standards and Technology</AgencyName>
+        <PostDate>{{-30}}</PostDate>
+        <CloseDate>{{+70}}</CloseDate>
+        <Description>Education and research on cyber security workforce development at universities.</Description>
+    </OpportunitySynopsisDetail_1_0>
+    <OpportunitySynopsisDetail_1_0>
+        <OpportunityID>800005</OpportunityID>
+        <OpportunityTitle>Long-term Secure Infrastructure Partnership</OpportunityTitle>
+        <OpportunityNumber>E2E-PLACEHOLDER</OpportunityNumber>
+        <OpportunityCategory>D</OpportunityCategory>
+        <FundingInstrumentType>CA</FundingInstrumentType>
+        <CategoryOfFundingActivity>ST</CategoryOfFundingActivity>
+        <EligibleApplicants>99</EligibleApplicants>
+        <AgencyCode>DHS-CISA</AgencyCode>
+        <AgencyName>Cybersecurity and Infrastructure Security Agency</AgencyName>
+        <PostDate>{{-90}}</PostDate>
+        <CloseDate>12312076</CloseDate>
+        <AwardCeiling>999999999</AwardCeiling>
+        <EstimatedTotalProgramFunding>999999999</EstimatedTotalProgramFunding>
+        <Description>An open-ended partnership for security research on national infrastructure.</Description>
+    </OpportunitySynopsisDetail_1_0>
+    <OpportunitySynopsisDetail_1_0>
+        <OpportunityID>800006</OpportunityID>
+        <OpportunityTitle>Defense University Research Instrumentation Program (DURIP)</OpportunityTitle>
+        <OpportunityNumber>DURIP-ARMY-26</OpportunityNumber>
+        <OpportunityCategory>D</OpportunityCategory>
+        <FundingInstrumentType>G</FundingInstrumentType>
+        <CategoryOfFundingActivity>ST</CategoryOfFundingActivity>
+        <EligibleApplicants>06</EligibleApplicants>
+        <EligibleApplicants>20</EligibleApplicants>
+        <AgencyCode>DOD-ARO</AgencyCode>
+        <AgencyName>Army Research Office</AgencyName>
+        <PostDate>{{-25}}</PostDate>
+        <CloseDate>{{+35}}</CloseDate>
+        <Description>Equipment for university research of interest to the Army, including cyber ranges.</Description>
+    </OpportunitySynopsisDetail_1_0>
+    <OpportunitySynopsisDetail_1_0>
+        <OpportunityID>800007</OpportunityID>
+        <OpportunityTitle>Defense University Research Instrumentation Program (DURIP)</OpportunityTitle>
+        <OpportunityNumber>DURIP-ONR-26</OpportunityNumber>
+        <OpportunityCategory>D</OpportunityCategory>
+        <FundingInstrumentType>G</FundingInstrumentType>
+        <CategoryOfFundingActivity>ST</CategoryOfFundingActivity>
+        <EligibleApplicants>06</EligibleApplicants>
+        <EligibleApplicants>20</EligibleApplicants>
+        <AgencyCode>DOD-ONR</AgencyCode>
+        <AgencyName>Office of Naval Research</AgencyName>
+        <PostDate>{{-25}}</PostDate>
+        <CloseDate>{{+35}}</CloseDate>
+        <Description>Equipment for university research of interest to the Navy, including cyber ranges.</Description>
+    </OpportunitySynopsisDetail_1_0>
+    <OpportunitySynopsisDetail_1_0>
+        <OpportunityID>800008</OpportunityID>
+        <OpportunityTitle>Defense University Research Instrumentation Program (DURIP)</OpportunityTitle>
+        <OpportunityNumber>DURIP-AFOSR-26</OpportunityNumber>
+        <OpportunityCategory>D</OpportunityCategory>
+        <FundingInstrumentType>G</FundingInstrumentType>
+        <CategoryOfFundingActivity>ST</CategoryOfFundingActivity>
+        <EligibleApplicants>06</EligibleApplicants>
+        <EligibleApplicants>20</EligibleApplicants>
+        <AgencyCode>DOD-AFOSR</AgencyCode>
+        <AgencyName>Air Force Office of Scientific Research</AgencyName>
+        <PostDate>{{-25}}</PostDate>
+        <CloseDate>{{+35}}</CloseDate>
+        <Description>Equipment for university research of interest to the Air Force, including cyber ranges.</Description>
+    </OpportunitySynopsisDetail_1_0>
+    <OpportunitySynopsisDetail_1_0>
+        <OpportunityID>800009</OpportunityID>
+        <OpportunityTitle>Expeditions in Computing (2020)</OpportunityTitle>
+        <OpportunityNumber>EXP-2020</OpportunityNumber>
+        <OpportunityCategory>D</OpportunityCategory>
+        <FundingInstrumentType>G</FundingInstrumentType>
+        <CategoryOfFundingActivity>ST</CategoryOfFundingActivity>
+        <EligibleApplicants>06</EligibleApplicants>
+        <AgencyCode>NSF</AgencyCode>
+        <AgencyName>National Science Foundation</AgencyName>
+        <PostDate>{{-1100}}</PostDate>
+        <CloseDate>{{+80}}</CloseDate>
+        <Description>Large collaborative projects that pursue ambitious computing research agendas.</Description>
+    </OpportunitySynopsisDetail_1_0>
+    <OpportunitySynopsisDetail_1_0>
+        <OpportunityID>800010</OpportunityID>
+        <OpportunityTitle>Expeditions in Computing (2026)</OpportunityTitle>
+        <OpportunityNumber>EXP-2026</OpportunityNumber>
+        <OpportunityCategory>D</OpportunityCategory>
+        <FundingInstrumentType>G</FundingInstrumentType>
+        <CategoryOfFundingActivity>ST</CategoryOfFundingActivity>
+        <EligibleApplicants>06</EligibleApplicants>
+        <AgencyCode>NSF</AgencyCode>
+        <AgencyName>National Science Foundation</AgencyName>
+        <PostDate>{{-30}}</PostDate>
+        <CloseDate>{{+80}}</CloseDate>
+        <Description>Large collaborative projects that pursue ambitious computing research agendas.</Description>
+    </OpportunitySynopsisDetail_1_0>
+    <OpportunitySynopsisDetail_1_0>
+        <OpportunityID>800011</OpportunityID>
+        <OpportunityTitle>Young Faculty Awards (YFA)</OpportunityTitle>
+        <OpportunityNumber>E2E-BROAD</OpportunityNumber>
+        <OpportunityCategory>D</OpportunityCategory>
+        <FundingInstrumentType>G</FundingInstrumentType>
+        <CategoryOfFundingActivity>ST</CategoryOfFundingActivity>
+        <EligibleApplicants>06</EligibleApplicants>
+        <AgencyCode>DOD-DARPA</AgencyCode>
+        <AgencyName>Defense Advanced Research Projects Agency</AgencyName>
+        <PostDate>{{-40}}</PostDate>
+        <CloseDate>{{+55}}</CloseDate>
+        <Description>Early-career faculty awards in any area of science, with security among many topics.</Description>
+    </OpportunitySynopsisDetail_1_0>
+    <OpportunitySynopsisDetail_1_0>
+        <OpportunityID>800012</OpportunityID>
+        <OpportunityTitle>State and Local Cybersecurity Grant Program</OpportunityTitle>
+        <OpportunityNumber>E2E-STATES</OpportunityNumber>
+        <OpportunityCategory>M</OpportunityCategory>
+        <FundingInstrumentType>G</FundingInstrumentType>
+        <CategoryOfFundingActivity>ST</CategoryOfFundingActivity>
+        <EligibleApplicants>00</EligibleApplicants>
+        <AgencyCode>DHS-FEMA</AgencyCode>
+        <AgencyName>Federal Emergency Management Agency</AgencyName>
+        <PostDate>{{-35}}</PostDate>
+        <CloseDate>{{+40}}</CloseDate>
+        <Description>Helps state governments manage cyber security risk to their networks.</Description>
+    </OpportunitySynopsisDetail_1_0>
+    <OpportunitySynopsisDetail_1_0>
+        <OpportunityID>800013</OpportunityID>
+        <OpportunityTitle>Rural Broadband Network Planning</OpportunityTitle>
+        <OpportunityNumber>E2E-NOCODES</OpportunityNumber>
+        <OpportunityCategory>D</OpportunityCategory>
+        <FundingInstrumentType>G</FundingInstrumentType>
+        <CategoryOfFundingActivity>CD</CategoryOfFundingActivity>
+        <AgencyCode>USDA-RUS</AgencyCode>
+        <AgencyName>Rural Utilities Service</AgencyName>
+        <PostDate>{{-20}}</PostDate>
+        <CloseDate>{{+65}}</CloseDate>
+        <Description>Planning grants for broadband networks in rural communities, with network security reviews.</Description>
+    </OpportunitySynopsisDetail_1_0>
+    <OpportunitySynopsisDetail_1_0>
+        <OpportunityID>800014</OpportunityID>
+        <OpportunityTitle>Cyber Workforce Pilot</OpportunityTitle>
+        <OpportunityNumber>E2E-CLOSED</OpportunityNumber>
+        <OpportunityCategory>D</OpportunityCategory>
+        <FundingInstrumentType>G</FundingInstrumentType>
+        <CategoryOfFundingActivity>ED</CategoryOfFundingActivity>
+        <EligibleApplicants>06</EligibleApplicants>
+        <AgencyCode>DOL-ETA</AgencyCode>
+        <AgencyName>Employment and Training Administration</AgencyName>
+        <PostDate>{{-60}}</PostDate>
+        <CloseDate>{{-5}}</CloseDate>
+        <Description>A pilot for cyber security workforce training that has already closed.</Description>
+    </OpportunitySynopsisDetail_1_0>
+    <OpportunityForecastDetail_1_0>
+        <OpportunityID>800015</OpportunityID>
+        <OpportunityTitle>Next-Generation Secure Computing Initiative</OpportunityTitle>
+        <OpportunityNumber>E2E-FORECAST</OpportunityNumber>
+        <OpportunityCategory>D</OpportunityCategory>
+        <FundingInstrumentType>G</FundingInstrumentType>
+        <CategoryOfFundingActivity>ST</CategoryOfFundingActivity>
+        <EligibleApplicants>06</EligibleApplicants>
+        <AgencyCode>NSF</AgencyCode>
+        <AgencyName>National Science Foundation</AgencyName>
+        <EstimatedSynopsisPostDate>{{+10}}</EstimatedSynopsisPostDate>
+        <EstimatedApplicationDueDate>{{+100}}</EstimatedApplicationDueDate>
+        <Description>A planned program on secure computing hardware and software.</Description>
+    </OpportunityForecastDetail_1_0>
+    {{extra}}
+</Grants>

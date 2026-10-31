@@ -12,11 +12,13 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from grants.display import COUNTDOWN_DAYS, firm_deadline
 from notifications.planner import (
     CHANGED,
     OVERVIEW,
     REMINDER,
     REMOVED,
+    URGENT_DAYS,
     GrantState,
     Notice,
     NotifySettings,
@@ -48,7 +50,7 @@ class RenderedEmail:
 
     def records(self, recipient_id: int, today: date) -> List[SentRecord]:
         """Rows to write once this email has been sent."""
-        rows = [notice.record(recipient_id) for notice in self.shown]
+        rows = [row for notice in self.shown for row in notice.records(recipient_id)]
         if self.overview_shown:
             rows.append(SentRecord(recipient_id, "", OVERVIEW, -1, today))
         return rows
@@ -74,9 +76,11 @@ def _score_text(score: Optional[int]) -> str:
 def _deadline_text(g: GrantState, today: date) -> str:
     if g.close_date is None:
         return "no deadline listed"
+    if not g.firm_deadline(today):
+        return "no firm deadline"
     days = g.days_left(today)
     when = f"closes {_fmt_date(g.close_date)}"
-    if days is not None and days >= 0:
+    if days is not None and 0 <= days <= COUNTDOWN_DAYS:
         when += f" ({_plural(days, 'day')} left{', estimated' if g.forecasted else ''})"
     elif g.forecasted:
         when += " (estimated)"
@@ -86,13 +90,22 @@ def _deadline_text(g: GrantState, today: date) -> str:
 def _meta(notice_kind: str, g: GrantState, today: date, previous: Optional[date] = None) -> str:
     parts = [_clip(g.agency, _MAX_AGENCY) or "Unknown agency"]
     if notice_kind == CHANGED:
-        parts.append(f"deadline moved from {_fmt_date(previous)} to {_fmt_date(g.close_date)}")
+        # A placeholder date is not a fact on either side of the move. A move between two
+        # placeholders is never planned, so at least one side is firm here.
+        was_firm, is_firm = firm_deadline(previous, today), g.firm_deadline(today)
+        if was_firm and is_firm:
+            parts.append(f"deadline moved from {_fmt_date(previous)} to {_fmt_date(g.close_date)}")
+        elif is_firm:
+            parts.append(f"now closes {_fmt_date(g.close_date)}")
+        elif was_firm:
+            parts.extend([f"deadline moved from {_fmt_date(previous)}", "no firm deadline now"])
         days = g.days_left(today)
-        if days is not None:
+        if days is not None and 0 <= days <= COUNTDOWN_DAYS:
             parts.append(f"{_plural(days, 'day')} left")
     elif notice_kind == REMOVED:
         if g.archived(today):
-            parts.append(f"archived on {_fmt_date(g.archive_date)}, before its {_fmt_date(g.close_date)} deadline")
+            before = f", before its {_fmt_date(g.close_date)} deadline" if g.firm_deadline(today) else ""
+            parts.append(f"archived on {_fmt_date(g.archive_date)}{before}")
         else:
             parts.append("no longer listed on Grants.gov")
     else:
@@ -116,13 +129,26 @@ class _Section:
     total: int
     more: str = ""
 
+    @property
+    def count(self) -> str:
+        """"25 of 35" when some are held back, else the number listed."""
+        listed = len(self.entries)
+        return f"{listed} of {self.total}" if self.total > listed else str(listed)
+
+
+def _also_posted(g: GrantState) -> List[Tuple[str, str]]:
+    """(agency, link) of the other services' postings of this program."""
+    return [(_clip(other.agency, _MAX_AGENCY) or "another agency", other.url) for other in g.also]
+
 
 def _text_entry(entry: _Entry) -> List[str]:
     g = entry.grant
     lines = [f"- [{_score_text(g.score)}] {_clip(g.title, _MAX_TITLE)}", f"  {entry.meta}"]
-    detail = _clip(g.reason or g.summary, _MAX_DETAIL)
-    if detail:
-        lines.append(f"  {detail}")
+    if g.also:
+        lines.append("  Also posted by: " + ", ".join(f"{name} ({url})" if url else name for name, url in _also_posted(g)))
+    for detail in (_clip(g.summary, _MAX_DETAIL), _clip(g.reason, _MAX_DETAIL)):
+        if detail:
+            lines.append(f"  {detail}")
     if g.url:
         lines.append(f"  {g.url}")
     lines.append("")
@@ -143,13 +169,17 @@ def _html_entry(entry: _Entry, today: date) -> str:
     title = html.escape(_clip(g.title, _MAX_TITLE))
     if g.url:
         title = f'<a href="{html.escape(g.url, quote=True)}" style="color:#1e5a44;text-decoration:none">{title}</a>'
-    detail = html.escape(_clip(g.reason or g.summary, _MAX_DETAIL))
+    summary = html.escape(_clip(g.summary, _MAX_DETAIL))
+    reason = html.escape(_clip(g.reason, _MAX_DETAIL))
+    also = ", ".join(_link(url, name) if url else html.escape(name) for name, url in _also_posted(g))
     return (
         '<tr><td style="padding:9px 0;border-top:1px solid #d6dbd7">'
         f'<div style="font-weight:600">{title}</div>'
         f'<div style="font-size:13px;color:{_urgency(g, today)}">{html.escape(entry.meta)}</div>'
-        f'<div style="font-size:14px;color:#3b4642">{html.escape(_score_text(g.score))}'
-        + (f" &#183; {detail}" if detail else "")
+        + (f'<div style="font-size:13px;color:#5b6660">Also posted by: {also}</div>' if also else "")
+        + (f'<div style="font-size:13px;color:#5b6660">{summary}</div>' if summary else "")
+        + f'<div style="font-size:14px;color:#3b4642">{html.escape(_score_text(g.score))}'
+        + (f" &#183; {reason}" if reason else "")
         + "</div></td></tr>"
     )
 
@@ -186,12 +216,13 @@ def _build(plan: Plan, settings: NotifySettings, today: date, caps: Dict[str, in
             more = f"{_plural(backlog, 'more grant')} qualify and will follow in the next emails."
         sections.append(_Section("new", "New grants that fit", [_Entry(n.grant, _meta("new", n.grant, today)) for n in new], len(plan.new), more))
 
-    above = {n.grant.opp_id for n in shown}
-    # The overview counts as delivered unless trimming dropped a whole bucket;
-    # grants already listed above are not repeated in it.
-    overview_shown = plan.overview_due
+    above = {g.opp_id for n in shown for g in (n.grant, *n.grant.also)}
+    # The overview counts as delivered unless trimming dropped a whole bucket, or
+    # there was nothing to say; grants already listed above are not repeated in it.
+    overview_shown = bool(plan.overview)
+    listed = False
     for index, (label, members) in enumerate(plan.overview):
-        rest = [g for g in members if g.opp_id not in above]
+        rest = [g for g in members if not any(m.opp_id in above for m in (g, *g.also))]
         if not rest:
             continue
         cap = caps.get(f"overview{index}", 0)
@@ -199,6 +230,7 @@ def _build(plan: Plan, settings: NotifySettings, today: date, caps: Dict[str, in
         if not visible:
             overview_shown = False
             continue
+        listed = True
         hidden = len(rest) - len(visible)
         sections.append(
             _Section(
@@ -206,6 +238,8 @@ def _build(plan: Plan, settings: NotifySettings, today: date, caps: Dict[str, in
                 f"and {hidden} more{in_dashboard}." if hidden else "",
             )
         )
+    if overview_shown and not listed:
+        sections.append(_Section("overview-note", "", [], 0, "This week's deadlines are all in the list above."))
     return sections, shown, overview_shown
 
 
@@ -250,27 +284,37 @@ def _compose(plan: Plan, settings: NotifySettings, today: date, caps: Dict[str, 
     text.append("")
     parts: List[str] = []
     for section in sections:
-        text.append(f"{section.title} ({section.total})")
-        text.append("")
-        for entry in section.entries:
-            text.extend(_text_entry(entry))
+        heading = table = ""
+        if section.entries:
+            text.append(f"{section.title} ({section.count})")
+            text.append("")
+            for entry in section.entries:
+                text.extend(_text_entry(entry))
+            heading = (
+                f'<h2 style="font-size:17px;font-weight:600;color:#1e5a44;margin:26px 0 4px">{html.escape(section.title)}'
+                f' <span style="color:#5b6660;font-weight:400">({section.count})</span></h2>'
+            )
+            rows = "".join(_html_entry(entry, today) for entry in section.entries)
+            table = f'<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;font-size:15px;line-height:1.45">{rows}</table>'
         if section.more:
-            text.extend([f"  {section.more}", ""])
-        rows = "".join(_html_entry(entry, today) for entry in section.entries)
+            text.extend([f"{'  ' if section.entries else ''}{section.more}", ""])
         more = f'<p style="font-size:13px;color:#5b6660;margin:6px 0 0">{html.escape(section.more)}</p>' if section.more else ""
-        parts.append(
-            f'<h2 style="font-size:17px;font-weight:600;color:#1e5a44;margin:26px 0 4px">{html.escape(section.title)}'
-            f' <span style="color:#5b6660;font-weight:400">({section.total})</span></h2>'
-            f'<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;font-size:15px;line-height:1.45">{rows}</table>{more}'
-        )
+        parts.append(heading + table + more)
 
+    footer: List[str] = []
+    new_entries = next((s.entries for s in sections if s.key == "new"), [])
     if plan.scoring_active:
-        footnote = f"Scores are relative to the research profile. Grants below {plan.min_score}/5 are left out unless tracked."
-    else:
-        footnote = ("These grants match the research keywords in the profile, most matches first. Set up "
-                    "relevance scoring to rank them by fit.")
-    footer = [footnote, "Tracked grants get a reminder at each of these marks before they close: "
-              + ", ".join(f"{d} days" for d in sorted(settings.reminder_days, reverse=True)) + "."]
+        footer.append(f"Scores are relative to the research profile. Grants below {plan.min_score}/5 are left out "
+                      "unless tracked or marked Relevant by the team.")
+    elif new_entries:  # the keyword sentence describes the new grants, so it needs a section of them
+        marked = any(sum(x.net_votes for x in (e.grant, *e.grant.also)) > 0 for e in new_entries)
+        footer.append("These grants match the research keywords in the profile"
+                      + (" or were marked Relevant by the team" if marked else "")
+                      + f", those closing within {URGENT_DAYS} days first, then most matches first. "
+                      "Set up relevance scoring to rank them by fit.")
+    if plan.has_tracked:
+        footer.append("Tracked grants get a reminder at each of these marks before they close: "
+                      + ", ".join(f"{d} days" for d in sorted(settings.reminder_days, reverse=True)) + ".")
     text.extend(footer)
     if unsubscribe:
         text.extend(["", f"Unsubscribe: {unsubscribe}"])
@@ -279,7 +323,14 @@ def _compose(plan: Plan, settings: NotifySettings, today: date, caps: Dict[str, 
     footer_html = "".join(f'<p style="font-size:12px;color:#5b6660;margin:6px 0 0">{html.escape(line)}</p>' for line in footer)
     if unsubscribe:
         footer_html += f'<p style="font-size:12px;color:#5b6660;margin:10px 0 0">{_link(unsubscribe, "Unsubscribe")}</p>'
+    # A document of its own, light only: a dark-mode client would otherwise invert the colors above.
     html_doc = (
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<meta name="color-scheme" content="light"><meta name="supported-color-schemes" content="light">'
+        f"<title>GrantWatch for {html.escape(day)}</title>"
+        "<style>:root{color-scheme:light}</style></head>"
+        '<body style="margin:0;background:#f7f8f6;color-scheme:light">'
         f'<div style="max-width:640px;margin:0 auto;padding:24px 16px;background:#f7f8f6;color:#15221c;font-family:{_FONT}">'
         '<div style="font-size:22px;font-weight:600">GrantWatch</div>'
         f'<div style="font-size:14px;color:#5b6660;margin-top:2px">{html.escape(day)}'
@@ -288,7 +339,7 @@ def _compose(plan: Plan, settings: NotifySettings, today: date, caps: Dict[str, 
         + "</div>"
         + "".join(parts)
         + f'<div style="margin-top:28px">{footer_html}</div>'
-        "</div>"
+        "</div></body></html>"
     )
     return RenderedEmail(
         subject=_subject(plan, shown, sections, settings),

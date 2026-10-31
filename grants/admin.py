@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import requests
 from psycopg2.extras import RealDictCursor
 
+from grants.display import Posting, group_postings
 from grants.profile import Profile, load_profile
 from grants.runs import redact
 from grants.sql_utils import db_connection, ensure_schema, open_grant_sql
@@ -28,6 +29,7 @@ STALE_DATA_SECONDS = 30 * 3600
 RUNNING_SECONDS = 95 * 60
 
 _RUN_DAYS = 15
+_FEEDBACK_DAYS = 30  # the window for the share of emailed grants the team marked Not for us
 _RUN_LIMIT = 200
 _EMAIL_LIMIT = 30
 _MODEL_LIMIT = 10
@@ -53,6 +55,26 @@ def run_state(finished_at: Any, ok: Optional[bool], age_seconds: Optional[float]
     return "ok" if ok else "failed"
 
 
+def feedback_programs(rows: List[Dict[str, Any]]) -> Tuple[int, int]:
+    """(emailed, declined): how many programs were emailed, and how many someone marked Not for us.
+
+    ``rows`` are the emailed postings and the other grants closing the same day (see _FEEDBACK_SQL).
+    Postings of one program count once, as the team sees them in one row, and only if one of
+    them was emailed. The program is declined when any of its postings has a Not for us vote,
+    one added after the program was announced and never emailed included: the dashboard may
+    lead the row with it, and a vote goes to the lead.
+    """
+    postings = [
+        Posting(opp_id=row["opp_id"], title=row.get("title") or "", agency_code=row.get("agency_code") or "", close=row.get("close_date"))
+        for row in rows
+    ]
+    emailed = {row["opp_id"] for row in rows if row["emailed"]}
+    marked = {row["opp_id"] for row in rows if row["declined"]}
+    programs = [{group.lead, *group.also} for group in group_postings(postings)]
+    shown = [program for program in programs if program & emailed]
+    return len(shown), sum(1 for program in shown if program & marked)
+
+
 def _ago(seconds: float) -> str:
     if seconds < 3600:
         return f"{max(1, round(seconds / 60))} minutes"
@@ -71,6 +93,27 @@ def _stats(run: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
 def _with_detail(message: str, run: Dict[str, Any]) -> str:
     return f"{message} {run['detail']}" if run.get("detail") else message
+
+
+def _count(value: Any) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
+
+
+def _unscored_cause(stats: Dict[str, Any]) -> str:
+    """Why open grants have no score, from the numbers of the ingest that loaded them; "" when they say nothing.
+
+    ``failed`` also counts every batch skipped after the scorer stopped, so a stop is named in its place.
+    """
+    where = "in the last successful ingest"
+    abort, failed, deferred = stats.get("scoring_abort"), _count(stats.get("failed")), _count(stats.get("deferred"))
+    causes = []
+    if abort:
+        causes.append(f"the model server could not be reached {where}" if str(abort).startswith("cannot reach") else f"scoring stopped early {where}")
+    elif failed:
+        causes.append(f"{failed:,} could not be scored {where} and {'is' if failed == 1 else 'are'} retried next run")
+    if deferred:
+        causes.append(f"{deferred:,} waiting for the per-run cap")
+    return "; ".join(causes)
 
 
 def _unhappy(run: Optional[Dict[str, Any]], step: str) -> Optional[str]:
@@ -105,10 +148,9 @@ def warnings_for(health: Dict[str, Any], runs: List[Dict[str, Any]], recipient_c
         found.append(f"Scoring stopped during the newest ingest: {abort}")
     unscored = int(health.get("open_unscored") or 0)
     if scoring_on and unscored > 0:
-        found.append(
-            f"{unscored:,} open {'grant has' if unscored == 1 else 'grants have'} no relevance score yet; "
-            "the model server may be unreachable, or the per-run cap left them for later."
-        )
+        # The ingest that finished is the one that loaded these scores; a newer one may still be running or have failed.
+        cause = _unscored_cause(_stats(good_ingest)) or "no ingest has recorded why"
+        found.append(f"{unscored:,} open {'grant has' if unscored == 1 else 'grants have'} no relevance score yet: {cause}.")
     if recipient_count == 0:
         found.append("Nobody gets email yet: there are no active recipients.")
     return found
@@ -124,7 +166,7 @@ def _pick(row: Dict[str, Any], fields: tuple) -> Dict[str, Any]:
 
 
 _SCHEMA_STALE_SQL = """
-    SELECT to_regclass('job_runs') IS NULL OR NOT EXISTS (
+    SELECT to_regclass('job_runs') IS NULL OR to_regclass('grant_feedback') IS NULL OR NOT EXISTS (
         SELECT 1 FROM information_schema.columns
         WHERE table_schema = current_schema() AND table_name = 'job_runs' AND column_name = 'stats'
     );
@@ -132,7 +174,7 @@ _SCHEMA_STALE_SQL = """
 
 
 def _ensure_runs_table() -> None:
-    """Apply the schema once if the daily job has not created job_runs (or its newest column) yet.
+    """Apply the schema once if the daily job has not created job_runs, grant_feedback (or job_runs' newest column) yet.
 
     Checked first so a normal page load never runs the schema's ALTER TABLEs,
     which could wait behind a running ingest.
@@ -169,8 +211,35 @@ _HEALTH_SQL = f"""
              WHERE step = 'ingest' AND finished_at IS NOT NULL AND ok) AS last_ok_ingest_age_seconds,
            (SELECT EXTRACT(EPOCH FROM NOW() - MAX(started_at))::float FROM job_runs
              WHERE step = 'notify' AND finished_at IS NOT NULL AND ok) AS last_ok_notify_age_seconds,
-           (SELECT MAX(sent_at)::timestamptz FROM notifications) AS last_sent
+           (SELECT MAX(sent_at)::timestamptz FROM notifications) AS last_sent,
+           (SELECT COUNT(*) FROM grant_feedback) AS feedback_votes
     FROM grants g;
+"""
+
+# The postings emailed as new in the last _FEEDBACK_DAYS days, one row each, and every other grant
+# closing the same day (the postings they could be folded with, as sql_utils._PROGRAM_SQL reads
+# them), with what the grouping rules read, whether it was emailed and whether anyone marked it Not
+# for us. A program posted by several services is emailed as one row but recorded once per posting,
+# and a posting added after it was announced is never emailed, yet the dashboard may lead the row
+# with it, so these rows are folded (feedback_programs). A posting that has left the grants table
+# has no title or date and stands alone.
+_FEEDBACK_SQL = f"""
+    WITH emailed AS (
+        SELECT DISTINCT opp_id FROM notifications
+        WHERE kind = 'new' AND sent_at > NOW() - INTERVAL '{_FEEDBACK_DAYS} days'
+    )
+    SELECT p.opp_id, p.title, p.agency_code, p.close_date, p.emailed,
+           EXISTS (SELECT 1 FROM grant_feedback f WHERE f.opp_id = p.opp_id AND f.verdict = -1) AS declined
+    FROM (
+        SELECT e.opp_id, g.title, g.agency_code, g.close_date::date AS close_date, TRUE AS emailed
+        FROM emailed e
+        LEFT JOIN grants g ON g.opp_id = e.opp_id
+        UNION ALL
+        SELECT g.opp_id, g.title, g.agency_code, g.close_date::date, FALSE
+        FROM grants g
+        WHERE NOT EXISTS (SELECT 1 FROM emailed e WHERE e.opp_id = g.opp_id)
+          AND g.close_date::date IN (SELECT g2.close_date::date FROM emailed e JOIN grants g2 ON g2.opp_id = e.opp_id)
+    ) p;
 """
 
 # The unsubscribe token is deliberately not selected.
@@ -347,6 +416,8 @@ def admin_status() -> Dict[str, Any]:
         run_rows = [dict(row) for row in cur.fetchall()]
         cur.execute(_HEALTH_SQL)
         health_row = dict(cur.fetchone() or {})
+        cur.execute(_FEEDBACK_SQL)
+        feedback_rows = [dict(row) for row in cur.fetchall()]
         cur.execute(_RECIPIENTS_SQL)
         recipients = [_pick(row, _RECIPIENT_FIELDS) for row in cur.fetchall()]
         cur.execute(_EMAILS_SQL, {"tz": zone})
@@ -360,8 +431,12 @@ def admin_status() -> Dict[str, Any]:
         run["has_log"] = bool(run["has_log"])
         runs.append(run)
     health = _pick(health_row, _HEALTH_FIELDS)
+    emailed, declined = feedback_programs(feedback_rows)
+    feedback = {"votes": health_row.get("feedback_votes"), "emailed": emailed, "declined": declined, "days": _FEEDBACK_DAYS}
     health["data_as_of"] = _iso(health["data_as_of"])
     health["scoring_on"] = profile.is_configured
+    # Then every open grant goes to the model and the keywords only label what they match (grants_data.pipeline).
+    health["scores_every_grant"] = profile.is_configured and LLMSettings.from_env().enabled
     for row in recipients:
         row["unsubscribed_at"], row["last_emailed"] = _iso(row["unsubscribed_at"]), _iso(row["last_emailed"])
     for row in emails:
@@ -378,6 +453,7 @@ def admin_status() -> Dict[str, Any]:
         "emails": emails,
         "warnings": warnings,
         "email": email_status(health_row.get("last_sent")),
+        "feedback": feedback,
         "profile": profile_summary(profile),
         "settings": settings_summary(),
     }

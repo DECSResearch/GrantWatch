@@ -8,6 +8,20 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # The end-to-end tests in tests/e2e/ run against this database; each test module makes
+    # its own schema in it and drops the schema afterwards.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -17,4 +31,6 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt -r mcp_server/requirements.txt -r requirements-dev.txt
       - name: Run tests
+        env:
+          GRANTS_TEST_POSTGRES_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: pytest tests/ -q

@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 import logging
 
 import html
@@ -16,6 +16,7 @@ from fastapi import Path as PathParam
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from psycopg2.errors import UndefinedTable
 from pydantic import BaseModel, EmailStr
 from dotenv import load_dotenv
 
@@ -26,9 +27,14 @@ from . import admin_auth, auth
 from .document_checker_routes import router as document_checker_router
 
 from grants.admin import admin_status, llm_check, run_log
+from grants.display import group_rows
+from grants.feedback import with_feedback
 from grants.profile import Profile, load_profile
-from grants.queries import GrantQuery, data_status, get_grant, query_grants
-from grants.sql_utils import add_to_watchlist, list_watchlist, remove_from_watchlist
+from grants.queries import GrantQuery, count_grants, data_status, get_grant, query_grants
+from grants.sql_utils import (
+    add_to_watchlist, clear_vote, ensure_schema, fetch_relevant_ids, fetch_vote_counts, list_watchlist, record_vote,
+    remove_from_watchlist,
+)
 from notifications import store
 from notifications.transport import build_message, get_transport, sender_address
 
@@ -58,6 +64,11 @@ class LoginPayload(BaseModel):
 class WatchPayload(BaseModel):
     opp_id: str
     note: Optional[str] = None
+
+
+class FeedbackPayload(BaseModel):
+    opp_id: str
+    verdict: Literal[-1, 1]  # 1 Relevant, -1 Not for us
 
 
 @lru_cache(maxsize=1)
@@ -125,7 +136,7 @@ def require_member(request: Request) -> str:
         raise HTTPException(status_code=503, detail="Sign-in is not configured on this server (GRANTS_SECRET_KEY).")
     email = _session_email(request)
     if email is None:
-        raise HTTPException(status_code=401, detail="Sign in to change the tracked list.")
+        raise HTTPException(status_code=401, detail="Sign in to track or mark grants.")
     return email
 
 
@@ -241,7 +252,7 @@ def admin_run_log(run_id: int = PathParam(ge=1, le=2_147_483_647), _admin: str =
 def profile_info() -> Dict[str, Any]:
     profile = _profile()
     try:
-        status = data_status()
+        status = data_status(profile.min_score_to_notify)
     except Exception as exc:
         logger.warning("Could not read data status: %s", exc)
         status = None
@@ -257,8 +268,37 @@ def profile_info() -> Dict[str, Any]:
     }
 
 
+def _with_votes(rows: List[Dict[str, Any]], request: Request) -> List[Dict[str, Any]]:
+    """The rows with the team's votes on each; the vote fields are null when they cannot be read."""
+    ids = [opp_id for row in rows for opp_id in (row["opp_id"], *(a["opp_id"] for a in row["also_posted"]))]
+    try:
+        counts: Optional[Dict[str, Any]] = fetch_vote_counts(ids, _session_email(request))
+    except UndefinedTable:
+        counts = None  # the daily job has not created grant_feedback yet
+    except Exception as exc:
+        logger.warning("Could not read the team's votes: %s", exc)
+        counts = None
+    return with_feedback(rows, counts)
+
+
+def _team_relevant() -> Tuple[str, ...]:
+    """The postings of programs the team marked Relevant on balance; none when the votes cannot be read.
+
+    Read before the grants are, and guarded like ``_with_votes``: before the first ingest there is no
+    grant_feedback table, and that must not fail the list.
+    """
+    try:
+        return tuple(fetch_relevant_ids())
+    except UndefinedTable:
+        return ()  # the daily job has not created grant_feedback yet
+    except Exception as exc:
+        logger.warning("Could not read the grants the team marked Relevant: %s", exc)
+        return ()
+
+
 @app.get("/api/grants")
 def get_grants(
+    request: Request,
     q: str = Query(default=""),
     min_score: Optional[int] = Query(default=None, ge=0, le=5),
     closing_within: Optional[int] = Query(default=None, ge=1, le=3650),
@@ -286,12 +326,17 @@ def get_grants(
         due_from=due_from,
         due_to=due_to,
         limit=limit,
+        team_relevant=_team_relevant() if min_score else (),  # only a score floor can leave them out
+        today=date.today(),
     )
     try:
-        results = query_grants(query)
+        rows = query_grants(query)
+        # total counts postings, as limit does; count counts the rows after one program's postings are folded.
+        total = count_grants(query) if len(rows) >= limit else len(rows)
+        results = group_rows(rows)
     except Exception as exc:
         raise _db_error("fetching grants", exc) from exc
-    return {"results": results, "count": len(results)}
+    return {"results": _with_votes(results, request), "count": len(results), "total": total}
 
 
 @app.get("/api/grants/{opp_id:path}")
@@ -337,6 +382,36 @@ def unwatch(opp_id: str, _member: str = Depends(require_member)) -> Dict[str, An
     except Exception as exc:
         raise _db_error("updating the watchlist", exc) from exc
     return {"opp_id": opp_id, "watched": False, "removed": removed}
+
+
+@app.post("/api/feedback")
+def vote(payload: FeedbackPayload, member: str = Depends(require_member)) -> Dict[str, Any]:
+    opp_id = payload.opp_id.strip()
+    if not opp_id:
+        raise HTTPException(status_code=400, detail="opp_id is required.")
+    try:
+        try:
+            found = record_vote(opp_id, member, payload.verdict)
+        except UndefinedTable:
+            ensure_schema()  # the daily job has not created the table yet; once, then try again
+            found = record_vote(opp_id, member, payload.verdict)
+    except Exception as exc:
+        raise _db_error("saving the vote", exc) from exc
+    if not found:
+        raise HTTPException(status_code=404, detail="Grant not found.")
+    return {"opp_id": opp_id, "verdict": payload.verdict}
+
+
+@app.delete("/api/feedback/{opp_id:path}")
+def unvote(opp_id: str, member: str = Depends(require_member)) -> Dict[str, Any]:
+    opp_id = opp_id.strip()
+    try:
+        removed = clear_vote(opp_id, member)
+    except UndefinedTable:
+        removed = False  # no table, so no vote to take back
+    except Exception as exc:
+        raise _db_error("removing the vote", exc) from exc
+    return {"opp_id": opp_id, "verdict": None, "removed": removed}
 
 
 @app.get("/api/session")

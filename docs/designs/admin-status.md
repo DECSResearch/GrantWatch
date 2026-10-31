@@ -112,7 +112,9 @@ each stage:
 | `open` | after `drop_closed_grants(date_filter_json_data(...))` |
 | `after_forecast` | after the forecast filter, or equal to `open` when forecasts are kept |
 | `after_agency` | after `_drop_excluded_agencies` |
-| `matched` | after `filter_grants_by_keywords` |
+| `matched` | after `filter_grants_by_keywords`; set only when no model scores, so keywords decide |
+| `sent_to_model` | with a model: the open grants handed to the scorer (every one not ruled out by eligibility; keywords do not filter). Replaces `matched` in that mode (match-quality design, A2) |
+| `ineligible` | with a model and `applicant_codes` set: grants scored 0 by rule because Grants.gov's applicant codes leave out the profile's applicant type (match-quality design, A1) |
 | `kept` | final count (exists) |
 | `scoring_abort` | the scorer's abort reason, or absent |
 

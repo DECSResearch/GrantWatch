@@ -20,10 +20,29 @@ summary: >
 institution: University of North Dakota
 applicant_type: public university
 
-# Cheap pre-filter applied before any model call. A record must mention at
-# least `keyword_threshold` of these words (whole-word, case-insensitive).
-# Set keyword_threshold to 0 to send everything in the date window to the
-# scorer: it costs more but misses nothing.
+# Grants.gov lists who may apply as codes. Name the ones that include you and,
+# when a model scores grants, a grant whose codes are known and leave you out
+# is scored 0 ("Not open to ...") without a model call; it still loads, so
+# tracked grants keep refreshing. A grant that lists 99 (unrestricted) or 25
+# (others, see text), a code not in this table, or no codes at all always goes
+# to the model. Leave this empty to turn the pre-check off; without a model it
+# does nothing. Quotes are optional: 06 and "06" mean the same. For a public
+# university, use ["06"].
+#   00 State governments                     01 County governments
+#   02 City or township governments          04 Special district governments
+#   05 Independent school districts          06 Public and State controlled institutions of higher education
+#   07 Native American tribal governments    08 Public and Indian housing authorities
+#   11 Native American tribal organizations  12 Nonprofits with 501(c)(3) status, other than higher education
+#   13 Nonprofits without 501(c)(3) status   20 Private institutions of higher education
+#   21 Individuals                           22 For-profit organizations other than small businesses
+#   23 Small businesses                      25 Others (see the eligibility text)
+#   99 Unrestricted (open to any type of entity)
+applicant_codes: []
+
+# Pre-filter for when no model is set up: a record must mention at least
+# `keyword_threshold` of these words (whole-word, case-insensitive), and the
+# email only announces grants with at least one. With a model, every open
+# grant is scored and these words only show up as hints.
 keywords:
   - research
   - education

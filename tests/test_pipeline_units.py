@@ -4,6 +4,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from hypothesis import given, strategies as st
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from grants_data.date_filter_data import date_filter_json_data
@@ -55,6 +57,23 @@ class TestNormalizeRecords:
         record = {"AGENCY_NAME": "X"}
         normalize_records([record])
         assert "AGENCY" not in record
+
+    def test_title_and_agency_entities_are_unescaped_once(self):
+        record = {"OPPORTUNITY_TITLE": "Women&apos;s Health &amp;amp; Equity", "AGENCY_NAME": "Arts &amp; Culture"}
+        out = normalize_records([record])[0]
+        assert out["OPPORTUNITY_TITLE"] == "Women's Health &amp; Equity"  # one pass, not two
+        assert out["AGENCY"] == "Arts & Culture"
+        assert record["OPPORTUNITY_TITLE"] == "Women&apos;s Health &amp;amp; Equity"
+
+    def test_description_is_left_for_strip_html(self):
+        record = {"FUNDING_DESCRIPTION": "<p>Use &lt;b&gt; &amp; more</p>", "OPPORTUNITY_TITLE": None}
+        out = normalize_records([record])[0]
+        assert out["FUNDING_DESCRIPTION"] == record["FUNDING_DESCRIPTION"]
+        assert out["OPPORTUNITY_TITLE"] is None
+
+    @given(st.text(max_size=40).filter(lambda t: "&" not in t))
+    def test_a_title_without_an_ampersand_is_unchanged(self, title):
+        assert normalize_records([{"OPPORTUNITY_TITLE": title}])[0]["OPPORTUNITY_TITLE"] == title
 
 
 class TestDateFilter:

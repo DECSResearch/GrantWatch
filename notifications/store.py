@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 from psycopg2.extras import RealDictCursor, execute_values
 
 from grants.sql_utils import db_connection, ensure_schema, listed_sql, open_grant_sql
+from llm_utils.relevance import RULE_MODEL
 from notifications.planner import GrantState, Recipient, SentRecord
 
 _RECIPIENT_COLUMNS = "id, email, name, min_score, unsubscribe_token, active"
@@ -148,12 +149,13 @@ class PostgresStore:
         # Tracked grants are loaded even when closed off early, so the planner
         # can say they were withdrawn.
         query = f"""
-            SELECT g.opp_id, g.title, g.agency, g.url, g.close_date, g.archive_date,
-                   g.opportunity_status, g.relevance_score, g.relevance_reason, g.summary,
-                   g.matched_keywords,
+            SELECT g.opp_id, g.title, g.agency, g.agency_code, g.url, g.close_date, g.archive_date,
+                   g.opportunity_status, g.relevance_score, g.relevance_model, g.relevance_reason, g.summary,
+                   g.matched_keywords, COALESCE(f.net, 0) AS net_votes,
                    (w.opp_id IS NOT NULL) AS watched, {listed_sql("g")} AS listed
             FROM grants g
             LEFT JOIN grant_watchlist w ON w.opp_id = g.opp_id
+            LEFT JOIN (SELECT opp_id, SUM(verdict)::int AS net FROM grant_feedback GROUP BY opp_id) f ON f.opp_id = g.opp_id
             WHERE ({open_grant_sql("g")}) OR w.opp_id IS NOT NULL;
         """
         with db_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -164,16 +166,19 @@ class PostgresStore:
                 opp_id=row["opp_id"],
                 title=row["title"] or "Untitled",
                 agency=row["agency"] or "",
+                agency_code=row["agency_code"] or "",
                 url=row["url"] or "",
                 close_date=_as_date(row["close_date"]),
                 archive_date=_as_date(row["archive_date"]),
                 forecasted=str(row["opportunity_status"] or "").lower() == "forecasted",
                 score=row["relevance_score"],
+                by_rule=row["relevance_model"] == RULE_MODEL,
                 reason=row["relevance_reason"] or "",
                 summary=row["summary"] or "",
                 watched=bool(row["watched"]),
                 listed=bool(row["listed"]),
                 matches=len([k for k in (row["matched_keywords"] or "").split(";") if k.strip()]),
+                net_votes=int(row["net_votes"]),
             )
             for row in rows
         ]

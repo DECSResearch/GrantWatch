@@ -49,6 +49,7 @@ def settings_from_profile(profile: Profile) -> NotifySettings:
         horizons=list(profile.deadline_horizons),
         overview_day=profile.overview_day,
         include_forecasted=profile.include_forecasted,
+        keyword_threshold=profile.keyword_threshold,
         max_new=_env_int("GRANTS_EMAIL_MAX_NEW", 25),
         dashboard_url=(os.getenv("GRANTS_DASHBOARD_URL") or "").strip().rstrip("/"),
         profile_line=profile.institution,
