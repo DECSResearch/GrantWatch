@@ -25,63 +25,12 @@ from grants import queries, sql_utils  # noqa: E402
 from grants.display import days_until_deadline  # noqa: E402
 from grants.profile import Profile  # noqa: E402
 from grants.queries import GrantQuery, build_grants_sql, count_grants, data_status  # noqa: E402
+from support import patched  # noqa: E402
 from web import app as webapp  # noqa: E402
 
 INDEX = webapp.INDEX_HTML
 ADMIN = webapp.ADMIN_HTML
 TODAY = date(2026, 10, 30)
-
-
-class FakeCursor:
-    def __init__(self, db):
-        self.db = db
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-    def execute(self, sql, params=None):
-        self.db.executed.append((sql, params))
-        self.result = self.db.script[len(self.db.executed) - 1]
-
-    def fetchone(self):
-        return self.result[0]
-
-    def fetchall(self):
-        return self.result[1]
-
-
-class FakeDb:
-    """Answers the nth query with the nth (fetchone, fetchall) pair of ``script``."""
-
-    def __init__(self, *script):
-        self.executed, self.script = [], script
-
-    def connection(self):
-        db = self
-
-        class Conn:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *exc):
-                return False
-
-            def cursor(self, cursor_factory=None):
-                return FakeCursor(db)
-
-            def close(self):
-                pass
-
-        return Conn()
-
-
-def patched(monkeypatch, *script):
-    db = FakeDb(*script)
-    monkeypatch.setattr(sql_utils, "get_connection", db.connection)
-    return db
 
 
 class TestClosingWindow:

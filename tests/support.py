@@ -1,4 +1,4 @@
-"""In-memory stand-ins for the notify step's database and email transport."""
+"""In-memory stand-ins for the notify step's database and email transport, and a scripted cursor for SQL tests."""
 from __future__ import annotations
 
 import re
@@ -7,6 +7,7 @@ from dataclasses import replace
 from email.message import EmailMessage
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence
 
+from grants import sql_utils
 from notifications.planner import CHANGED, GrantState, Personal, Recipient, SentRecord
 
 
@@ -102,3 +103,55 @@ def sections(message: EmailMessage) -> Dict[str, List[str]]:
         elif line.startswith("- [") and current:
             out[current].append(line.split("] ", 1)[1].removeprefix("Grant "))
     return dict(out)
+
+
+class FakeCursor:
+    def __init__(self, db):
+        self.db = db
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, sql, params=None):
+        self.db.executed.append((sql, params))
+        self.result = self.db.script[len(self.db.executed) - 1]
+
+    def fetchone(self):
+        return self.result[0]
+
+    def fetchall(self):
+        return self.result[1]
+
+
+class FakeDb:
+    """Answers the nth query with the nth (fetchone, fetchall) pair of ``script``."""
+
+    def __init__(self, *script):
+        self.executed, self.script = [], script
+
+    def connection(self):
+        db = self
+
+        class Conn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def cursor(self, cursor_factory=None):
+                return FakeCursor(db)
+
+            def close(self):
+                pass
+
+        return Conn()
+
+
+def patched(monkeypatch, *script):
+    db = FakeDb(*script)
+    monkeypatch.setattr(sql_utils, "get_connection", db.connection)
+    return db
