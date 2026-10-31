@@ -22,7 +22,6 @@ from psycopg2.errors import UndefinedTable
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from grants import sql_utils  # noqa: E402
-from grants.display import Posting, program_of  # noqa: E402
 from grants.feedback import ENTRY_CHARS, EXAMPLE_LIMIT, Votes, clean_text, feedback_examples, net_verdict, with_feedback  # noqa: E402
 from grants.profile import Profile  # noqa: E402
 from grants_data import pipeline  # noqa: E402
