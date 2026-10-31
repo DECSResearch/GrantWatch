@@ -62,6 +62,20 @@ def member_from_stored(email: str, stored: str) -> Member:
     return Member(email, clean_summary(stored), stored)
 
 
+def current_key(email: str, stored: str, team: Profile, model: str) -> Optional[str]:
+    """The key a score of this member's must carry to be for their profile as it is now; None when the text can never be scored.
+
+    Made from the cleaned stored text exactly as the scoring pass makes it (``member_from_stored``),
+    never from the raw column: a profile typed by hand with a line break or trailing spaces must
+    still match its own scores. A text that cannot be cleaned is skipped by the scoring pass, so
+    nothing is stored under any key for it.
+    """
+    try:
+        return member_from_stored(email, stored).key(team, model)
+    except ProfileError:
+        return None
+
+
 @dataclass
 class Totals:
     """What one personal pass did, over all members. ``stopped`` says why it ended with work left, else None."""

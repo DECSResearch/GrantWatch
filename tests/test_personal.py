@@ -469,3 +469,27 @@ class TestMemberKey:
         stored = "".join(word + gap for word, gap in zip(words, gaps)) + tail
         tidy = personal.member_from_stored("a@und.edu", " ".join(words))
         assert personal.member_from_stored("a@und.edu", stored).key(TEAM, "m") == tidy.key(TEAM, "m")
+
+
+class TestCurrentKey:
+    """``current_key`` is what the dashboard compares a member's stored scores against."""
+
+    HAND_TYPED = TestMemberKey.HAND_TYPED
+    CLEAN = TestMemberKey.CLEAN
+
+    def test_it_is_the_members_key_made_from_the_cleaned_stored_text(self):
+        found = personal.member_from_stored("a@und.edu", self.HAND_TYPED)
+        assert personal.current_key("a@und.edu", self.HAND_TYPED, TEAM, "model-one") == found.key(TEAM, "model-one")
+        assert personal.current_key("a@und.edu", self.HAND_TYPED, TEAM, "model-one") == personal_key(personal_profile(TEAM, self.CLEAN), "model-one")
+
+    def test_it_is_not_the_key_of_the_raw_text(self):
+        assert personal.current_key("a@und.edu", self.HAND_TYPED, TEAM, "model-one") != personal_key(personal_profile(TEAM, self.HAND_TYPED), "model-one")
+
+    def test_a_text_that_cannot_be_cleaned_has_no_key_because_it_was_never_scored(self):
+        assert personal.current_key("a@und.edu", "too short", TEAM, "model-one") is None
+        assert personal.current_key("a@und.edu", "REPLACE ME " + "x" * 50, TEAM, "model-one") is None
+
+    def test_it_follows_the_model_and_the_team_profile_like_the_scoring_pass(self):
+        key = personal.current_key("a@und.edu", self.CLEAN, TEAM, "model-one")
+        assert key != personal.current_key("a@und.edu", self.CLEAN, TEAM, "model-two")
+        assert key != personal.current_key("a@und.edu", self.CLEAN, Profile(summary=TEAM.summary, institution="MIT"), "model-one")
