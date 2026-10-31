@@ -30,6 +30,7 @@ from .document_checker_routes import router as document_checker_router
 from grants.admin import admin_status, llm_check, run_log
 from grants.display import group_rows, public_rows
 from grants.feedback import with_feedback
+from grants.members import ProfileError, delete_member_profile, fetch_member_profile, save_member_profile
 from grants.personal import current_key
 from grants.profile import Profile, load_profile
 from grants.queries import (
@@ -115,6 +116,10 @@ class FeedbackPayload(BaseModel):
     verdict: Literal[-1, 1]  # 1 Relevant, -1 Not for us
 
 
+class ProfilePayload(BaseModel):
+    summary: str
+
+
 @lru_cache(maxsize=1)
 def _profile() -> Profile:
     return load_profile()
@@ -188,6 +193,16 @@ def require_member(request: Request) -> str:
     if email is None:
         raise HTTPException(status_code=401, detail="Sign in to track or mark grants.")
     return email
+
+
+def require_json(request: Request) -> None:
+    """Refuse a body that is not declared JSON.
+
+    A cross-site form or fetch can send text/plain without asking permission first, so the profile
+    is taken only from a request that says application/json, which a page of ours alone can send.
+    """
+    if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
+        raise HTTPException(status_code=415, detail="Send the profile as JSON (Content-Type: application/json).")
 
 
 class _AdminBasic(HTTPBasic):
@@ -562,6 +577,52 @@ def unvote(opp_id: str, member: str = Depends(require_member)) -> Dict[str, Any]
     except Exception as exc:
         raise _db_error("removing the vote", exc) from exc
     return {"opp_id": opp_id, "verdict": None, "removed": removed}
+
+
+def _my_profile(email: str) -> Dict[str, Any]:
+    """The member's own profile as stored: the text and when it changed, or ``has_profile`` false when they use the team's."""
+    row = fetch_member_profile(email)
+    return {
+        "has_profile": row is not None,
+        "summary": row["summary"] if row else None,
+        "updated_at": row["updated_at"].isoformat() if row else None,
+    }
+
+
+@app.get("/api/me/profile")
+def read_my_profile(member: str = Depends(require_member)) -> Dict[str, Any]:
+    try:
+        return _my_profile(member)
+    except Exception as exc:
+        raise _db_error("loading your profile", exc) from exc
+
+
+@app.put("/api/me/profile")
+def write_my_profile(payload: ProfilePayload, member: str = Depends(require_member), _json: None = Depends(require_json)) -> Dict[str, Any]:
+    """Store the member's own description, cleaned and checked (400 with the reason when it cannot be).
+
+    A changed text deletes their scores in the same transaction: they were made for the old one.
+    """
+    try:
+        save_member_profile(member, payload.summary)
+    except ProfileError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise _db_error("saving your profile", exc) from exc
+    try:
+        return _my_profile(member)
+    except Exception as exc:
+        raise _db_error("loading your profile", exc) from exc
+
+
+@app.delete("/api/me/profile")
+def delete_my_profile(member: str = Depends(require_member)) -> Dict[str, Any]:
+    """Back to the team profile: the profile and its scores go, and their votes count for the team again."""
+    try:
+        removed = delete_member_profile(member)
+    except Exception as exc:
+        raise _db_error("removing your profile", exc) from exc
+    return {"has_profile": False, "summary": None, "updated_at": None, "removed": removed}
 
 
 @app.get("/api/session")
