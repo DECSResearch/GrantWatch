@@ -296,6 +296,87 @@ class TestMarks:
         assert "applyVote(g, clearing ? null : verdict, state.view.personal);" in SCRIPT
 
 
+WORDS = st.text(alphabet="abcdefghij ", min_size=0, max_size=40)
+SPACES = st.sampled_from([" ", "  ", "\n", "\t", " \n "])
+
+
+def respaced(text, gap, edge):
+    """``text`` with its words joined by another run of whitespace, and some at either end."""
+    return edge + gap.join(text.split()) + edge
+
+
+class TestProfilePanel:
+    RESET = ("Saving a changed profile deletes the scores stored for the old one. "
+             "You will see the team's scores until the next daily run scores the new one. Save it?")
+    STORED = "I build battery models for grid-scale storage, mostly lithium and sodium chemistries."
+
+    def plan(self, me, stored, typed):
+        return call(["planSave", me, stored, typed])[0]
+
+    def test_a_first_profile_is_saved_without_asking(self):
+        for stored in (None, {"has_profile": False, "summary": None}):
+            assert self.plan(None, stored, self.STORED) == {"changed": True, "confirm": None}
+            assert self.plan(me(has_profile=False, using="team"), stored, self.STORED) == {"changed": True, "confirm": None}
+
+    def test_a_changed_text_asks_first_when_it_deletes_the_scores_shown(self):
+        stored = {"has_profile": True, "summary": self.STORED}
+        assert self.plan(me(), stored, "I study wind-energy forecasting and rural grids.") == {"changed": True, "confirm": self.RESET}
+        # Their profile has no scores of its own yet, so there is nothing to delete.
+        assert self.plan(me(using="team"), stored, "I study wind-energy forecasting and rural grids.") == {"changed": True, "confirm": None}
+
+    def test_the_same_text_in_other_spacing_is_no_change_and_asks_nothing(self):
+        stored = {"has_profile": True, "summary": self.STORED}
+        typed = "  I build battery models for grid-scale storage,\n\tmostly lithium and sodium chemistries.  "
+        assert self.plan(me(), stored, typed) == {"changed": False, "confirm": None}
+
+    def test_when_their_profile_could_not_be_read_a_save_is_a_change(self):
+        assert self.plan(me(), None, self.STORED) == {"changed": True, "confirm": self.RESET}
+
+    @settings(max_examples=40, deadline=None)
+    @given(text=WORDS, other=WORDS, gap=SPACES, edge=SPACES | st.just(""), scores=st.booleans(), has_profile=st.booleans())
+    def test_it_asks_exactly_when_the_words_change_and_scores_would_go(self, text, other, gap, edge, scores, has_profile):
+        mine = me(has_profile=has_profile, using="mine" if scores else "team")
+        stored = {"has_profile": has_profile, "summary": respaced(text, " ", "")}
+        typed = respaced(text, gap, edge)
+        assert self.plan(mine, stored, typed)["changed"] is (not has_profile)  # the same words are no change, whatever the spacing
+        plan = self.plan(mine, stored, other)
+        changed = (not has_profile) or text.split() != other.split()
+        assert plan == {"changed": changed, "confirm": self.RESET if changed and has_profile and scores else None}
+
+    def test_the_coverage_line_says_how_much_is_scored_and_what_happens_to_the_rest(self):
+        got = call(["coverageLine", me()], ["coverageLine", me(coverage={"open": 1371, "scored": 1371})], ["coverageLine", me(coverage={"open": 1371, "scored": 0})],
+                   ["coverageLine", me(has_profile=False)], ["coverageLine", None], ["coverageLine", {"has_profile": True}])
+        assert got == ["412 of 1,371 open grants scored for your profile. The rest are scored in the daily run.",
+                       "1,371 of 1,371 open grants scored for your profile.",
+                       "0 of 1,371 open grants scored for your profile. The rest are scored in the daily run.", "", "", ""]
+
+    def test_a_refused_profile_says_why_in_the_servers_words(self):
+        got = call(["profileProblem", 400, {"detail": "Write at least 40 characters about what you work on."}], ["profileProblem", 400, {"detail": [{"loc": "body"}]}],
+                   ["profileProblem", 401, {"detail": "Sign in to track or mark grants."}], ["profileProblem", 503, {}], ["profileProblem", 500, {}], ["profileProblem", 415, None])
+        assert got == ["Write at least 40 characters about what you work on.", "Couldn't update your profile: HTTP 400.",
+                       "You are signed out. Reload the page to sign in again.", "You are signed out. Reload the page to sign in again.",
+                       "Couldn't update your profile: HTTP 500.", "Couldn't update your profile: HTTP 415."]
+
+    def test_a_visitor_is_given_no_panel_and_a_member_is(self):
+        visitor, member = call(["panelHtml", {"member": False, "personal": False}, None], ["panelHtml", {"member": True, "personal": False}, None])
+        assert visitor == ""
+        assert 'id="profilePanel"' in member and "What you work on" in member and ">Save</button>" in member
+
+    def test_the_panel_has_the_help_a_labelled_empty_textarea_and_no_threshold(self):
+        html = call(["panelHtml", {"member": True, "personal": False}, me(has_profile=False)])[0]
+        assert "Two to five sentences on your topics, methods and the kinds of programs you would apply to. GrantWatch scores grants against this for you instead of the team profile." in html
+        assert '<label for="profileText">What you work on</label>' in html and re.search(r'<textarea id="profileText"[^>]*aria-describedby="profileHelp"[^>]*></textarea>', html)
+        assert "maxlength" not in html  # the server counts the cleaned text and says how far over it is
+        assert "<select" not in html and "scoring at least" not in html and "Mine" not in html  # no threshold, no Mine/Team switch
+
+    def test_the_team_button_and_the_coverage_are_only_there_with_a_profile(self):
+        none = call(["panelHtml", {"member": True, "personal": False}, me(has_profile=False)])[0]
+        own = call(["panelHtml", {"member": True, "personal": True}, me()])[0]
+        assert 'id="profileTeam" hidden>Use the team profile instead</button>' in none and 'id="profileCoverage" hidden>' in none
+        assert 'id="profileTeam">Use the team profile instead</button>' in own
+        assert '<p class="meta" id="profileCoverage">412 of 1,371 open grants scored for your profile. The rest are scored in the daily run.</p>' in own
+
+
 class TestRows:
     HOSTILE = {
         "relevance_score": 5, "relevance_reason": "ZREASON", "relevance_model": "ZMODEL", "matched_keywords": "ZKEYWORD", "watch_note": "ZNOTE",

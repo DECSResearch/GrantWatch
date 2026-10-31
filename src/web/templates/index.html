@@ -148,6 +148,18 @@
   .account button.link { background: none; color: var(--spruce); padding: 0; font-weight: 400; text-decoration: underline; }
   .account button:disabled { opacity: 0.6; cursor: wait; }
   .account .hint { flex-basis: 100%; margin: 0; font-size: 13px; }
+  /* My profile panel (built by the script, for a member only) */
+  .panel { margin: 14px 0 0; padding: 14px 0; max-width: 78ch; border-top: 1px solid var(--fog); border-bottom: 1px solid var(--fog); }
+  .panel h2 { font-size: 17px; font-weight: 600; margin: 0 0 6px; }
+  .panel label { display: block; font-size: 14px; font-weight: 600; }
+  .panel .help { margin: 2px 0 8px; font-size: 14px; color: var(--mist); }
+  .panel textarea { display: block; width: 100%; min-height: 120px; font: inherit; font-size: 15px; color: var(--ink); background: var(--well); border: 1px solid var(--line); border-radius: 4px; padding: 8px 10px; resize: vertical; }
+  .panel-actions { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; margin-top: 10px; }
+  .panel button { font: inherit; font-size: 14px; cursor: pointer; }
+  .panel button[type="submit"] { font-weight: 600; padding: 7px 18px; border: 0; border-radius: 4px; background: var(--spruce); color: var(--paper); }
+  .panel button.link { background: none; border: 0; padding: 0; color: var(--spruce); text-decoration: underline; }
+  .panel button:disabled { opacity: 0.6; cursor: wait; }
+  .panel .meta { margin-top: 10px; }
   .feedback { min-height: 22px; margin: 0; font-size: 14px; color: var(--mist); flex-basis: 100%; }
   .feedback.ok { color: var(--spruce); }
   .feedback.bad { color: var(--signal); }
@@ -177,6 +189,7 @@
     <div class="notice" id="notice" hidden></div>
     <div class="account" id="account" hidden>
       <span id="accountText"></span>
+      <button type="button" class="link" id="myProfile" aria-expanded="false" hidden>My profile</button>
       <button type="button" class="link" id="logout" hidden>Sign out</button>
       <form id="loginForm" hidden>
         <label>Team email <input type="email" id="loginEmail" required placeholder="you@und.edu" autocomplete="email"></label>
@@ -234,7 +247,7 @@
     closingWithin: $("closingWithin"), forecasted: $("forecasted"), watchedOnly: $("watchedOnly"), watchedLabel: $("watchedLabel"),
     showHidden: $("showHidden"), hiddenLabel: $("hiddenLabel"), hiddenText: $("hiddenText"),
     stage: $("stage"), clear: $("clear"), count: $("count"), results: $("results"), foot: $("foot"),
-    account: $("account"), accountText: $("accountText"), logout: $("logout"),
+    account: $("account"), accountText: $("accountText"), myProfile: $("myProfile"), logout: $("logout"),
     loginForm: $("loginForm"), loginEmail: $("loginEmail"), loginSubmit: $("loginSubmit"), loginFeedback: $("loginFeedback"), signInHelp: $("signInHelp"),
   };
 
@@ -272,6 +285,10 @@
     memberEmpty: "Nothing matches. Widen the closing window, lower the relevance bar, or clear the search.",
     scoringOff: "Relevance scoring is off. Fill in the summary in <code>config/research_profile.yml</code> and set a model to see fit scores and reasons.",
     ownPending: "Your own matches start after the next daily run. Until then you see the team's.",
+    profileHelp: "Two to five sentences on your topics, methods and the kinds of programs you would apply to. GrantWatch scores grants against this for you instead of the team profile.",
+    resetConfirm: "Saving a changed profile deletes the scores stored for the old one. You will see the team's scores until the next daily run scores the new one. Save it?",
+    teamConfirm: "Use the team profile instead? Your own profile and its scores are deleted, and your Relevant and Not for us marks count for the team again.",
+    signedOut: "You are signed out. Reload the page to sign in again.",
   };
 
   // The score bar a list opens on. It means something once there is a profile or there are scores, and a visitor has none.
@@ -416,6 +433,54 @@
     </article>`;
   }
 
+  // --- The My profile panel ---
+
+  // Whitespace folded as the server folds it (it also drops control characters), so a text that differs only in spacing is no change.
+  const norm = (text) => String(text ?? "").replace(/\s+/g, " ").trim();
+
+  // What saving `typed` would do. It is a change unless it matches the profile as stored; a change deletes the member's
+  // scores, which exist while they are shown their own (`me.using`), so that is when to ask first. A first profile has none.
+  function planSave(me, stored, typed) {
+    const changed = !(stored && stored.has_profile) || norm(typed) !== norm(stored.summary);
+    const deletesScores = Boolean(me && me.has_profile && me.using === "mine");
+    return { changed, confirm: changed && deletesScores ? TEXT.resetConfirm : null };
+  }
+
+  // "412 of 1,371 open grants scored for your profile. The rest are scored in the daily run." (nothing without a profile)
+  function coverageLine(me) {
+    if (!me || !me.has_profile || !me.coverage) return "";
+    const { open, scored } = me.coverage;
+    return `${fmtNum(scored)} of ${fmtNum(open)} open grants scored for your profile.${scored < open ? " The rest are scored in the daily run." : ""}`;
+  }
+
+  // What to tell the person when the server refused or failed: its own words for a profile it cannot store (400).
+  function profileProblem(status, body) {
+    if (status === 400 && body && typeof body.detail === "string") return body.detail;
+    if (status === 401 || status === 503) return TEXT.signedOut;
+    return `Couldn't update your profile: HTTP ${status}.`;
+  }
+
+  // The panel's HTML, for a member only: a visitor gets an empty string, and the page's markup holds none of it.
+  // The textarea is filled with `.value` once the stored text is in, never as HTML.
+  function panelHtml(view, me) {
+    if (!view.member) return "";
+    const line = coverageLine(me);
+    return `<section class="panel" id="profilePanel" aria-labelledby="panelTitle">
+      <h2 id="panelTitle">My profile</h2>
+      <form id="profileForm">
+        <label for="profileText">What you work on</label>
+        <p class="help" id="profileHelp">${esc(TEXT.profileHelp)}</p>
+        <textarea id="profileText" rows="6" aria-describedby="profileHelp" required></textarea>
+        <div class="panel-actions">
+          <button type="submit" id="profileSave">Save</button>
+          <button type="button" class="link" id="profileTeam"${view.personal ? "" : " hidden"}>Use the team profile instead</button>
+        </div>
+        <p class="feedback" id="profileFeedback" role="status" aria-live="polite"></p>
+      </form>
+      <p class="meta" id="profileCoverage"${line ? "" : " hidden"}>${esc(line)}</p>
+    </section>`;
+  }
+
   // Whether a row is left out of the list until asked for: the team's Not for us for a member on the team profile, and
   // their own for one with a profile of their own (their vote decides for them alone), unless the grant is tracked.
   // `with_feedback` in grants/feedback.py says the same on the server, and the tests hold the two together.
@@ -478,7 +543,7 @@
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       state.profile = await res.json();
     } catch (err) {
-      state.profile = { configured: false };
+      state.profile = state.profile || { configured: false };  // asked again after a change: keep what is known
     }
     if (Array.isArray(state.profile.horizons) && state.profile.horizons.length) state.horizons = state.profile.horizons.map(Number);
   }
@@ -718,7 +783,7 @@
   function renderAccount() {
     const v = state.view;
     els.account.hidden = !v.signIn;
-    els.logout.hidden = !v.member;
+    els.myProfile.hidden = els.logout.hidden = !v.member;
     els.loginForm.hidden = v.member;
     els.accountText.textContent = v.accountText;
     els.signInHelp.textContent = v.signInHelp;
@@ -762,6 +827,108 @@
     }
   }
 
+  // --- The My profile panel: built when a member opens it, and gone when they close it ---
+  const panel = { el: null, stored: null };
+  const inPanel = (id) => panel.el.querySelector(`#${id}`);
+
+  function panelFeedback(text, kind) {
+    if (!panel.el) return;  // closed while a request was out
+    const f = inPanel("profileFeedback");
+    f.className = kind ? `feedback ${kind}` : "feedback";
+    f.textContent = text;
+  }
+
+  // The team button and the coverage line follow the profile, which changes under an open panel when it is saved or removed.
+  function renderPanelParts() {
+    if (!panel.el) return;
+    const line = coverageLine(state.profile && state.profile.me);
+    inPanel("profileTeam").hidden = !state.view.personal;
+    inPanel("profileCoverage").textContent = line;
+    inPanel("profileCoverage").hidden = !line;
+  }
+
+  function closePanel() {
+    if (panel.el) panel.el.remove();
+    panel.el = null;
+    els.myProfile.setAttribute("aria-expanded", "false");
+  }
+
+  async function openPanel() {
+    if (!state.view.member || panel.el) return;
+    const holder = document.createElement("div");
+    holder.innerHTML = panelHtml(state.view, state.profile && state.profile.me);
+    panel.el = holder.firstElementChild;
+    els.account.insertAdjacentElement("afterend", panel.el);
+    els.myProfile.setAttribute("aria-expanded", "true");
+    panel.el.addEventListener("submit", saveProfile);
+    panel.el.addEventListener("keydown", (event) => { if (event.key === "Escape") { closePanel(); els.myProfile.focus(); } });
+    inPanel("profileTeam").addEventListener("click", useTeamProfile);
+    const text = inPanel("profileText");
+    text.disabled = true;
+    panelFeedback("Loading…", "");
+    try {
+      const res = await fetch("/api/me/profile", { headers: { Accept: "application/json" } });
+      if (!res.ok) throw new Error(profileProblem(res.status, null));
+      panel.stored = await res.json();
+      text.value = panel.stored.summary || "";
+      panelFeedback("", "");
+    } catch (err) {
+      panel.stored = null;
+      panelFeedback(err.message, "bad");
+    }
+    text.disabled = false;
+    text.focus();
+  }
+
+  // Everything the member sees depends on whose profile it is, so ask for the profile and the list again; the filters stay as set.
+  async function refreshForProfile() {
+    await loadProfile();
+    renderPage();
+    renderPanelParts();
+    await loadGrants();
+  }
+
+  async function saveProfile(event) {
+    event.preventDefault();
+    const text = inPanel("profileText"), save = inPanel("profileSave");
+    const plan = planSave(state.profile && state.profile.me, panel.stored, text.value);
+    if (plan.confirm && !window.confirm(plan.confirm)) { panelFeedback("", ""); return; }  // nothing was saved, so no earlier "Saved." stands
+    save.disabled = true;
+    panelFeedback("Saving…", "");
+    try {
+      const res = await fetch("/api/me/profile", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ summary: text.value }) });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(profileProblem(res.status, body));
+      panel.stored = body;
+      text.value = body.summary || "";  // as it was stored, whitespace folded
+      await refreshForProfile();
+      panelFeedback("Saved.", "ok");
+    } catch (err) {
+      panelFeedback(err.message, "bad");
+    } finally {
+      save.disabled = false;
+    }
+  }
+
+  async function useTeamProfile() {
+    if (!window.confirm(TEXT.teamConfirm)) return;
+    const button = inPanel("profileTeam");
+    button.disabled = true;
+    try {
+      const res = await fetch("/api/me/profile", { method: "DELETE" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(profileProblem(res.status, body));
+      panel.stored = { has_profile: false, summary: null, updated_at: null };
+      inPanel("profileText").value = "";
+      await refreshForProfile();
+      panelFeedback("You are using the team profile.", "ok");
+    } catch (err) {
+      panelFeedback(err.message, "bad");
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   // Reload rather than redraw in place: the scores, marks and profile on screen were the member's own,
   // and a shared screen must not keep them.
   async function signOut() {
@@ -789,6 +956,7 @@
   });
   els.loginForm.addEventListener("submit", requestLink);
   els.logout.addEventListener("click", signOut);
+  els.myProfile.addEventListener("click", () => (panel.el ? closePanel() : openPanel()));
 
   // The page is drawn once it knows who is looking, so a visitor never sees a member's controls and the buttons are right the first time.
   Promise.all([loadSession(), loadProfile()]).then(() => { renderPage(); setupFilters(); return loadGrants(); });

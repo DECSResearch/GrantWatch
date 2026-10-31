@@ -378,6 +378,53 @@ class TestVisitorsPage:
         assert ".filters label {" in STYLE  # the rule it has to beat
 
 
+class TestProfilePanel:
+    def test_none_of_the_panel_is_in_the_markup_a_visitor_is_sent(self):
+        markup = INDEX.split("<script>")[0] + INDEX.split("</script>")[1]
+        for part in ("profilePanel", "<textarea", "What you work on", "Use the team profile", "Two to five sentences", "profileText", "Save</button>"):
+            assert part not in markup
+        # Only the link is there, and hidden, beside Sign out; the panel is made by the script.
+        assert re.search(r'<span id="accountText"></span>\s*<button type="button" class="link" id="myProfile" aria-expanded="false" hidden>My profile</button>\s*<button type="button" class="link" id="logout" hidden>', markup)
+
+    def test_the_panel_is_built_for_a_member_when_they_open_it_and_toggled_by_the_link(self):
+        js = script()
+        assert "if (!state.view.member || panel.el) return;" in js.split("async function openPanel() {")[1].split("\n")[1]
+        assert 'els.myProfile.addEventListener("click", () => (panel.el ? closePanel() : openPanel()));' in js
+        assert 'els.myProfile.setAttribute("aria-expanded", "true");' in js and 'els.myProfile.setAttribute("aria-expanded", "false");' in js
+        assert 'els.myProfile.hidden = els.logout.hidden = !v.member;' in js
+        assert 'event.key === "Escape"' in js and "els.myProfile.focus()" in js
+
+    def test_the_stored_text_goes_into_the_textarea_as_a_value_never_as_html(self):
+        opened = script().split("async function openPanel() {")[1].split("\n  }\n")[0]
+        assert "text.value = panel.stored.summary || \"\";" in opened and 'fetch("/api/me/profile", { headers: { Accept: "application/json" } })' in opened
+        assert opened.count("innerHTML") == 1 and "holder.innerHTML = panelHtml(state.view" in opened  # the only HTML written is the panel's own
+
+    def test_a_save_asks_before_it_sends_and_sends_json(self):
+        save = script().split("async function saveProfile(event) {")[1].split("\n  }\n")[0]
+        assert save.index("window.confirm(plan.confirm)") < save.index('fetch("/api/me/profile"')
+        assert 'method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ summary: text.value })' in save  # a form post gets a 415
+        assert "planSave(state.profile && state.profile.me, panel.stored, text.value)" in save
+        assert "event.preventDefault();" in save
+
+    def test_the_team_profile_is_asked_for_first_too(self):
+        use = script().split("async function useTeamProfile() {")[1].split("\n  }\n")[0]
+        assert use.index("window.confirm(TEXT.teamConfirm)") < use.index('fetch("/api/me/profile", { method: "DELETE" })')
+
+    def test_after_a_save_or_a_removal_the_profile_and_the_list_are_asked_for_again_with_the_filters_left_alone(self):
+        js = script()
+        for flow in ("async function saveProfile(event) {", "async function useTeamProfile() {"):
+            assert "await refreshForProfile();" in js.split(flow)[1].split("\n  }\n")[0]
+        refresh = js.split("async function refreshForProfile() {")[1].split("\n  }\n")[0]
+        assert refresh.index("await loadProfile();") < refresh.index("renderPage();") < refresh.index("await loadGrants();") and "setupFilters" not in refresh
+
+    def test_a_failed_second_read_of_the_profile_keeps_what_is_known(self):
+        assert "state.profile = state.profile || { configured: false };" in script()
+
+    def test_the_textarea_has_the_field_border_and_the_panel_the_page_tokens(self):
+        assert "border: 1px solid var(--line)" in rule(STYLE, ".panel textarea") and "background: var(--well)" in rule(STYLE, ".panel textarea")
+        assert "var(--fog)" in rule(STYLE, ".panel") and "var(--spruce)" in rule(STYLE, '.panel button[type="submit"]')
+
+
 class TestAccessibility:
     def test_the_strip_is_a_labelled_group_not_an_image(self):
         assert 'id="strip" role="group" aria-label="Timeline of upcoming deadlines"' in INDEX
