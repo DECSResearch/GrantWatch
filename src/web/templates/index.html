@@ -15,6 +15,7 @@
     --ink: #15221c;
     --mist: #5b6660;
     --fog: #d6dbd7;
+    --line: #858f8a;
     --spruce: #1e5a44;
     --spruce-soft: #dfeae4;
     --signal: #b3261e;
@@ -28,6 +29,7 @@
       --ink: #e6eae7;
       --mist: #97a39d;
       --fog: #2a3630;
+      --line: #66736d;
       --spruce: #6fbf9a;
       --spruce-soft: #1c2f27;
       --signal: #f08a7e;
@@ -44,6 +46,7 @@
     color: var(--ink);
     background: var(--paper);
   }
+  [hidden] { display: none !important; }
   a { color: var(--spruce); }
   :focus-visible { outline: 2px solid var(--spruce); outline-offset: 2px; }
   .page { max-width: 1040px; margin: 0 auto; padding: 36px 20px 72px; }
@@ -65,13 +68,11 @@
   .strip .tick-label.first { transform: none; }
   .strip .tick-label.last { transform: translateX(-100%); }
   .strip .band { position: absolute; bottom: 0; top: 0; background: var(--spruce-soft); opacity: 0.55; }
-  .marker {
-    position: absolute; bottom: 0; width: 6px; margin-left: -3px;
-    background: var(--spruce); border: 0; padding: 0; cursor: pointer; border-radius: 1px 1px 0 0;
-  }
-  .marker.forecast { background: transparent; border: 1.5px solid var(--spruce); border-bottom: 0; }
-  .marker.watched::after { content: ""; position: absolute; left: 50%; top: -9px; width: 6px; height: 6px; margin-left: -3px; border-radius: 50%; background: var(--ochre); }
-  .marker:hover, .marker:focus-visible { background: var(--ochre); border-color: var(--ochre); }
+  .marker { position: absolute; bottom: 0; width: var(--hit); margin-left: calc(var(--hit) / -2); background: none; border: 0; padding: 0; cursor: pointer; }
+  .marker::before { content: ""; position: absolute; bottom: 0; left: 50%; width: 6px; height: var(--bar); margin-left: -3px; background: var(--spruce); border-radius: 1px 1px 0 0; }
+  .marker.forecast::before { background: transparent; border: 1.5px solid var(--spruce); border-bottom: 0; }
+  .marker.watched::after { content: ""; position: absolute; left: 50%; bottom: calc(var(--bar) + 3px); width: 6px; height: 6px; margin-left: -3px; border-radius: 50%; background: var(--ochre); }
+  .marker:hover::before, .marker:focus-visible::before { background: var(--ochre); border-color: var(--ochre); }
   .strip-axis { height: 22px; }
   .strip-empty { position: absolute; left: 0; right: 0; top: 24px; text-align: center; color: var(--mist); font-size: 14px; }
 
@@ -81,7 +82,7 @@
   .filters .check { flex-direction: row; align-items: center; gap: 6px; padding-bottom: 8px; color: var(--ink); font-size: 14px; }
   .filters input[type="search"], .filters select {
     font: inherit; font-size: 15px; color: var(--ink); background: var(--well);
-    border: 1px solid var(--fog); border-radius: 4px; padding: 7px 10px; min-width: 150px;
+    border: 1px solid var(--line); border-radius: 4px; padding: 7px 10px; min-width: 150px;
   }
   .filters input[type="search"] { min-width: 240px; }
   .filters input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--spruce); margin: 0; }
@@ -113,7 +114,8 @@
   .meta { margin: 2px 0 0; font-size: 14px; color: var(--mist); }
   .why { margin: 6px 0 0; font-size: 14px; max-width: 78ch; }
   .why.summary { color: var(--mist); }
-  .more { background: none; border: 0; padding: 0; margin-top: 4px; color: var(--spruce); font: inherit; font-size: 13px; cursor: pointer; }
+  .links { display: flex; flex-wrap: wrap; gap: 0 16px; margin-top: 4px; }
+  .more { background: none; border: 0; padding: 2px 0; color: var(--spruce); font: inherit; font-size: 13px; cursor: pointer; }
   .detail { margin-top: 10px; padding: 12px 14px; background: var(--well); border: 1px solid var(--fog); border-radius: 4px; font-size: 14px; max-width: 78ch; }
   .detail dl { margin: 0 0 10px; display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; }
   .detail dt { color: var(--mist); }
@@ -123,21 +125,24 @@
   .squares { display: flex; gap: 3px; }
   .squares i { display: block; width: 10px; height: 10px; background: var(--fog); border-radius: 1px; }
   .squares i.on { background: var(--spruce); }
-  .track {
-    font: inherit; font-size: 13px; font-weight: 600; padding: 6px 0; width: 100%;
-    border: 1px solid var(--spruce); border-radius: 4px; background: transparent; color: var(--spruce); cursor: pointer;
-  }
+  .actions { display: flex; flex-direction: column; gap: 6px; }
+  .actions button { font: inherit; font-size: 13px; padding: 6px 0; width: 100%; border-radius: 4px; background: transparent; cursor: pointer; }
+  .track { font-weight: 600; border: 1px solid var(--spruce); color: var(--spruce); }
   .track.on { background: var(--spruce); color: var(--paper); }
+  .vote { border: 1px solid var(--line); color: var(--ink); }
+  .vote[aria-pressed="true"] { font-weight: 600; background: var(--spruce-soft); border-color: var(--spruce); color: var(--spruce); }
+  .vote.no[aria-pressed="true"] { border-color: var(--signal); color: var(--signal); }
   .track:disabled { opacity: 0.6; cursor: wait; }
+  .tracked-note { color: var(--spruce); font-weight: 600; }
+  .readonly .row { grid-template-columns: 76px 1fr 120px; }
   .empty, .error { margin-top: 30px; padding: 26px 0; border-top: 1px solid var(--fog); border-bottom: 1px solid var(--fog); color: var(--mist); }
   .error { color: var(--signal); }
 
   /* Team sign-in */
-  .account[hidden], .account [hidden] { display: none; }
   .account { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: end; margin: 14px 0 0; font-size: 14px; color: var(--mist); }
   .account form { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
   .account label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
-  .account input { font: inherit; font-size: 15px; color: var(--ink); background: var(--well); border: 1px solid var(--fog); border-radius: 4px; padding: 6px 10px; min-width: 220px; }
+  .account input { font: inherit; font-size: 15px; color: var(--ink); background: var(--well); border: 1px solid var(--line); border-radius: 4px; padding: 6px 10px; min-width: 220px; }
   .account button { font: inherit; font-size: 14px; font-weight: 600; padding: 7px 14px; border: 0; border-radius: 4px; background: var(--spruce); color: var(--paper); cursor: pointer; }
   .account button.link { background: none; color: var(--spruce); padding: 0; font-weight: 400; text-decoration: underline; }
   .account button:disabled { opacity: 0.6; cursor: wait; }
@@ -150,10 +155,13 @@
 
   @media (max-width: 640px) {
     .page { padding: 24px 16px 56px; }
-    .row { grid-template-columns: 64px 1fr; }
+    .row, .readonly .row { grid-template-columns: 64px 1fr; }
     .score { grid-column: 2; flex-direction: row; align-items: center; gap: 8px; padding-top: 0; }
-    .track { grid-column: 2; width: auto; padding: 6px 14px; justify-self: start; }
+    .actions { grid-column: 2; flex-direction: row; flex-wrap: wrap; justify-self: start; }
+    .actions button { width: auto; padding: 6px 14px; }
+    .filters .search { flex: 1 1 100%; }
     .filters input[type="search"] { min-width: 100%; }
+    .strip .tick-label.first { display: none; }
     .count { margin-left: 0; }
   }
 </style>
@@ -174,6 +182,7 @@
       </form>
       <p class="feedback" id="loginFeedback" role="status" aria-live="polite"></p>
     </div>
+    <p class="meta" id="trackingOff" hidden>Sign-in is off on this server, so grants can't be tracked or marked here.</p>
   </header>
 
   <section class="horizon" aria-labelledby="horizonTitle">
@@ -181,13 +190,13 @@
       <h2 id="horizonTitle">Deadlines ahead</h2>
       <span id="horizonHint">Each bar is a grant; taller means a better fit. Hollow bars are estimated dates.</span>
     </div>
-    <div class="strip" id="strip" role="img" aria-label="Timeline of upcoming deadlines"></div>
+    <div class="strip" id="strip" role="group" aria-label="Timeline of upcoming deadlines"></div>
     <div class="strip-axis"></div>
   </section>
 
   <section class="filters" aria-label="Filters">
-    <label>Search
-      <input type="search" id="q" placeholder="Title, agency, or opportunity number" autocomplete="off">
+    <label class="search">Search
+      <input type="search" id="q" placeholder="Title, agency, or number" autocomplete="off">
     </label>
     <label>Relevance at least
       <select id="minScore"></select>
@@ -203,8 +212,9 @@
       </select>
     </label>
     <label class="check"><input type="checkbox" id="forecasted" checked> Show forecasted</label>
-    <label class="check"><input type="checkbox" id="watchedOnly"> Only tracked</label>
-    <button type="button" class="clear" id="clear">Clear filters</button>
+    <label class="check" id="watchedLabel"><input type="checkbox" id="watchedOnly"> Only tracked</label>
+    <label class="check" id="hiddenLabel" hidden><input type="checkbox" id="showHidden"> <span id="hiddenText">Show hidden</span></label>
+    <button type="button" class="clear" id="clear">Reset filters</button>
     <span class="count" id="count" role="status" aria-live="polite"></span>
   </section>
 
@@ -217,14 +227,17 @@
 (function () {
   const $ = (id) => document.getElementById(id);
   const els = {
-    status: $("status"), profileLine: $("profileLine"), notice: $("notice"), strip: $("strip"),
+    status: $("status"), profileLine: $("profileLine"), notice: $("notice"), trackingOff: $("trackingOff"), strip: $("strip"),
     horizonHint: $("horizonHint"), q: $("q"), minScore: $("minScore"), closingWithin: $("closingWithin"),
-    forecasted: $("forecasted"), watchedOnly: $("watchedOnly"), stage: $("stage"), clear: $("clear"), count: $("count"), results: $("results"),
+    forecasted: $("forecasted"), watchedOnly: $("watchedOnly"), watchedLabel: $("watchedLabel"),
+    showHidden: $("showHidden"), hiddenLabel: $("hiddenLabel"), hiddenText: $("hiddenText"),
+    stage: $("stage"), clear: $("clear"), count: $("count"), results: $("results"),
     account: $("account"), accountText: $("accountText"), logout: $("logout"),
     loginForm: $("loginForm"), loginEmail: $("loginEmail"), loginSubmit: $("loginSubmit"), loginFeedback: $("loginFeedback"),
   };
 
-  const state = { profile: null, horizons: [7, 30, 60, 90], grants: [], busy: false, session: { auth_configured: false, email: null } };
+  const LIMIT = 500;
+  const state = { profile: null, horizons: [7, 30, 60, 90], grants: [], total: 0, busy: false, session: { auth_configured: false, email: null } };
 
   const fmtDate = (iso) => {
     if (!iso) return "no date";
@@ -233,6 +246,12 @@
   };
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  const link = (label, url) => (url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(label)}</a>` : esc(label));
+  const signInOn = () => Boolean(state.session.auth_configured);
+  // Grants.gov fills a missing close date with one far in the future; the API marks it not firm.
+  const placeholderDate = (g) => Boolean(g.close_date) && g.firm_deadline === false;
+  // Grants the team marked Not for us stay out of the list unless asked for.
+  const visible = () => (els.showHidden.checked ? state.grants : state.grants.filter((g) => !g.hidden));
 
   function fillSelect(select, options, value) {
     select.innerHTML = options.map((o) => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join("");
@@ -242,13 +261,16 @@
   function setupFilters() {
     const p = state.profile || {};
     const scored = (p.data && p.data.scored) || 0;
-    const scoreOptions = [{ value: 0, label: "Any" }, { value: 3, label: "3 of 5" }, { value: 4, label: "4 of 5" }, { value: 5, label: "5 of 5" }];
-    fillSelect(els.minScore, scoreOptions, (p.configured || scored > 0) ? (p.min_score ?? 4) : 0);
-    const windows = [...new Set([...state.horizons, 180])].sort((a, b) => a - b).map((d) => ({ value: d, label: `${d} days` }));
-    windows.push({ value: "", label: "Any date" });
-    fillSelect(els.closingWithin, windows, state.horizons[state.horizons.length - 1]);
+    const threshold = (p.configured || scored > 0) ? (p.min_score ?? 4) : 0;
+    // The team threshold can be any of 0 to 5; it must be a choice, or Reset filters could not restore it.
+    const scoreOptions = [...new Set([0, 3, 4, 5, threshold])].sort((a, b) => a - b).map((v) => ({ value: v, label: v === 0 ? "Any" : `${v} of 5` }));
+    fillSelect(els.minScore, scoreOptions, threshold);
+    const windows = [{ value: "", label: "Any date" }];
+    [...new Set([...state.horizons, 180])].sort((a, b) => a - b).forEach((d) => windows.push({ value: d, label: `${d} days` }));
+    fillSelect(els.closingWithin, windows, "");
     els.forecasted.checked = p.include_forecasted !== false;
     els.watchedOnly.checked = false;
+    els.showHidden.checked = false;
     els.stage.value = "";
     els.q.value = "";
   }
@@ -265,7 +287,8 @@
     if (Array.isArray(p.horizons) && p.horizons.length) state.horizons = p.horizons.map(Number);
     const d = p.data;
     if (d && d.data_as_of) {
-      els.status.textContent = `Data as of ${fmtDate(d.data_as_of)}. ${plural(d.open, "open grant")}, ${d.scored} scored, ${d.watched} tracked.`;
+      const fit = d.scored > 0 && p.min_score > 0 && d.fit_count != null ? ` ${d.fit_count} score ${p.min_score} or higher.` : "";
+      els.status.textContent = `Data as of ${fmtDate(d.data_as_of)}. ${plural(d.open, "open grant")}, ${d.scored} scored, ${d.watched} tracked.${fit}`;
     } else if (d) {
       els.status.textContent = "No pipeline run recorded yet.";
     } else {
@@ -282,6 +305,13 @@
     setupFilters();
   }
 
+  // What can be done here depends on the session, so this runs once both it and the profile are in.
+  function renderControls() {
+    const tracked = (state.profile && state.profile.data && state.profile.data.watched) || 0;
+    els.watchedLabel.hidden = !(signInOn() || tracked > 0);
+    els.trackingOff.hidden = signInOn();
+  }
+
   function params() {
     const q = new URLSearchParams();
     if (els.q.value.trim()) q.set("q", els.q.value.trim());
@@ -290,7 +320,7 @@
     if (els.stage.value) q.set("stage", els.stage.value);
     q.set("include_forecasted", els.forecasted.checked ? "true" : "false");
     if (els.watchedOnly.checked) q.set("watched_only", "true");
-    q.set("limit", "500");
+    q.set("limit", String(LIMIT));
     return q;
   }
 
@@ -301,11 +331,15 @@
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`);
       state.grants = body.results || [];
+      state.grants.forEach((g, i) => { g.idx = i; });  // rows, titles and markers are named by this, not by the opportunity number
+      state.total = Number(body.total ?? state.grants.length);
       render();
     } catch (err) {
       state.grants = [];
+      state.total = 0;
       els.results.innerHTML = `<p class="error">Couldn't load grants: ${esc(err.message)}. The database may be offline.</p>`;
       els.count.textContent = "";
+      renderHiddenToggle();
       renderStrip();
     }
   }
@@ -319,7 +353,7 @@
 
   function groups() {
     const map = new Map();
-    for (const g of state.grants) {
+    for (const g of visible()) {
       const key = bucketOf(g.days_left);
       if (!map.has(key)) map.set(key, []);
       map.get(key).push(g);
@@ -332,7 +366,7 @@
         label = lower === 0 ? `Closes within ${k} days` : `Closes in ${lower + 1} to ${k} days`;
         lower = k;
       } else {
-        label = { later: `Closes after ${state.horizons[state.horizons.length - 1]} days`, none: "No deadline listed", closed: "Already closed" }[k];
+        label = { later: `Closes after ${state.horizons[state.horizons.length - 1]} days`, none: "No firm deadline", closed: "Already closed" }[k];
       }
       return { key: k, label, items: map.get(k) };
     });
@@ -349,56 +383,116 @@
   function scoreCell(g) {
     const s = g.relevance_score;
     const squares = [0, 1, 2, 3, 4].map((i) => `<i class="${s !== null && s !== undefined && i < s ? "on" : ""}"></i>`).join("");
-    return `<div class="score"><div class="squares" aria-hidden="true">${squares}</div><span>${s === null || s === undefined ? "unscored" : `${s} of 5`}</span></div>`;
+    // With sign-in off nobody can track here, but the MCP server can; show its marks without a button.
+    const tracked = !signInOn() && g.watched ? `<span class="tracked-note">Tracked</span>` : "";
+    return `<div class="score"><div class="squares" aria-hidden="true">${squares}</div><span>${s === null || s === undefined ? "unscored" : `${s} of 5`}</span>${tracked}</div>`;
+  }
+
+  const voteLabel = (g, verdict) => {
+    const n = verdict > 0 ? g.votes_up : g.votes_down;
+    return `${verdict > 0 ? "Relevant" : "Not for us"}${n ? ` ${n}` : ""}`;
+  };
+
+  function actionsHtml(g) {
+    if (!signInOn()) return "";
+    const describe = `aria-describedby="title-${g.idx}"`;
+    const vote = (verdict) => `<button type="button" class="vote ${verdict > 0 ? "yes" : "no"}" data-vote="${verdict}" aria-pressed="${g.my_verdict === verdict}" ${describe}>${esc(voteLabel(g, verdict))}</button>`;
+    return `<div class="actions">
+        <button type="button" class="track ${g.watched ? "on" : ""}" data-track="${esc(g.opp_id)}" aria-pressed="${g.watched ? "true" : "false"}" ${describe}>${g.watched ? "Tracked" : "Track"}</button>
+        ${vote(1)}${vote(-1)}
+      </div>`;
   }
 
   function rowHtml(g) {
+    const i = g.idx;
+    const describe = `aria-describedby="title-${i}"`;
     const meta = [g.agency || "Unknown agency"];
-    if (g.close_date) meta.push(`closes ${fmtDate(g.close_date)}${g.forecasted ? " (estimated)" : ""}`);
+    if (g.close_date) meta.push(placeholderDate(g) ? "no firm deadline" : `closes ${fmtDate(g.close_date)}${g.forecasted ? " (estimated)" : ""}`);
     if (g.award_ceiling) meta.push(`up to $${Number(g.award_ceiling).toLocaleString()}`);
+    const also = g.also_posted && g.also_posted.length
+      ? `<p class="meta">Also posted by: ${g.also_posted.map((a) => link(a.agency || a.opp_id, a.url)).join(", ")}</p>` : "";
+    const newer = g.superseded_by ? `<p class="meta">A newer solicitation exists: ${link(g.superseded_by.opp_id, g.superseded_by.url)}</p>` : "";
     const why = g.relevance_reason ? `<p class="why">${esc(g.relevance_reason)}</p>` : g.summary ? `<p class="why summary">${esc(g.summary)}</p>` : "";
     const title = g.url ? `<a href="${esc(g.url)}" target="_blank" rel="noopener">${esc(g.title)}</a>` : esc(g.title);
-    return `<article class="row" id="row-${esc(g.opp_id)}" data-id="${esc(g.opp_id)}">
+    const grantsGov = g.url ? `<a class="more" href="${esc(g.url)}" target="_blank" rel="noopener" ${describe}>Grants.gov</a>` : "";
+    return `<article class="row" id="row-${i}" data-idx="${i}" data-id="${esc(g.opp_id)}" tabindex="-1">
       ${daysCell(g)}
       <div class="main">
-        <h3 class="title">${title}</h3>
+        <h3 class="title" id="title-${i}">${title}</h3>
         <p class="meta">${esc(meta.join(", "))}</p>
-        ${why}
-        <button type="button" class="more" data-more="${esc(g.opp_id)}" aria-expanded="false">Details</button>
+        ${also}${newer}${why}
+        <div class="links">
+          <button type="button" class="more" data-more="${esc(g.opp_id)}" aria-expanded="false" ${describe}>Details</button>
+          ${grantsGov}
+        </div>
         <div class="detail" data-detail="${esc(g.opp_id)}" hidden></div>
       </div>
       ${scoreCell(g)}
-      <button type="button" class="track ${g.watched ? "on" : ""}" data-track="${esc(g.opp_id)}" aria-pressed="${g.watched ? "true" : "false"}">${g.watched ? "Tracked" : "Track"}</button>
+      ${actionsHtml(g)}
     </article>`;
   }
 
   function render() {
+    const shown = visible();
     const gs = groups();
-    els.count.textContent = plural(state.grants.length, "grant");
-    if (!state.grants.length) {
-      els.results.innerHTML = `<p class="empty">Nothing matches. Widen the closing window, lower the relevance bar, or clear the search.</p>`;
+    els.results.classList.toggle("readonly", !signInOn());
+    els.count.textContent = state.total > LIMIT ? `Showing ${LIMIT} of ${state.total} grants. Narrow the filters to see the rest.` : plural(shown.length, "grant");
+    if (!shown.length) {
+      els.results.innerHTML = state.grants.length
+        ? `<p class="empty">Everything here was marked Not for us. Turn on Show hidden to see it.</p>`
+        : `<p class="empty">Nothing matches. Widen the closing window, lower the relevance bar, or clear the search.</p>`;
     } else {
       els.results.innerHTML = gs.map((grp) => `<section class="group"><h2>${esc(grp.label)} <span>(${grp.items.length})</span></h2>${grp.items.map(rowHtml).join("")}</section>`).join("");
     }
+    renderHiddenToggle();
     renderStrip();
   }
 
+  function renderHiddenToggle() {
+    const n = state.grants.filter((g) => g.hidden).length;
+    els.hiddenLabel.hidden = n === 0 && !els.showHidden.checked;
+    els.hiddenText.textContent = n ? `Show hidden (${n})` : "Show hidden";
+  }
+
+  // Markers get a 24px-wide hit box around their 6px bar. Several on one day are spread 8px apart so
+  // none covers another; a crowd near the right edge spreads leftwards so it cannot widen the page.
+  // A box never reaches past the midpoint to its neighbour, so each bar stays clickable.
+  const HIT = 24, BAR = 6, STEP = 8, NARROW = 340, GUTTER = 12;
+
   function renderStrip() {
     const max = state.horizons[state.horizons.length - 1];
-    const pct = (d) => `${Math.min(100, Math.max(0, (d / max) * 100))}%`;
+    const pct = (d) => Math.min(100, Math.max(0, (d / max) * 100));
     const ticks = [0, ...state.horizons].map((d, i, arr) => {
       const cls = i === 0 ? "first" : i === arr.length - 1 ? "last" : "";
-      return `<span class="tick" style="left:${pct(d)}"></span><span class="tick-label ${cls}" style="left:${pct(d)}">${d === 0 ? "today" : `${d} days`}</span>`;
+      return `<span class="tick" style="left:${pct(d)}%"></span><span class="tick-label ${cls}" style="left:${pct(d)}%">${d === 0 ? "today" : `${d} days`}</span>`;
     }).join("");
     const first = state.horizons[0];
-    const band = `<span class="band" style="left:0;width:${pct(first)}"></span>`;
-    const inRange = state.grants.filter((g) => g.days_left !== null && g.days_left !== undefined && g.days_left >= 0 && g.days_left <= max);
-    const markers = inRange.map((g) => {
+    const band = `<span class="band" style="left:0;width:${pct(first)}%"></span>`;
+    const inRange = visible().filter((g) => g.days_left !== null && g.days_left !== undefined && g.days_left >= 0 && g.days_left <= max)
+      .sort((a, b) => a.days_left - b.days_left);
+    const placed = [];
+    for (let start = 0; start < inRange.length;) {
+      const day = inRange[start].days_left;
+      let end = start;
+      while (end < inRange.length && inRange[end].days_left === day) end++;
+      const crowd = end - start;
+      const dir = (crowd - 1) * STEP + STEP / 2 > ((max - day) / max) * NARROW + GUTTER ? -1 : 1;
+      for (let k = 0; k < crowd; k++) placed.push({ g: inRange[start + k], pct: pct(day), off: dir * k * STEP });
+      start = end;
+    }
+    placed.sort((a, b) => a.pct - b.pct || a.off - b.off);
+    const gap = (a, b) => `calc(${b.pct - a.pct}% + ${b.off - a.off}px)`;
+    const markers = placed.map((m, i) => {
+      const g = m.g;
       const s = g.relevance_score;
       const h = s === null || s === undefined ? 12 : 12 + s * 10;
+      const reach = [`${HIT}px`];
+      if (i > 0) reach.push(gap(placed[i - 1], m));
+      if (i < placed.length - 1) reach.push(gap(m, placed[i + 1]));
       const cls = `marker${g.forecasted ? " forecast" : ""}${g.watched ? " watched" : ""}`;
       const label = `${g.title} (${g.agency || "agency unknown"}), ${plural(g.days_left, "day")} left`;
-      return `<button type="button" class="${cls}" style="left:${pct(g.days_left)};height:${h}px" data-jump="${esc(g.opp_id)}" title="${esc(label)}" aria-label="${esc(label)}"></button>`;
+      const style = `left:calc(${m.pct}% + ${m.off}px);height:${Math.max(h, HIT)}px;--bar:${h}px;--hit:max(${BAR}px, min(${reach.join(", ")}))`;
+      return `<button type="button" class="${cls}" style="${style}" data-jump="${g.idx}" title="${esc(label)}" aria-label="${esc(label)}"></button>`;
     }).join("");
     const empty = inRange.length ? "" : `<span class="strip-empty">No deadlines in the next ${max} days for the current filters.</span>`;
     els.strip.innerHTML = band + ticks + markers + empty;
@@ -419,16 +513,59 @@
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const g = state.grants.find((x) => x.opp_id === id);
-      if (g) g.watched = !on;
+      if (g) { g.watched = !on; g.hidden = (g.team_verdict || 0) < 0 && !g.watched; }
       button.classList.toggle("on", !on);
       button.setAttribute("aria-pressed", String(!on));
       button.textContent = on ? "Track" : "Tracked";
+      renderHiddenToggle();
       renderStrip();
     } catch (err) {
       button.textContent = "Try again";
     } finally {
       button.disabled = false;
     }
+  }
+
+  // Mark a grant Relevant or Not for us; the same button again takes the mark back.
+  async function castVote(button) {
+    const row = button.closest(".row");
+    const g = row && state.grants[Number(row.dataset.idx)];
+    if (!g || row.dataset.busy) return;
+    const verdict = Number(button.dataset.vote);
+    const clearing = g.my_verdict === verdict;
+    row.dataset.busy = "1";
+    try {
+      const res = clearing
+        ? await fetch(`/api/feedback/${encodeURIComponent(g.opp_id)}`, { method: "DELETE" })
+        : await fetch("/api/feedback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ opp_id: g.opp_id, verdict }) });
+      if (res.status === 401 || res.status === 503) {
+        const body = await res.json().catch(() => ({}));
+        askToSignIn(body.detail || "Sign in to mark grants.");
+        return;
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      applyVote(g, clearing ? null : verdict);
+      row.querySelectorAll(".vote").forEach((b) => {
+        const v = Number(b.dataset.vote);
+        b.setAttribute("aria-pressed", String(g.my_verdict === v));
+        b.textContent = voteLabel(g, v);
+      });
+      renderHiddenToggle();  // the row itself stays put, so the mark can be taken back; it goes at the next load
+    } catch (err) {
+      button.textContent = "Try again";
+    } finally {
+      delete row.dataset.busy;
+    }
+  }
+
+  function applyVote(g, verdict) {
+    if (g.votes_up != null && g.votes_down != null) {
+      g.votes_up += (verdict === 1) - (g.my_verdict === 1);
+      g.votes_down += (verdict === -1) - (g.my_verdict === -1);
+      g.team_verdict = Math.sign(g.votes_up - g.votes_down);
+      g.hidden = g.team_verdict < 0 && !g.watched;
+    }
+    g.my_verdict = verdict;
   }
 
   async function toggleDetail(button) {
@@ -444,7 +581,7 @@
       const g = await res.json();
       const rows = [
         ["Opportunity", g.opp_id], ["Status", g.opportunity_status], ["Posted", fmtDate(g.post_date)],
-        ["Closes", g.close_date ? fmtDate(g.close_date) : "no date"], ["Categories", g.funding_categories],
+        ["Closes", g.close_date ? (placeholderDate(g) ? "no firm deadline" : fmtDate(g.close_date)) : "no date"], ["Categories", g.funding_categories],
         ["Award ceiling", g.award_ceiling ? `$${Number(g.award_ceiling).toLocaleString()}` : ""],
         ["Program funding", g.estimated_total_funding ? `$${Number(g.estimated_total_funding).toLocaleString()}` : ""],
         ["Matched keywords", g.matched_keywords], ["Scored by", g.relevance_model],
@@ -460,10 +597,11 @@
     }
   }
 
-  function jumpTo(id) {
-    const row = document.getElementById(`row-${id}`);
+  function jumpTo(idx) {
+    const row = document.getElementById(`row-${idx}`);
     if (!row) return;
     row.scrollIntoView({ block: "center", behavior: "smooth" });
+    row.focus({ preventScroll: true });  // so keyboard and screen-reader users land on the grant, not back on the strip
     row.classList.add("flash");
     setTimeout(() => row.classList.remove("flash"), 1400);
   }
@@ -526,16 +664,20 @@
     state.session.email = null;
     els.loginFeedback.textContent = "";
     renderAccount();
+    loadGrants();  // the marks shown were the signed-in member's own
   }
 
   let timer = null;
   const debounced = () => { clearTimeout(timer); timer = setTimeout(loadGrants, 250); };
   els.q.addEventListener("input", debounced);
   [els.minScore, els.closingWithin, els.forecasted, els.watchedOnly, els.stage].forEach((el) => el.addEventListener("change", loadGrants));
+  els.showHidden.addEventListener("change", render);
   els.clear.addEventListener("click", () => { setupFilters(); loadGrants(); });
   els.results.addEventListener("click", (event) => {
     const track = event.target.closest("[data-track]");
     if (track) return toggleTrack(track);
+    const vote = event.target.closest("[data-vote]");
+    if (vote) return castVote(vote);
     const more = event.target.closest("[data-more]");
     if (more) return toggleDetail(more);
   });
@@ -546,8 +688,8 @@
   els.loginForm.addEventListener("submit", requestLink);
   els.logout.addEventListener("click", signOut);
 
-  loadSession();
-  loadProfile().then(loadGrants);
+  // The first list waits for the session, so the buttons are right the first time.
+  Promise.all([loadSession(), loadProfile()]).then(() => { renderControls(); return loadGrants(); });
 })();
 </script>
 </body>

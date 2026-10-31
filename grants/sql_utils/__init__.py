@@ -1,5 +1,6 @@
 import os
 from contextlib import contextmanager
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -161,9 +162,9 @@ def fetch_upcoming(
     conditions = [
         open_grant_sql("g"),
         "g.close_date IS NOT NULL",
-        "g.close_date < CURRENT_DATE + (%s || ' days')::interval",
+        "g.close_date <= %s",  # inclusive: a grant closing exactly `days` out is within `days`
     ]
-    params: List[Any] = [int(days)]
+    params: List[Any] = [date.today() + timedelta(days=int(days))]
 
     if not include_forecasted:
         conditions.append("g.opportunity_status <> 'Forecasted'")

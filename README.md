@@ -152,9 +152,16 @@ Not for us) and `DELETE /api/feedback/{id}`. Sign-in:
 `GET /api/session`, `POST /api/logout`. `GET|POST /unsubscribe?token=` serves
 the links in the emails (a GET only asks; mail scanners fetch links).
 
+`closing_within=N` includes a grant closing exactly N days out. `/api/grants`
+reports `total` (how many grants matched, before `limit`) beside
+`count` (the rows returned, a program posted by several services as one), and
+`/api/profile` reports `data.fit_count`, the open grants scoring at least the
+team threshold. The page opens on any closing date.
+
 Reading is open to anyone with the URL; changing the tracked list or voting
 needs `GRANTS_SECRET_KEY` on the server and a sign-in. Without the key the
-dashboard is read-only.
+dashboard is read-only: it hides Track and the vote buttons, and marks the
+grants the MCP server tracked with a plain "Tracked" label.
 
 ### Team feedback
 

@@ -30,7 +30,7 @@ from grants.admin import admin_status, llm_check, run_log
 from grants.display import group_rows
 from grants.feedback import with_feedback
 from grants.profile import Profile, load_profile
-from grants.queries import GrantQuery, data_status, get_grant, query_grants
+from grants.queries import GrantQuery, count_grants, data_status, get_grant, query_grants
 from grants.sql_utils import (
     add_to_watchlist, clear_vote, ensure_schema, fetch_vote_counts, list_watchlist, record_vote, remove_from_watchlist,
 )
@@ -251,7 +251,7 @@ def admin_run_log(run_id: int = PathParam(ge=1, le=2_147_483_647), _admin: str =
 def profile_info() -> Dict[str, Any]:
     profile = _profile()
     try:
-        status = data_status()
+        status = data_status(profile.min_score_to_notify)
     except Exception as exc:
         logger.warning("Could not read data status: %s", exc)
         status = None
@@ -310,12 +310,16 @@ def get_grants(
         due_from=due_from,
         due_to=due_to,
         limit=limit,
+        today=date.today(),
     )
     try:
-        results = group_rows(query_grants(query))
+        rows = query_grants(query)
+        # total counts postings, as limit does; count counts the rows after one program's postings are folded.
+        total = count_grants(query) if len(rows) >= limit else len(rows)
+        results = group_rows(rows)
     except Exception as exc:
         raise _db_error("fetching grants", exc) from exc
-    return {"results": _with_votes(results, request), "count": len(results)}
+    return {"results": _with_votes(results, request), "count": len(results), "total": total}
 
 
 @app.get("/api/grants/{opp_id:path}")

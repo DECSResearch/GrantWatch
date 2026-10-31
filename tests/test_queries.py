@@ -21,14 +21,15 @@ class TestBuildGrantsSql:
         query = GrantQuery(
             q="wind", min_score=4, closing_within=30, include_forecasted=False,
             watched_only=True, stage="full", due_from=date(2026, 1, 1), due_to=date(2026, 2, 1), limit=5000,
+            today=date(2026, 9, 1),
         )
         sql, params = build_grants_sql(query)
-        assert "g.close_date < CURRENT_DATE + (%s || ' days')::interval" in sql
+        assert "g.close_date <= %s" in sql and "CURRENT_DATE +" not in sql  # inclusive, with a date worked out in Python
         assert "opportunity_status <> 'Forecasted'" in sql
         assert "w.opp_id IS NOT NULL" in sql
         assert "(g.relevance_score >= %s OR w.opp_id IS NOT NULL)" in sql
         assert "g.title ILIKE %s" in sql
-        assert params == [30, 4, "full", date(2026, 1, 1), date(2026, 2, 1), "%wind%", "%wind%", "%wind%", "%wind%", 1000]
+        assert params == [date(2026, 10, 1), 4, "full", date(2026, 1, 1), date(2026, 2, 1), "%wind%", "%wind%", "%wind%", "%wind%", 1000]
 
     def test_min_score_zero_adds_no_condition(self):
         sql, params = build_grants_sql(GrantQuery(min_score=0, include_closed=True))
