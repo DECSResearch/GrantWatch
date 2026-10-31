@@ -267,6 +267,8 @@
 
   /* ---------- formatting ---------- */
 
+  // BEGIN rules
+  // Everything between BEGIN rules and END rules reads neither the page nor its state, so tests/test_admin_view.py runs it under node.
   const num = (n) => (n === null || n === undefined || isNaN(n) ? "–" : Number(n).toLocaleString());
   const plural = (n, one, many) => num(n) + " " + (Number(n) === 1 ? one : (many || one + "s"));
   const isNum = (n) => typeof n === "number" && isFinite(n);
@@ -326,6 +328,20 @@
   const capital = (text) => text.charAt(0).toUpperCase() + text.slice(1);
   const newest = (runs, step) => runs.find((r) => r.step === step) || null;
   const statsOf = (run) => (run && run.stats && typeof run.stats === "object" && !Array.isArray(run.stats) ? run.stats : {});
+
+  /* ---------- what the page says about personal profiles ---------- */
+
+  // The People table's Profile cell. It names the kind and the day, never the text: the server does not send it.
+  function profileLabel(person) {
+    if (person.profile !== "own") return "Team";
+    return person.profile_updated_at ? "Own, updated " + dayOf(person.profile_updated_at) : "Own";
+  }
+
+  // The Coverage cell: open grants scored in the view that person gets. "–" when it could not be counted.
+  function coverageLabel(coverage) {
+    return coverage && isNum(coverage.scored) && isNum(coverage.open) ? num(coverage.scored) + " of " + num(coverage.open) : "–";
+  }
+  // END rules
 
   /* ---------- verdict, strip, warnings ---------- */
 
@@ -770,12 +786,14 @@
         + " (" + Math.round(100 * (fb.declined || 0) / fb.emailed) + "%) " + (fb.declined === 1 ? "was" : "were") + " marked Not for us.";
     box.append(el("p", fb.votes ? "Feedback: " + plural(fb.votes, "vote") + ". " + marked : "Feedback: no votes yet."));
 
-    fillTable($("people"), ["Person", "Status", "Own threshold", "Last email"], data.recipients.map((r) => {
+    fillTable($("people"), ["Person", "Status", "Profile", "Coverage", "Own threshold", "Last email"], data.recipients.map((r) => {
       const who = el("td", r.name || r.email, "email");
       if (r.name) who.append(el("span", r.email, "small"));
       return [
         who,
         el("td", r.active ? "Gets email" : r.unsubscribed_at ? "Unsubscribed " + dayOf(r.unsubscribed_at) : "Off", r.active ? "" : "muted"),
+        el("td", profileLabel(r), "nowrap"),
+        el("td", coverageLabel(r.coverage), "nowrap num" + (r.coverage ? "" : " muted")),
         el("td", r.min_score === null || r.min_score === undefined ? "Team default" : r.min_score + " or higher"),
         el("td", r.last_emailed ? dayOf(r.last_emailed) : "Never", "nowrap" + (r.last_emailed ? "" : " muted")),
       ];

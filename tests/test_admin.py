@@ -1203,6 +1203,12 @@ class TestAdminPage:
         team = webapp.ADMIN_HTML.split("function renderTeam(data) {")[1].split("\n  }\n")[0]
         assert "data.feedback" in team and "marked Not for us" in team and "Feedback: no votes yet." in team
 
+    def test_the_people_table_has_a_profile_and_a_coverage_column_drawn_by_the_rules(self):
+        people = webapp.ADMIN_HTML.split('fillTable($("people"), ')[1].split("No recipients yet.")[0]
+        assert people.startswith('["Person", "Status", "Profile", "Coverage", "Own threshold", "Last email"]')
+        assert "profileLabel(r)" in people and "coverageLabel(r.coverage)" in people
+        assert "summary" not in people and "profile_text" not in people  # the text of a profile is not something the table reads
+
     def test_the_keyword_lines_say_so_when_keywords_do_not_filter(self):
         team = webapp.ADMIN_HTML.split("function renderTeam(data) {")[1].split("\n  }\n")[0]
         assert "data.health.scores_every_grant" in team and "Keywords do not filter; every open grant is scored." in team
