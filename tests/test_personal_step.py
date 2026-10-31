@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from types import SimpleNamespace
 
 import pytest
 from hypothesis import HealthCheck, given, settings, strategies as st
@@ -68,20 +69,36 @@ class TestMainStep:
             assert main.personal_step(0.0, ingested=True) is None  # no exception reaches the caller
         assert log[-1][0] == "personal"
 
-    def test_ingests_exit_code_is_the_exit_code_whatever_the_personal_step_does(self, log, monkeypatch):
-        monkeypatch.setattr(main, "_ingest", lambda: 0)
-        monkeypatch.setattr(personal, "run", lambda *a: (_ for _ in ()).throw(RuntimeError("model gone")))
-        assert main.main(["ingest"]) == 0
-        monkeypatch.setattr(main, "_ingest", lambda: 1)
-        assert main.main(["ingest"]) == 1
+    @pytest.fixture
+    def broken(self, log, monkeypatch):
+        """An ingest that sends one grant to the model, and a personal pass that raises once it is reached."""
+        reached = []
 
-    def test_notify_still_runs_after_a_personal_step_that_raised(self, log, monkeypatch):
+        def ingest_that_sends_a_grant():
+            main.onlyTheGoodStuff.last_candidates = [record(1)]  # main clears it first, as ingest itself does
+            return ingest_that_sends_a_grant.code
+
+        def run(*args):
+            reached.append(True)
+            raise RuntimeError("model gone")
+
+        ingest_that_sends_a_grant.code = 0
+        monkeypatch.setattr(main, "_ingest", ingest_that_sends_a_grant)
+        monkeypatch.setattr(personal, "run", run)
+        return SimpleNamespace(ingest=ingest_that_sends_a_grant, reached=reached, log=log)
+
+    def test_ingests_exit_code_is_the_exit_code_whatever_the_personal_step_does(self, broken):
+        assert main.main(["ingest"]) == 0
+        broken.ingest.code = 1
+        assert main.main(["ingest"]) == 1
+        assert broken.reached == [True]  # the second ingest failed, so its personal step skipped; the first one raised
+
+    def test_notify_still_runs_after_a_personal_step_that_raised(self, broken, monkeypatch):
         sent = []
-        monkeypatch.setattr(main, "_ingest", lambda: 0)
-        monkeypatch.setattr(personal, "run", lambda *a: (_ for _ in ()).throw(RuntimeError("model gone")))
         monkeypatch.setattr(main, "run_notify", lambda dry_run=False: sent.append("notify") or 0)
         main.run_notify.last_summary = None
         assert main.main([]) == 0 and sent == ["notify"]
+        assert broken.reached == [True] and [entry[0] for entry in broken.log] == ["ingest", "personal", "notify"]
 
 
 class TestOrder:
