@@ -11,16 +11,39 @@ from psycopg2.extras import RealDictCursor
 from grants.display import days_until_deadline, firm_deadline, group_rows, public_row, real_ceiling
 from grants.sql_utils import db_connection, open_grant_sql
 from llm_utils.gpt_summarizer import SUMMARY_CHARS, cut_summary
+from llm_utils.relevance import RULE_MODEL
 
-_COLUMNS = """
+_TEAM_SCORES = "g.relevance_score, g.relevance_reason, g.relevance_model, g.relevance_scored_at,"
+
+# A member's own scores, read through a join with member_scores as ``s`` for them. A grant the
+# eligibility pre-check ruled out (the team's score came from the rule) is 0 with the rule's reason
+# for everyone; one the member's profile has not scored has no score and says so, which fails
+# any score floor.
+NOT_SCORED_YET = "Not scored for your profile yet"
+_RULED_OUT = f"g.relevance_model = '{RULE_MODEL}'"
+_OWN_SCORE = f"CASE WHEN {_RULED_OUT} THEN 0 ELSE s.score END"
+_OWN_REASON = f"CASE WHEN {_RULED_OUT} THEN g.relevance_reason WHEN s.score IS NULL THEN '{NOT_SCORED_YET}' ELSE s.reason END"
+_OWN_SCORES = (
+    f"{_OWN_SCORE} AS relevance_score, {_OWN_REASON} AS relevance_reason,"
+    f" CASE WHEN {_RULED_OUT} THEN g.relevance_model ELSE s.model END AS relevance_model,"
+    f" CASE WHEN {_RULED_OUT} THEN g.relevance_scored_at ELSE s.scored_at END AS relevance_scored_at,"
+)
+_OWN_JOIN = "LEFT JOIN member_scores s ON s.opp_id = g.opp_id AND s.email = %s"
+
+
+def _columns(own: bool) -> str:
+    return f"""
     g.opp_id, g.title, g.stage, g.opportunity_status, g.opportunity_category,
     g.funding_categories, g.agency, g.agency_code, g.url,
     g.post_date, g.close_date, g.archive_date,
     g.summary, g.matched_keywords, g.award_ceiling, g.estimated_total_funding,
-    g.relevance_score, g.relevance_reason, g.relevance_model, g.relevance_scored_at,
+    {_OWN_SCORES if own else _TEAM_SCORES}
     g.first_seen_at, g.last_seen_at,
     (w.opp_id IS NOT NULL) AS watched, w.note AS watch_note
 """
+
+
+_COLUMNS = _columns(own=False)
 
 
 @dataclass
@@ -35,8 +58,23 @@ class GrantQuery:
     due_from: Optional[date] = None
     due_to: Optional[date] = None
     limit: int = 300
-    team_relevant: Tuple[str, ...] = ()  # postings the team marked Relevant (grants.feedback.relevant_postings); they pass min_score
+    team_relevant: Tuple[str, ...] = ()  # postings marked Relevant by whose votes decide (grants.feedback.relevant_postings); they pass min_score
     today: Optional[date] = None  # the day the window counts from; a caller fixes it once so every part of a request agrees
+    scores_for: Optional[str] = None  # a member's address: their own scores in place of the team's (see ``_OWN_SCORES``)
+
+
+def _score(query: GrantQuery) -> str:
+    """The SQL for the score a request ranks and filters by: the team's, or the member's own."""
+    return _OWN_SCORE if query.scores_for else "g.relevance_score"
+
+
+def _source(own: bool) -> str:
+    return "FROM grants g LEFT JOIN grant_watchlist w ON w.opp_id = g.opp_id" + (f" {_OWN_JOIN}" if own else "")
+
+
+def _from(query: GrantQuery) -> Tuple[str, List[Any]]:
+    """FROM and its joins, with the parameters the joins take (the member's address comes first in every statement)."""
+    return _source(bool(query.scores_for)), ([query.scores_for] if query.scores_for else [])
 
 
 def _where(query: GrantQuery) -> Tuple[str, List[Any]]:
@@ -58,7 +96,7 @@ def _where(query: GrantQuery) -> Tuple[str, List[Any]]:
     if query.min_score is not None and query.min_score > 0:
         # A tracked grant passes whatever it scores, and so does one the team marked Relevant,
         # which the email treats as meeting the threshold.
-        passes = ["g.relevance_score >= %s", "w.opp_id IS NOT NULL"]
+        passes = [f"{_score(query)} >= %s", "w.opp_id IS NOT NULL"]
         params.append(int(query.min_score))
         if query.team_relevant:
             passes.append("g.opp_id = ANY(%s)")
@@ -83,14 +121,15 @@ def _where(query: GrantQuery) -> Tuple[str, List[Any]]:
 
 
 def build_grants_sql(query: GrantQuery, *, with_description: bool = False) -> Tuple[str, List[Any]]:
-    where, params = _where(query)
-    columns = _COLUMNS + (", g.description" if with_description else "")
+    where, where_params = _where(query)
+    source, params = _from(query)
+    params = params + where_params
+    columns = _columns(bool(query.scores_for)) + (", g.description" if with_description else "")
     sql = f"""
         SELECT {columns}
-        FROM grants g
-        LEFT JOIN grant_watchlist w ON w.opp_id = g.opp_id
+        {source}
         {where}
-        ORDER BY (g.close_date IS NULL), g.close_date, g.relevance_score DESC NULLS LAST, g.post_date DESC, g.title
+        ORDER BY (g.close_date IS NULL), g.close_date, {_score(query)} DESC NULLS LAST, g.post_date DESC, g.title
         LIMIT %s
     """
     params.append(max(1, min(int(query.limit), 1000)))
@@ -173,44 +212,50 @@ def query_grants(query: GrantQuery) -> List[Dict[str, Any]]:
 
 def count_grants(query: GrantQuery) -> int:
     """How many grants match, whatever the query's limit."""
-    where, params = _where(query)
-    sql = f"SELECT COUNT(*) FROM grants g LEFT JOIN grant_watchlist w ON w.opp_id = g.opp_id {where}"
+    where, where_params = _where(query)
+    source, params = _from(query)
     with db_connection() as conn, conn.cursor() as cur:
-        cur.execute(sql, params)
+        cur.execute(f"SELECT COUNT(*) {source} {where}", params + where_params)
         return int(cur.fetchone()[0])
 
 
-def get_grant(opp_id: str) -> Optional[Dict[str, Any]]:
+def get_grant(opp_id: str, scores_for: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """One grant with its description; with ``scores_for``, the score and reason are that member's own."""
+    source, params = _from(GrantQuery(scores_for=scores_for))
     sql = f"""
-        SELECT {_COLUMNS}, g.description
-        FROM grants g
-        LEFT JOIN grant_watchlist w ON w.opp_id = g.opp_id
+        SELECT {_columns(bool(scores_for))}, g.description
+        {source}
         WHERE g.opp_id = %s
     """
     with db_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(sql, ((opp_id or "").strip(),))
+        cur.execute(sql, params + [(opp_id or "").strip()])
         row = cur.fetchone()
     return serialize_row(dict(row)) if row else None
 
 
-# What group_rows reads to fold postings of one program.
-_FIT_SQL = f"""
+def _fit_sql(own: bool) -> str:
+    """The open grants scoring at least a floor (``%s``), with what group_rows reads to fold postings of one program."""
+    score = _OWN_SCORE if own else "g.relevance_score"
+    return f"""
     SELECT g.opp_id, g.title, g.agency_code, g.close_date, g.post_date, g.opportunity_status,
-           g.relevance_score, (w.opp_id IS NOT NULL) AS watched
-    FROM grants g
-    LEFT JOIN grant_watchlist w ON w.opp_id = g.opp_id
-    WHERE {open_grant_sql("g")} AND g.relevance_score >= %s
+           {score} AS relevance_score, (w.opp_id IS NOT NULL) AS watched
+    {_source(own)}
+    WHERE {open_grant_sql("g")} AND {score} >= %s
 """
 
 
-def data_status(min_score: Optional[int] = None) -> Dict[str, Any]:
+_FIT_SQL = _fit_sql(own=False)
+
+
+def data_status(min_score: Optional[int] = None, scores_for: Optional[str] = None) -> Dict[str, Any]:
     """Freshness and coverage numbers for the UI header and the MCP server.
 
-    ``scored`` counts open grants only, so it is never more than ``open``.
+    ``scored`` counts open grants only, so it is never more than ``open``. It counts the team's scores.
 
     With ``min_score``, ``fit_count`` is how many open grants score at least that
     (the team threshold), counted as the dashboard lists them: a program posted
-    by several services is one. It is None without a ``min_score``.
+    by several services is one. It is None without a ``min_score``. With
+    ``scores_for`` it counts by that member's own scores instead of the team's.
     """
     sql = f"""
         SELECT COUNT(*) AS total,
@@ -225,7 +270,7 @@ def data_status(min_score: Optional[int] = None) -> Dict[str, Any]:
         row = dict(cur.fetchone() or {})
         fit_count = None
         if min_score is not None:
-            cur.execute(_FIT_SQL, (int(min_score),))
+            cur.execute(_fit_sql(True) if scores_for else _FIT_SQL, (scores_for, int(min_score)) if scores_for else (int(min_score),))
             fit_count = len(group_rows([dict(fit) for fit in cur.fetchall()]))
     return {
         "total": int(row.get("total") or 0),
@@ -340,3 +385,42 @@ def public_status() -> Dict[str, Any]:
         cur.execute(sql)
         row = dict(cur.fetchone() or {})
     return {"open": int(row.get("open") or 0), "data_as_of": _iso(row.get("last_seen_at"))}
+
+
+# --- a member's own profile and what has been scored for it --------------------------------------------
+
+
+def fetch_member_state(email: str) -> Dict[str, Any]:
+    """What decides whose scores a member sees: ``has_profile``, the profile's ``summary`` as stored and its ``updated_at``,
+    and ``has_scores``, whether any score is stored for them (whatever key it was made under, as the email counts them).
+    """
+    sql = """
+        SELECT p.summary, p.updated_at, EXISTS (SELECT 1 FROM member_scores s WHERE s.email = p.email) AS has_scores
+        FROM member_profiles p WHERE p.email = %s
+    """
+    with db_connection() as conn, conn.cursor() as cur:
+        cur.execute(sql, (email,))
+        row = cur.fetchone()
+    if row is None:
+        return {"has_profile": False, "summary": None, "updated_at": None, "has_scores": False}
+    return {"has_profile": True, "summary": row[0], "updated_at": row[1], "has_scores": bool(row[2])}
+
+
+def member_coverage(email: str, key: Optional[str]) -> Dict[str, int]:
+    """How many open grants are scored for this member's profile as it is now: ``{open, scored}``.
+
+    Scored is the open grants with a score stored under ``key`` (the score key of their profile as the
+    scoring pass makes it, ``grants.personal.current_key``; None when the text can never be scored),
+    plus the ones the eligibility pre-check ruled out, which need no score of theirs. An older score
+    does not count: it is shown until it is replaced, and the daily run still has it to do.
+    """
+    sql = f"""
+        SELECT COUNT(*), COUNT(*) FILTER (WHERE {_RULED_OUT} OR s.score_key = %s)
+        FROM grants g
+        LEFT JOIN member_scores s ON s.opp_id = g.opp_id AND s.email = %s
+        WHERE {open_grant_sql("g")}
+    """
+    with db_connection() as conn, conn.cursor() as cur:
+        cur.execute(sql, (key, email))
+        total, scored = cur.fetchone()
+    return {"open": int(total), "scored": int(scored)}
