@@ -62,6 +62,23 @@ class TestRender:
         assert order in email.text and order in email.html
         assert "Set up relevance scoring to rank them by fit." in email.text
 
+    def test_the_keyword_footnote_needs_a_list_of_new_grants_under_it(self):
+        email = _moved(date(2027, 2, 5), date(2026, 12, 29))  # the one section is a deadline that moved
+        assert "Deadlines that moved (1)" in email.text
+        assert "research keywords" not in email.text and "research keywords" not in email.html
+        assert "Set up relevance scoring" not in email.text and "Set up relevance scoring" not in email.html
+
+    def test_the_keyword_footnote_names_the_teams_mark_when_a_marked_grant_is_listed(self):
+        settings = NotifySettings(overview_day="never")
+        marked = _grant("MARKED", 40, score=None, matches=0, net_votes=1)  # no keyword matches: the team's mark is why it is here
+        email = _email([marked, _grant("HIT", 41, score=None, matches=2)], settings)
+        assert "Grant MARKED" in email.text and "Grant HIT" in email.text
+        said = "match the research keywords in the profile or were marked Relevant by the team, those closing within 30 days first"
+        assert said in email.text and said in email.html
+        plain = _email([_grant("HIT", 41, score=None, matches=2)], settings)
+        assert "match the research keywords in the profile, those closing within 30 days first" in plain.text
+        assert "Relevant" not in plain.text and "Relevant" not in plain.html
+
     def test_html_escapes_and_links(self):
         g = GrantState(opp_id="A", title="Cats & <Dogs>", url="https://x/A", close_date=TODAY + timedelta(days=9), score=5)
         email = _email([g], NotifySettings(dashboard_url="https://gw.example.edu"))

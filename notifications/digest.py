@@ -301,13 +301,17 @@ def _compose(plan: Plan, settings: NotifySettings, today: date, caps: Dict[str, 
         more = f'<p style="font-size:13px;color:#5b6660;margin:6px 0 0">{html.escape(section.more)}</p>' if section.more else ""
         parts.append(heading + table + more)
 
+    footer: List[str] = []
+    new_entries = next((s.entries for s in sections if s.key == "new"), [])
     if plan.scoring_active:
-        footnote = (f"Scores are relative to the research profile. Grants below {plan.min_score}/5 are left out "
-                    "unless tracked or marked Relevant by the team.")
-    else:
-        footnote = (f"These grants match the research keywords in the profile, those closing within {URGENT_DAYS} days "
-                    "first, then most matches first. Set up relevance scoring to rank them by fit.")
-    footer = [footnote]
+        footer.append(f"Scores are relative to the research profile. Grants below {plan.min_score}/5 are left out "
+                      "unless tracked or marked Relevant by the team.")
+    elif new_entries:  # the keyword sentence describes the new grants, so it needs a section of them
+        marked = any(sum(x.net_votes for x in (e.grant, *e.grant.also)) > 0 for e in new_entries)
+        footer.append("These grants match the research keywords in the profile"
+                      + (" or were marked Relevant by the team" if marked else "")
+                      + f", those closing within {URGENT_DAYS} days first, then most matches first. "
+                      "Set up relevance scoring to rank them by fit.")
     if plan.has_tracked:
         footer.append("Tracked grants get a reminder at each of these marks before they close: "
                       + ", ".join(f"{d} days" for d in sorted(settings.reminder_days, reverse=True)) + ".")
