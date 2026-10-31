@@ -25,6 +25,7 @@ from hypothesis import HealthCheck, assume, given, settings, strategies as st
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from grants import admin  # noqa: E402
+from grants.personal import current_key  # noqa: E402
 from grants.profile import Profile  # noqa: E402
 from llm_utils.relevance import safe_host  # noqa: E402
 from web import admin_auth  # noqa: E402
@@ -305,6 +306,7 @@ class FakeDb:
 
 
 STARTED = datetime(2026, 9, 14, 12, 30, tzinfo=timezone.utc)
+OWN_TEXT = "PRIVATE-PROFILE I build battery models for grid-scale storage, mostly lithium and sodium chemistries."
 
 
 def _posting(opp_id, title, agency_code, declined=False, close=date(2026, 11, 6), emailed=True):
@@ -340,6 +342,8 @@ def _answers(token="tok-1"):
             {"email": "b@und.edu", "name": "B", "min_score": 3, "active": False, "unsubscribed_at": STARTED,
              "last_emailed": None, "unsubscribe_token": token},
         ],
+        # b@und.edu unsubscribed but kept the profile they wrote; a@und.edu uses the team's.
+        admin._PROFILES_SQL: [{"email": "b@und.edu", "summary": OWN_TEXT, "updated_at": STARTED}],
         admin._EMAILS_SQL: [
             {"email": "a@und.edu", "day": STARTED.date(), "new": 3, "reminder": 1, "changed": 0, "removed": 0, "overview": 1},
         ],
@@ -352,6 +356,14 @@ def fake_db(monkeypatch):
     monkeypatch.setattr(admin, "db_connection", db.connection)
     monkeypatch.setattr(admin, "_ensure_runs_table", lambda: None)
     monkeypatch.setattr(admin, "load_profile", lambda: Profile(summary="x"))
+    # member_coverage opens its own connection, so it is answered here, and the calls are kept.
+    db.coverage_calls = []
+
+    def coverage(email, key):
+        db.coverage_calls.append((email, key))
+        return {"open": 10, "scored": 4}
+
+    monkeypatch.setattr(admin, "member_coverage", coverage)
     return db
 
 
@@ -520,7 +532,7 @@ class TestAdminStatus:
         assert status["settings"]["data_source"] == "extract"
 
     def test_a_fresh_database_reports_an_empty_page(self, monkeypatch):
-        answers = {admin._RUNS_SQL: [], admin._HEALTH_SQL: [{}], admin._FEEDBACK_SQL: [], admin._RECIPIENTS_SQL: [], admin._EMAILS_SQL: []}
+        answers = {admin._RUNS_SQL: [], admin._HEALTH_SQL: [{}], admin._FEEDBACK_SQL: [], admin._RECIPIENTS_SQL: [], admin._PROFILES_SQL: [], admin._EMAILS_SQL: []}
         monkeypatch.setattr(admin, "db_connection", FakeDb(answers).connection)
         monkeypatch.setattr(admin, "_ensure_runs_table", lambda: None)
         monkeypatch.setattr(admin, "load_profile", lambda: Profile())
@@ -544,6 +556,83 @@ class TestAdminStatus:
         sql = " ".join(admin._SCHEMA_STALE_SQL.split())
         assert "to_regclass('job_runs') IS NULL" in sql and "to_regclass('grant_feedback') IS NULL" in sql
         assert "information_schema.columns" in sql and "column_name = 'stats'" in sql
+
+    def test_the_schema_check_also_wants_the_member_tables_the_people_table_reads(self):
+        # Without them a database whose schema was never applied by the new code would fail the whole page on member_profiles.
+        sql = " ".join(admin._SCHEMA_STALE_SQL.split())
+        assert "to_regclass('member_profiles') IS NULL" in sql and "to_regclass('member_scores') IS NULL" in sql
+
+
+class TestPeopleProfiles:
+    """The People table's Profile and Coverage cells (#55): who writes their own profile, and how much is scored for them."""
+
+    def test_a_person_on_the_teams_profile_is_the_team_and_has_the_teams_coverage(self, fake_db):
+        a = admin.admin_status()["recipients"][0]
+        assert (a["email"], a["profile"], a["profile_updated_at"]) == ("a@und.edu", "team", None)
+        assert a["coverage"] == {"open": 10, "scored": 8}  # the health numbers: what the team's scores cover
+        assert [email for email, _ in fake_db.coverage_calls] == ["b@und.edu"]  # asked for b only, never for a team member
+
+    def test_a_person_with_a_profile_of_their_own_says_so_with_the_day_it_was_saved_and_their_own_coverage(self, fake_db):
+        b = admin.admin_status()["recipients"][1]
+        assert (b["email"], b["profile"], b["profile_updated_at"]) == ("b@und.edu", "own", "2026-09-14T12:30:00+00:00")
+        assert b["coverage"] == {"open": 10, "scored": 4}  # what member_coverage answered, not the team's 8 of 10
+
+    def test_their_coverage_is_counted_under_the_key_their_dashboard_counts_it_under(self, fake_db, monkeypatch):
+        admin.admin_status()
+        assert fake_db.coverage_calls == [("b@und.edu", current_key("b@und.edu", OWN_TEXT, Profile(summary="x"), ""))]
+        monkeypatch.setenv("GRANTS_LLM_MODEL", "qwen3.6-35b")  # a model change rescores them, so it changes the key
+        fake_db.coverage_calls.clear()
+        admin.admin_status()
+        (email, key), = fake_db.coverage_calls
+        assert key == current_key(email, OWN_TEXT, Profile(summary="x"), "qwen3.6-35b") != current_key(email, OWN_TEXT, Profile(summary="x"), "")
+
+    def test_a_profile_text_that_cannot_be_cleaned_is_counted_under_no_key(self, fake_db):
+        fake_db.answers[admin._PROFILES_SQL] = [{"email": "b@und.edu", "summary": "too short", "updated_at": STARTED}]
+        admin.admin_status()
+        assert fake_db.coverage_calls == [("b@und.edu", None)]  # only the grants the eligibility pre-check ruled out count, as on the dashboard
+
+    def test_a_count_that_fails_leaves_the_cell_empty_and_the_page_loads(self, fake_db, monkeypatch, caplog):
+        def broken(email, key):
+            raise RuntimeError("relation member_scores does not exist")
+
+        monkeypatch.setattr(admin, "member_coverage", broken)
+        with caplog.at_level(logging.WARNING, logger="grantwatch"):
+            status = admin.admin_status()
+        assert status["recipients"][1]["coverage"] is None and status["recipients"][1]["profile"] == "own"
+        assert status["recipients"][0]["coverage"] == {"open": 10, "scored": 8}
+        assert "Could not count what is scored for b@und.edu" in caplog.text
+
+    def test_a_database_with_no_open_count_has_no_team_coverage(self, fake_db):
+        fake_db.answers[admin._HEALTH_SQL] = [{}]
+        assert admin.admin_status()["recipients"][0]["coverage"] is None
+
+    def test_nobody_with_a_profile_means_no_count_is_made(self, fake_db):
+        fake_db.answers[admin._PROFILES_SQL] = []
+        status = admin.admin_status()
+        assert fake_db.coverage_calls == [] and [r["profile"] for r in status["recipients"]] == ["team", "team"]
+
+    def test_the_profiles_query_reads_the_text_only_to_make_the_key(self):
+        sql = " ".join(admin._PROFILES_SQL.split())
+        assert sql == "SELECT email, summary, updated_at::timestamptz AS updated_at FROM member_profiles;"
+        assert "summary" not in admin._RECIPIENTS_SQL and "member_" not in admin._RECIPIENTS_SQL  # the grouped recipients query is unchanged
+
+    def test_the_profile_text_is_not_among_the_fields_of_a_person(self, fake_db):
+        for row in admin.admin_status()["recipients"]:
+            assert set(row) == {*admin._RECIPIENT_FIELDS, "profile", "profile_updated_at", "coverage"}
+        assert "PRIVATE-PROFILE" not in json.dumps(admin.admin_status())
+
+    @settings(max_examples=100, deadline=None)
+    @given(st.text(string.ascii_letters + string.digits + " ,.", min_size=40, max_size=300))
+    def test_whatever_a_person_wrote_is_never_in_what_the_page_gets(self, text):
+        marked = "PRIVATE-" + text
+        with pytest.MonkeyPatch.context() as patch:
+            db = FakeDb({**_answers(), admin._PROFILES_SQL: [{"email": "b@und.edu", "summary": marked, "updated_at": STARTED}]})
+            patch.setattr(admin, "db_connection", db.connection)
+            patch.setattr(admin, "_ensure_runs_table", lambda: None)
+            patch.setattr(admin, "load_profile", lambda: Profile(summary="x"))
+            patch.setattr(admin, "member_coverage", lambda email, key: {"open": 10, "scored": 4})
+            written = json.dumps(admin.admin_status())
+        assert marked not in written and "PRIVATE-" not in written
 
 
 class TestRunLog:
@@ -870,6 +959,7 @@ class TestNoSecretsOnThePage:
             patch.setattr(admin, "db_connection", db.connection)
             patch.setattr(admin, "_ensure_runs_table", lambda: None)
             patch.setattr(admin, "load_profile", lambda: Profile(summary="x"))
+            patch.setattr(admin, "member_coverage", lambda email, key: {"open": 10, "scored": 4})
             outputs = [admin.admin_status(), admin.settings_summary(), admin.email_status()]
             url = base_url.rstrip("/") + "/models"
             for error in (requests.ConnectionError(f"Max retries exceeded with url: {url} ({base_url})"), RuntimeError(base_url), None):

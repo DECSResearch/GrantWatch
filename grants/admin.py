@@ -12,7 +12,9 @@ import requests
 from psycopg2.extras import RealDictCursor
 
 from grants.display import Posting, group_postings
+from grants.personal import current_key
 from grants.profile import Profile, load_profile
+from grants.queries import member_coverage
 from grants.runs import redact
 from grants.sql_utils import db_connection, ensure_schema, open_grant_sql
 from llm_utils.relevance import LLMSettings, safe_host
@@ -166,7 +168,8 @@ def _pick(row: Dict[str, Any], fields: tuple) -> Dict[str, Any]:
 
 
 _SCHEMA_STALE_SQL = """
-    SELECT to_regclass('job_runs') IS NULL OR to_regclass('grant_feedback') IS NULL OR NOT EXISTS (
+    SELECT to_regclass('job_runs') IS NULL OR to_regclass('grant_feedback') IS NULL
+        OR to_regclass('member_profiles') IS NULL OR to_regclass('member_scores') IS NULL OR NOT EXISTS (
         SELECT 1 FROM information_schema.columns
         WHERE table_schema = current_schema() AND table_name = 'job_runs' AND column_name = 'stats'
     );
@@ -174,7 +177,7 @@ _SCHEMA_STALE_SQL = """
 
 
 def _ensure_runs_table() -> None:
-    """Apply the schema once if the daily job has not created job_runs, grant_feedback (or job_runs' newest column) yet.
+    """Apply the schema once if the daily job has not created job_runs, grant_feedback, the member tables (or job_runs' newest column) yet.
 
     Checked first so a normal page load never runs the schema's ALTER TABLEs,
     which could wait behind a running ingest.
@@ -250,6 +253,12 @@ _RECIPIENTS_SQL = """
     LEFT JOIN notifications n ON n.recipient_id = r.id
     GROUP BY r.id
     ORDER BY r.email;
+"""
+
+# Who has a profile of their own, and when they last changed it. The text is read only to make the key
+# their scores are counted under (grants.personal.current_key); nothing here is shown (_profile_cells).
+_PROFILES_SQL = """
+    SELECT email, summary, updated_at::timestamptz AS updated_at FROM member_profiles;
 """
 
 # Counted by the team's calendar day, not the database's.
@@ -406,10 +415,38 @@ def _timezone() -> Tuple[str, Optional[str]]:
     return name, None
 
 
+def _own_coverage(email: str, stored: str, team: Profile, model: str) -> Optional[Dict[str, int]]:
+    """``{open, scored}`` for a member's own profile, counted as their dashboard counts it; None when it cannot be counted."""
+    try:
+        return member_coverage(email, current_key(email, stored, team, model))
+    except Exception as exc:
+        logger("warning", f"Could not count what is scored for {email}: {exc}")
+        return None
+
+
+def _profile_cells(recipients: List[Dict[str, Any]], profiles: Dict[str, Dict[str, Any]], team: Profile, model: str, health: Dict[str, Any]) -> None:
+    """Add each recipient's Profile and Coverage cells: ``profile`` ("own" or "team"), ``profile_updated_at`` and ``coverage``.
+
+    A member with a profile of their own is counted by their own scores (``member_coverage``, the
+    numbers their dashboard shows). Everyone else sees the team's scores, so it is the team's count.
+    The text of a profile is used to make the key and goes no further: no field here carries it.
+    """
+    open_grants, scored = health.get("open"), health.get("open_scored")
+    team_coverage = {"open": open_grants, "scored": scored} if isinstance(open_grants, int) and isinstance(scored, int) else None
+    for row in recipients:
+        own = profiles.get(row["email"])
+        if own is None:
+            row["profile"], row["profile_updated_at"], row["coverage"] = "team", None, team_coverage
+        else:
+            row["profile"], row["profile_updated_at"] = "own", _iso(own["updated_at"])
+            row["coverage"] = _own_coverage(row["email"], own["summary"], team, model)
+
+
 def admin_status() -> Dict[str, Any]:
     """Everything the admin page shows, read from the database."""
     _ensure_runs_table()
     profile = load_profile()
+    llm = LLMSettings.from_env()
     zone, zone_warning = _timezone()
     with db_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(_RUNS_SQL)
@@ -420,6 +457,8 @@ def admin_status() -> Dict[str, Any]:
         feedback_rows = [dict(row) for row in cur.fetchall()]
         cur.execute(_RECIPIENTS_SQL)
         recipients = [_pick(row, _RECIPIENT_FIELDS) for row in cur.fetchall()]
+        cur.execute(_PROFILES_SQL)
+        profiles = {row["email"]: dict(row) for row in cur.fetchall()}
         cur.execute(_EMAILS_SQL, {"tz": zone})
         emails = [_pick(row, _EMAIL_FIELDS) for row in cur.fetchall()]
 
@@ -436,9 +475,10 @@ def admin_status() -> Dict[str, Any]:
     health["data_as_of"] = _iso(health["data_as_of"])
     health["scoring_on"] = profile.is_configured
     # Then every open grant goes to the model and the keywords only label what they match (grants_data.pipeline).
-    health["scores_every_grant"] = profile.is_configured and LLMSettings.from_env().enabled
+    health["scores_every_grant"] = profile.is_configured and llm.enabled
     for row in recipients:
         row["unsubscribed_at"], row["last_emailed"] = _iso(row["unsubscribed_at"]), _iso(row["last_emailed"])
+    _profile_cells(recipients, profiles, profile, llm.model, health)
     for row in emails:
         row["day"] = _iso(row["day"])
 
