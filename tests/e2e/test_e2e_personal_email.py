@@ -15,6 +15,7 @@ from grants.sql_utils import ensure_schema
 from harness import DASHBOARD_URL, MODEL, new_section, plain_text, read_email
 from llm_utils.relevance import personal_key
 from notifications.planner import OwnScore, Personal
+from notifications import store as store_module
 from notifications.store import PostgresStore
 from web import app as webapp
 
@@ -109,6 +110,11 @@ class TestTheStoreRead:
     def test_a_member_is_read_with_their_own_votes_only(self, read):
         assert read.first[ALICE].votes == {"E2E-BROAD": -1}
         assert read.first[BOB].votes == {"E2E-TRUSTED": 1}
+
+    def test_the_votes_are_read_by_the_function_that_also_gives_their_scorer_its_examples(self, read, monkeypatch):
+        # Resolution 19 names fetch_member_votes for both, so what counts as a member's own vote is defined once.
+        monkeypatch.setattr(store_module, "fetch_member_votes", lambda emails: [{"email": ALICE, "opp_id": "E2E-NOKW", "verdict": 1}])
+        assert read.store.personal([ALICE])[ALICE].votes == {"E2E-NOKW": 1}
 
     def test_an_address_with_no_profile_is_left_out(self, read):
         assert CAROL not in read.first and set(read.first) == {ALICE, BOB, DAN}

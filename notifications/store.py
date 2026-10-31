@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from psycopg2.extras import RealDictCursor, execute_values
 
-from grants.sql_utils import db_connection, ensure_schema, listed_sql, open_grant_sql, team_voter_sql
+from grants.sql_utils import db_connection, ensure_schema, fetch_member_votes, listed_sql, open_grant_sql, team_voter_sql
 from llm_utils.relevance import RULE_MODEL
 from notifications.planner import GrantState, OwnScore, Personal, Recipient, SentRecord
 
@@ -159,7 +159,8 @@ class PostgresStore:
         Every score stored for the member counts, whatever its ``score_key``: an old one is shown until
         the personal step rescores it, as the team's are, so a model swap, a new ``SCORER_VERSION`` or a
         change of institution does not blank their email. (A change to the text of their profile through
-        the dashboard deletes their scores, so those are never old.)
+        the dashboard deletes their scores, so those are never old.) The votes are theirs alone, read by
+        ``fetch_member_votes``.
         """
         if not emails:
             return {}
@@ -169,16 +170,14 @@ class PostgresStore:
             members = [email for (email,) in cur.fetchall()]
             cur.execute("SELECT email, opp_id, score, reason FROM member_scores WHERE email = ANY(%s);", (wanted,))
             scored = cur.fetchall()
-            cur.execute("SELECT email, opp_id, verdict FROM grant_feedback WHERE email = ANY(%s);", (wanted,))
-            voted = cur.fetchall()
         scores: Dict[str, Dict[str, OwnScore]] = {email: {} for email in members}
         for email, opp_id, score, reason in scored:
             if email in scores:
                 scores[email][opp_id] = OwnScore(int(score), reason or "")
         votes: Dict[str, Dict[str, int]] = {email: {} for email in members}
-        for email, opp_id, verdict in voted:
-            if email in votes:
-                votes[email][opp_id] = 1 if verdict > 0 else -1
+        for vote in fetch_member_votes(members):
+            if vote["email"] in votes:
+                votes[vote["email"]][vote["opp_id"]] = 1 if vote["verdict"] > 0 else -1
         return {email: Personal(scores[email], votes[email]) for email in members}
 
     def grants(self) -> List[GrantState]:
