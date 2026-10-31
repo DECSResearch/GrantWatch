@@ -74,8 +74,12 @@ SAYS = ("relevance_score", "relevance_reason", "summary")
 
 
 def team_columns(row):
-    """What a grant row holds of the team's alone: its summary and every relevance_* value."""
-    return {k: v for k, v in row.items() if k.startswith("relevance_") or k == "summary"}
+    """What a grant row holds of the team's alone: its summary and every relevance_* value.
+
+    Leaves out ``relevance_scored_at``: the eligibility rule stamps it again on every ingest,
+    so it differs between two days for a rule-scored grant whatever her pass does.
+    """
+    return {k: v for k, v in row.items() if (k.startswith("relevance_") or k == "summary") and k != "relevance_scored_at"}
 
 
 def team_says(day_zero, opp_id):
