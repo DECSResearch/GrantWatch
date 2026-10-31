@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
-from hypothesis import given, strategies as st
+from hypothesis import example, given, strategies as st
 from psycopg2.errors import UndefinedTable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from grants import sql_utils  # noqa: E402
 from grants.display import Posting, group_postings  # noqa: E402
 from grants.feedback import (  # noqa: E402
-    ENTRY_CHARS, EXAMPLE_LIMIT, Votes, clean_text, feedback_examples, net_verdict, relevant_postings, with_feedback,
+    EXAMPLE_LIMIT, Votes, clean_text, feedback_examples, net_verdict, relevant_postings, with_feedback,
 )
 from grants.profile import Profile  # noqa: E402
 from grants_data import pipeline  # noqa: E402
@@ -37,6 +37,7 @@ from web import auth  # noqa: E402
 OPPS = [f"G{i}" for i in range(6)]
 EMAILS = ["a@und.edu", "b@und.edu", "c@und.edu"]
 T0 = datetime(2026, 9, 1, 12, 0)
+ENTRY_CAP = 200  # characters; the design fixes it, written out here, not read from the code under test
 
 TEXTS = st.one_of(
     st.text(max_size=300),
@@ -153,7 +154,7 @@ class TestFeedbackExamples:
 
     def test_a_long_entry_is_cut_to_200(self):
         out = feedback_examples([vote("A", "a@und.edu", 1, at(0), title="T" * 500)])[0]
-        assert len(out) == ENTRY_CHARS
+        assert len(out) == ENTRY_CAP
 
     @given(timed_rows(), st.integers(0, 14))
     def test_at_most_the_limit_and_balanced(self, rows, limit):
@@ -194,7 +195,7 @@ class TestFeedbackExamples:
     @given(messy_rows(), st.integers(0, 14))
     def test_every_entry_is_one_short_clean_line(self, rows, limit):
         for entry in feedback_examples(rows, limit):
-            assert len(entry) <= ENTRY_CHARS and entry[:2] in ("+ ", "- ")
+            assert len(entry) <= ENTRY_CAP and entry[:2] in ("+ ", "- ")
             assert "`" not in entry and entry == entry.strip()
             assert all(unicodedata.category(ch)[0] != "C" for ch in entry)
 
@@ -263,11 +264,12 @@ class TestScorerPrompt:
         if fences:
             assert all(line[:2] in ("+ ", "- ") for line in lines[fences[0] + 1 : fences[1]])
 
+    @example([vote(f"L{i}", "a@und.edu", 1, at(i), title="T" * 500) for i in range(14)])  # a full set, every entry cut
     @given(messy_rows())
     def test_the_examples_stay_under_a_size_cap(self, rows):
         extra = len(user_prompt(rows)) - len(user_prompt())
         label = len(relevance._EXAMPLES_LABEL)
-        assert extra <= EXAMPLE_LIMIT * (ENTRY_CHARS + 1) + label + len("\n```\n") * 2 + 2  # 600 tokens, give or take
+        assert extra <= EXAMPLE_LIMIT * (ENTRY_CAP + 1) + label + len("\n```\n") * 2 + 2  # 600 tokens, give or take
 
 
 class TestPipelineVotes:
