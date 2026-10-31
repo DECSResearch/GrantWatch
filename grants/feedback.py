@@ -123,7 +123,7 @@ def feedback_examples(rows: Iterable[Mapping[str, Any]], limit: int = EXAMPLE_LI
     return [_entry(sign, row) for _, _, sign, row in _newest_first(taken_up + taken_down)]
 
 
-def with_feedback(rows: Sequence[Mapping[str, Any]], counts: Optional[Mapping[str, Votes]]) -> List[Dict[str, Any]]:
+def with_feedback(rows: Sequence[Mapping[str, Any]], counts: Optional[Mapping[str, Votes]], *, personal: bool = False) -> List[Dict[str, Any]]:
     """API rows (see grants.display.group_rows) with what the team thinks of each.
 
     Adds ``my_verdict`` (the viewer's own vote on the program, null when signed out) and
@@ -132,6 +132,10 @@ def with_feedback(rows: Sequence[Mapping[str, Any]], counts: Optional[Mapping[st
     and ``votes_down`` (all the program's postings together), ``team_verdict`` (1, -1, or 0
     for none or a tie) and ``hidden``: the team said Not for us and nobody tracks it.
     Without ``counts`` (the votes could not be read) those are null and nothing is hidden.
+
+    For a ``personal`` viewer (a member with a research profile of their own) the vote decides for
+    them alone: the team's counts and verdict are left null, as they would be unread, and ``hidden``
+    is their own Not for us on a grant nobody tracks.
     Rows keep their order; the input is not changed.
     """
     out = []
@@ -142,10 +146,14 @@ def with_feedback(rows: Sequence[Mapping[str, Any]], counts: Optional[Mapping[st
         else:
             ids = [row["opp_id"]] + [a["opp_id"] for a in row.get("also_posted") or ()]
             postings = [counts.get(opp_id, Votes()) for opp_id in ids]
-            up, down = sum(v.up for v in postings), sum(v.down for v in postings)
-            team = net_verdict(up - down)
             mine = next(((opp_id, v.mine) for opp_id, v in zip(ids, postings) if v.mine is not None), (ids[0], None))
-            row.update(my_verdict=mine[1], my_vote_opp_id=mine[0], votes_up=up, votes_down=down, team_verdict=team,
-                       hidden=team < 0 and not row.get("watched"))
+            if personal:
+                row.update(my_verdict=mine[1], my_vote_opp_id=mine[0], votes_up=None, votes_down=None, team_verdict=None,
+                           hidden=mine[1] is not None and mine[1] < 0 and not row.get("watched"))
+            else:
+                up, down = sum(v.up for v in postings), sum(v.down for v in postings)
+                team = net_verdict(up - down)
+                row.update(my_verdict=mine[1], my_vote_opp_id=mine[0], votes_up=up, votes_down=down, team_verdict=team,
+                           hidden=team < 0 and not row.get("watched"))
         out.append(row)
     return out

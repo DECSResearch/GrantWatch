@@ -350,17 +350,23 @@ _PROGRAMS_OF_SQL = f"""
 
 
 _TEAM_NETS_SQL = f"SELECT opp_id, SUM(verdict)::int FROM grant_feedback f WHERE {team_voter_sql('f')} GROUP BY opp_id;"
+_OWN_NETS_SQL = "SELECT opp_id, SUM(verdict)::int FROM grant_feedback f WHERE f.email = %s GROUP BY opp_id;"
 
 
-def fetch_relevant_ids() -> List[str]:
+def fetch_relevant_ids(email: Optional[str] = None) -> List[str]:
     """Every posting of each program the team marked Relevant on balance (see ``relevant_postings``).
 
     A program's votes are summed over its open postings, so a Not for us on an open sibling counts.
-    Only the team's votes count (see ``team_voter_sql``).
+    Only the team's votes count (see ``team_voter_sql``). With ``email``, it is the programs that
+    member marked Relevant by their own vote alone, which is what decides for a member with a
+    profile of their own.
     Raises ``UndefinedTable`` until the first run has created grant_feedback.
     """
     with db_connection() as conn, conn.cursor() as cur:
-        cur.execute(_TEAM_NETS_SQL)
+        if email is None:
+            cur.execute(_TEAM_NETS_SQL)
+        else:
+            cur.execute(_OWN_NETS_SQL, (email,))
         nets = {opp_id: int(net) for opp_id, net in cur.fetchall()}
         liked = [opp_id for opp_id, net in nets.items() if net > 0]
         if not liked:

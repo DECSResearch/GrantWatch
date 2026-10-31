@@ -497,6 +497,12 @@ class VoteDb:
                         if email not in db.profiles:
                             totals[opp] = totals.get(opp, 0) + verdict
                     self.rows = sorted(totals.items())
+                elif sql == " ".join(sql_utils._OWN_NETS_SQL.split()):
+                    totals = {}
+                    for (opp, email), verdict in db.votes.items():
+                        if email == params[0]:
+                            totals[opp] = totals.get(opp, 0) + verdict
+                    self.rows = sorted(totals.items())
                 elif sql == " ".join(sql_utils._PROGRAMS_OF_SQL.split()):
                     liked = set(params[0])
                     days = {db.grants[opp][2] for opp in liked if opp in db.grants and db.grants[opp][2] is not None}
@@ -689,6 +695,44 @@ class TestRelevantIds:
         db.profiles.clear()
         assert sql_utils.fetch_relevant_ids() == []  # their votes returned to the team
 
+    def test_a_members_own_list_is_the_programs_they_marked_whoever_else_did_and_whatever_their_profile(self, db):
+        sql_utils.record_vote("D-ONR", "me@und.edu", 1)
+        sql_utils.record_vote("D-ARMY", "you@und.edu", -1)
+        sql_utils.record_vote("D-AFOSR", "her@und.edu", -1)
+        sql_utils.record_vote("PLAIN", "you@und.edu", 1)
+        assert sql_utils.fetch_relevant_ids() == ["PLAIN"]  # the team is against the program: one for it, two against
+        assert sql_utils.fetch_relevant_ids("me@und.edu") == ["D-AFOSR", "D-ARMY", "D-ONR"]  # the whole program, on their one vote
+        assert sql_utils.fetch_relevant_ids("you@und.edu") == ["PLAIN"]  # their own Not for us on the program is not Relevant
+        assert sql_utils.fetch_relevant_ids("her@und.edu") == [] and sql_utils.fetch_relevant_ids("nobody@und.edu") == []
+        db.profiles.add("me@und.edu")
+        assert sql_utils.fetch_relevant_ids("me@und.edu") == ["D-AFOSR", "D-ARMY", "D-ONR"]  # having a profile does not hide their own
+        assert sql_utils.fetch_relevant_ids() == ["PLAIN"]
+
+    def test_the_team_list_is_asked_with_no_address_and_a_members_with_theirs(self, db):
+        sql_utils.fetch_relevant_ids()
+        sql_utils.fetch_relevant_ids("me@und.edu")
+        assert db.statements[-2] == " ".join(sql_utils._TEAM_NETS_SQL.split()) and db.statements[-1] == " ".join(sql_utils._OWN_NETS_SQL.split())
+
+    @given(
+        st.lists(st.tuples(st.sampled_from(["vote", "clear"]), st.sampled_from(sorted(PROGRAM_OF)), st.sampled_from(PEOPLE), st.sampled_from([1, -1])), max_size=25),
+        st.sets(st.sampled_from(PEOPLE)), st.sampled_from(PEOPLE),
+    )
+    def test_whatever_was_pressed_a_members_list_is_decided_by_their_votes_alone(self, ops, owners, who):
+        with pytest.MonkeyPatch.context() as mp:
+            db = VoteDb(PROGRAM_GRANTS)
+            mp.setattr(sql_utils, "get_connection", db.connection)
+            latest = {}
+            for action, opp, email, verdict in ops:
+                if action == "vote":
+                    sql_utils.record_vote(opp, email, verdict)
+                    latest[(email, PROGRAM_OF[opp])] = verdict
+                else:
+                    sql_utils.clear_vote(opp, email)
+                    latest.pop((email, PROGRAM_OF[opp]), None)
+            db.profiles.update(owners)
+            ahead = {p for p in set(PROGRAM_OF.values()) if sum(v for (email, q), v in latest.items() if q == p and email == who) > 0}
+            assert sql_utils.fetch_relevant_ids(who) == sorted(opp for opp, program in PROGRAM_OF.items() if program in ahead)
+
     @given(
         st.lists(st.tuples(st.sampled_from(["vote", "clear"]), st.sampled_from(sorted(PROGRAM_OF)), st.sampled_from(PEOPLE), st.sampled_from([1, -1])), max_size=25),
         st.sets(st.sampled_from(PEOPLE)),
@@ -779,6 +823,33 @@ class TestWithFeedback:
         before = [dict(r) for r in rows]
         assert [r["opp_id"] for r in with_feedback(rows, {})] == ["B", "A"]
         assert rows == before
+
+    def test_for_a_member_with_a_profile_of_their_own_only_their_vote_counts_and_no_team_count_is_sent(self):
+        rows = [posting("A"), posting("B"), posting("C"), posting("D")]
+        counts = {"A": Votes(5, 0, -1), "B": Votes(0, 4, 1), "C": Votes(1, 1, None)}  # the team likes A and dislikes B
+        out = {r["opp_id"]: r for r in with_feedback(rows, counts, personal=True)}
+        for opp in out:
+            assert (out[opp]["votes_up"], out[opp]["votes_down"], out[opp]["team_verdict"]) == (None, None, None)
+        assert (out["A"]["my_verdict"], out["A"]["hidden"]) == (-1, True)  # their Not for us hides it, whatever the team thinks
+        assert (out["B"]["my_verdict"], out["B"]["hidden"]) == (1, False)  # the team's Not for us does not
+        assert (out["C"]["my_verdict"], out["C"]["hidden"]) == (None, False) and out["D"]["hidden"] is False
+
+    def test_for_such_a_member_a_tracked_grant_is_still_never_hidden_and_a_vote_is_found_where_it_sits(self):
+        out = with_feedback([posting("A", watched=True)], {"A": Votes(0, 0, -1)}, personal=True)[0]
+        assert out["my_verdict"] == -1 and out["hidden"] is False
+        row = posting("A", also_posted=[{"opp_id": "B"}])
+        out = with_feedback([row], {"B": Votes(0, 0, -1)}, personal=True)[0]
+        assert (out["my_verdict"], out["my_vote_opp_id"], out["hidden"]) == (-1, "B", True)
+
+    def test_for_such_a_member_votes_that_could_not_be_read_look_as_they_do_for_anyone(self):
+        out = with_feedback([posting("A")], None, personal=True)[0]
+        assert (out["my_verdict"], out["votes_up"], out["team_verdict"], out["hidden"]) == (None, None, None, False)
+
+    @given(st.integers(0, 5), st.integers(0, 5), st.sampled_from([None, 1, -1]), st.booleans())
+    def test_for_such_a_member_hidden_is_their_own_not_for_us_and_nobody_tracking_it(self, up, down, mine, watched):
+        out = with_feedback([posting("A", watched=watched)], {"A": Votes(up, down, mine)}, personal=True)[0]
+        assert out["hidden"] == (mine == -1 and not watched)  # the team's counts do not matter
+        assert out["my_verdict"] == mine and out["team_verdict"] is None
 
     @given(st.integers(0, 5), st.integers(0, 5), st.booleans())
     def test_hidden_means_more_not_for_us_votes_and_nobody_tracking_it(self, up, down, watched):
