@@ -150,10 +150,11 @@ class PostgresStore:
         query = f"""
             SELECT g.opp_id, g.title, g.agency, g.agency_code, g.url, g.close_date, g.archive_date,
                    g.opportunity_status, g.relevance_score, g.relevance_reason, g.summary,
-                   g.matched_keywords,
+                   g.matched_keywords, COALESCE(f.net, 0) AS net_votes,
                    (w.opp_id IS NOT NULL) AS watched, {listed_sql("g")} AS listed
             FROM grants g
             LEFT JOIN grant_watchlist w ON w.opp_id = g.opp_id
+            LEFT JOIN (SELECT opp_id, SUM(verdict)::int AS net FROM grant_feedback GROUP BY opp_id) f ON f.opp_id = g.opp_id
             WHERE ({open_grant_sql("g")}) OR w.opp_id IS NOT NULL;
         """
         with db_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -175,6 +176,7 @@ class PostgresStore:
                 watched=bool(row["watched"]),
                 listed=bool(row["listed"]),
                 matches=len([k for k in (row["matched_keywords"] or "").split(";") if k.strip()]),
+                net_votes=int(row["net_votes"]),
             )
             for row in rows
         ]

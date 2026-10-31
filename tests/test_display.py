@@ -297,6 +297,7 @@ class TestApi:
     def test_grants_come_back_grouped_with_the_existing_fields(self, monkeypatch):
         rows = TestGolden.ROWS
         monkeypatch.setattr(webapp, "query_grants", lambda query: list(rows))
+        monkeypatch.setattr(webapp, "fetch_vote_counts", lambda opp_ids, email=None: {})
         body = TestClient(webapp.app, base_url="http://localhost").get("/api/grants").json()
         assert body["count"] == len(body["results"]) == len(rows) - 4
         durip = next(r for r in body["results"] if r["opp_id"] == "N0001426SF003")

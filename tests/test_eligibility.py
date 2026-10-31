@@ -180,12 +180,15 @@ def world(monkeypatch):
     monkeypatch.setattr(pipeline, "load_cached", lambda key: {})
     monkeypatch.setattr(pipeline, "save_cached", lambda *args: None)
     monkeypatch.setattr(pipeline, "fetch_relevance", fetch)
+    monkeypatch.setattr(pipeline, "fetch_votes", lambda: [])
     monkeypatch.setattr(pipeline, "_write_csv", lambda rows: Path("grants.csv"))
     monkeypatch.setattr(pipeline, "load_grants_from_records", load)
     real = pipeline.score_records
     monkeypatch.setattr(
         pipeline, "score_records",
-        lambda rows, profile, already_scored, settings: real(rows, profile, already_scored=already_scored, settings=settings, client=state.client),
+        lambda rows, profile, already_scored, settings, feedback: real(
+            rows, profile, already_scored=already_scored, settings=settings, client=state.client, feedback=feedback
+        ),
     )
     return state
 

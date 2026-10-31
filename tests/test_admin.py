@@ -262,6 +262,7 @@ def _answers(token="tok-1"):
         admin._HEALTH_SQL: [{
             "data_as_of": STARTED, "data_age_seconds": 2 * HOUR, "open": 10, "open_scored": 8, "open_unscored": 2, "watched": 1,
             "last_ok_ingest_age_seconds": 2 * HOUR, "last_ok_notify_age_seconds": 600.0, "last_sent": STARTED,
+            "feedback_votes": 7, "feedback_emailed": 4, "feedback_declined": 1,
         }],
         admin._RECIPIENTS_SQL: [
             {"email": "a@und.edu", "name": None, "min_score": None, "active": True, "unsubscribed_at": None,
@@ -371,6 +372,18 @@ class TestAdminStatus:
         assert not any("GRANTS_TIMEZONE" in w for w in status["warnings"])
         assert "GRANTS_TIMEZONE" not in caplog.text
 
+    def test_feedback_is_a_block_of_its_own_not_part_of_the_health_numbers(self, fake_db):
+        status = admin.admin_status()
+        assert status["feedback"] == {"votes": 7, "emailed": 4, "declined": 1, "days": 30}
+        assert not any(name.startswith("feedback") for name in status["health"])
+
+    def test_feedback_counts_distinct_grants_emailed_as_new_in_the_last_30_days_that_someone_marked_not_for_us(self):
+        sql = " ".join(admin._HEALTH_SQL.split())
+        assert "(SELECT COUNT(*) FROM grant_feedback) AS feedback_votes" in sql
+        assert "COUNT(DISTINCT opp_id) FROM notifications WHERE kind = 'new' AND sent_at > NOW() - INTERVAL '30 days') AS feedback_emailed" in sql
+        assert "JOIN grant_feedback f ON f.opp_id = n.opp_id AND f.verdict = -1 WHERE n.kind = 'new'" in sql
+        assert "COUNT(DISTINCT n.opp_id)" in sql and sql.endswith("AS feedback_declined FROM grants g;")
+
     def test_the_profile_and_settings_come_with_it(self, fake_db):
         status = admin.admin_status()
         assert status["profile"]["summary"] == "x" and status["profile"]["configured"] is True
@@ -384,6 +397,7 @@ class TestAdminStatus:
         status = admin.admin_status()
         assert status["runs"] == [] and status["emails"] == []
         assert status["health"]["open"] is None and status["health"]["scoring_on"] is False
+        assert status["feedback"] == {"votes": None, "emailed": None, "declined": None, "days": 30}
         assert status["warnings"] == ["No daily run has been recorded yet.", "Nobody gets email yet: there are no active recipients."]
         json.dumps(status)
 
@@ -398,7 +412,7 @@ class TestAdminStatus:
 
     def test_the_schema_check_looks_for_the_table_and_the_newest_column(self):
         sql = " ".join(admin._SCHEMA_STALE_SQL.split())
-        assert "to_regclass('job_runs') IS NULL" in sql
+        assert "to_regclass('job_runs') IS NULL" in sql and "to_regclass('grant_feedback') IS NULL" in sql
         assert "information_schema.columns" in sql and "column_name = 'stats'" in sql
 
 
@@ -964,6 +978,10 @@ class TestAdminPage:
     @pytest.mark.parametrize("sink", ["innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval("])
     def test_the_page_never_puts_data_in_as_html(self, sink):
         assert sink not in webapp.ADMIN_HTML
+
+    def test_the_team_section_has_a_feedback_line(self):
+        team = webapp.ADMIN_HTML.split("function renderTeam(data) {")[1].split("\n  }\n")[0]
+        assert "data.feedback" in team and "marked Not for us" in team and "Feedback: no votes yet." in team
 
     def test_the_page_clears_nodes_with_replaceChildren(self):
         assert "replaceChildren()" in webapp.ADMIN_HTML

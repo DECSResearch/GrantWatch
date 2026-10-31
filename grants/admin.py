@@ -28,6 +28,7 @@ STALE_DATA_SECONDS = 30 * 3600
 RUNNING_SECONDS = 95 * 60
 
 _RUN_DAYS = 15
+_FEEDBACK_DAYS = 30  # the window for the share of emailed grants the team marked Not for us
 _RUN_LIMIT = 200
 _EMAIL_LIMIT = 30
 _MODEL_LIMIT = 10
@@ -38,6 +39,9 @@ _HEALTH_FIELDS = (
     "data_as_of", "data_age_seconds", "open", "open_scored", "open_unscored", "watched",
     "last_ok_ingest_age_seconds", "last_ok_notify_age_seconds",
 )
+# Total votes, then of the grants emailed in the last _FEEDBACK_DAYS days, how many there were and
+# how many someone marked Not for us. Read with the health numbers, reported as a block of their own.
+_FEEDBACK_FIELDS = ("votes", "emailed", "declined")
 _RECIPIENT_FIELDS = ("email", "name", "min_score", "active", "unsubscribed_at", "last_emailed")
 _EMAIL_FIELDS = ("email", "day", "new", "reminder", "changed", "removed", "overview")
 
@@ -124,7 +128,7 @@ def _pick(row: Dict[str, Any], fields: tuple) -> Dict[str, Any]:
 
 
 _SCHEMA_STALE_SQL = """
-    SELECT to_regclass('job_runs') IS NULL OR NOT EXISTS (
+    SELECT to_regclass('job_runs') IS NULL OR to_regclass('grant_feedback') IS NULL OR NOT EXISTS (
         SELECT 1 FROM information_schema.columns
         WHERE table_schema = current_schema() AND table_name = 'job_runs' AND column_name = 'stats'
     );
@@ -132,7 +136,7 @@ _SCHEMA_STALE_SQL = """
 
 
 def _ensure_runs_table() -> None:
-    """Apply the schema once if the daily job has not created job_runs (or its newest column) yet.
+    """Apply the schema once if the daily job has not created job_runs, grant_feedback (or job_runs' newest column) yet.
 
     Checked first so a normal page load never runs the schema's ALTER TABLEs,
     which could wait behind a running ingest.
@@ -169,7 +173,13 @@ _HEALTH_SQL = f"""
              WHERE step = 'ingest' AND finished_at IS NOT NULL AND ok) AS last_ok_ingest_age_seconds,
            (SELECT EXTRACT(EPOCH FROM NOW() - MAX(started_at))::float FROM job_runs
              WHERE step = 'notify' AND finished_at IS NOT NULL AND ok) AS last_ok_notify_age_seconds,
-           (SELECT MAX(sent_at)::timestamptz FROM notifications) AS last_sent
+           (SELECT MAX(sent_at)::timestamptz FROM notifications) AS last_sent,
+           (SELECT COUNT(*) FROM grant_feedback) AS feedback_votes,
+           (SELECT COUNT(DISTINCT opp_id) FROM notifications
+             WHERE kind = 'new' AND sent_at > NOW() - INTERVAL '{_FEEDBACK_DAYS} days') AS feedback_emailed,
+           (SELECT COUNT(DISTINCT n.opp_id) FROM notifications n
+             JOIN grant_feedback f ON f.opp_id = n.opp_id AND f.verdict = -1
+             WHERE n.kind = 'new' AND n.sent_at > NOW() - INTERVAL '{_FEEDBACK_DAYS} days') AS feedback_declined
     FROM grants g;
 """
 
@@ -360,6 +370,7 @@ def admin_status() -> Dict[str, Any]:
         run["has_log"] = bool(run["has_log"])
         runs.append(run)
     health = _pick(health_row, _HEALTH_FIELDS)
+    feedback = {**{name: health_row.get(f"feedback_{name}") for name in _FEEDBACK_FIELDS}, "days": _FEEDBACK_DAYS}
     health["data_as_of"] = _iso(health["data_as_of"])
     health["scoring_on"] = profile.is_configured
     for row in recipients:
@@ -378,6 +389,7 @@ def admin_status() -> Dict[str, Any]:
         "emails": emails,
         "warnings": warnings,
         "email": email_status(health_row.get("last_sent")),
+        "feedback": feedback,
         "profile": profile_summary(profile),
         "settings": settings_summary(),
     }

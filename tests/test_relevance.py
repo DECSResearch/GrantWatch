@@ -360,11 +360,14 @@ class TestPipelineKey:
         monkeypatch.setenv("GRANTS_LLM_BATCH_SIZE", "5")
         monkeypatch.setattr(pipeline, "load_cached", load)
         monkeypatch.setattr(pipeline, "fetch_relevance", fetch)
+        monkeypatch.setattr(pipeline, "fetch_votes", lambda: [])
         monkeypatch.setattr(pipeline, "save_cached", save)
         real = pipeline.score_records
         monkeypatch.setattr(
             pipeline, "score_records",
-            lambda records, profile, already_scored, settings: real(records, profile, already_scored=already_scored, settings=settings, client=client),
+            lambda records, profile, already_scored, settings, feedback: real(
+                records, profile, already_scored=already_scored, settings=settings, client=client, feedback=feedback
+            ),
         )
         pipeline.onlyTheGoodStuff.last_stats = {}
         return SimpleNamespace(store=store, seen=seen, client=client)

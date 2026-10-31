@@ -759,6 +759,11 @@
       "The dashboard looks ahead " + words(p.horizons) + " days.",
     ];
     box.append(el("p", rules.join(" ")));
+    const fb = data.feedback || {};
+    const marked = !fb.emailed ? "No grants were emailed in the last " + plural(fb.days, "day") + "."
+      : num(fb.declined) + " of the " + plural(fb.emailed, "grant") + " emailed in the last " + plural(fb.days, "day")
+        + " (" + Math.round(100 * (fb.declined || 0) / fb.emailed) + "%) " + (fb.declined === 1 ? "was" : "were") + " marked Not for us.";
+    box.append(el("p", fb.votes ? "Feedback: " + plural(fb.votes, "vote") + ". " + marked : "Feedback: no votes yet."));
 
     fillTable($("people"), ["Person", "Status", "Own threshold", "Last email"], data.recipients.map((r) => {
       const who = el("td", r.name || r.email, "email");

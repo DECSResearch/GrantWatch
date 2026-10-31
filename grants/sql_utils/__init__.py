@@ -1,10 +1,12 @@
 import os
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
+
+from grants.feedback import Votes, clean_text
 
 _SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
 
@@ -224,3 +226,57 @@ def list_watchlist() -> List[Dict[str, Any]]:
     with db_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(query)
         return [dict(row) for row in cur.fetchall()]
+
+
+def record_vote(opp_id: str, email: str, verdict: int) -> bool:
+    """Store ``email``'s verdict (1 or -1) on a grant, replacing their earlier one; False when there is no such grant.
+
+    The title, agency and summary are copied from the grants row, cleaned, so
+    the vote can still serve as an example after the grant leaves the extract.
+    """
+    query = """
+        INSERT INTO grant_feedback (opp_id, email, verdict, title, agency, summary)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (opp_id, email) DO UPDATE SET verdict = EXCLUDED.verdict, created_at = NOW();
+    """
+    with db_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT title, agency, summary FROM grants WHERE opp_id = %s;", (opp_id,))
+        row = cur.fetchone()
+        if row is None:
+            return False
+        title, agency, summary = (clean_text(value) or None for value in row)
+        cur.execute(query, (opp_id, email, verdict, title, agency, summary))
+    return True
+
+
+def clear_vote(opp_id: str, email: str) -> bool:
+    """Take back ``email``'s own vote on a grant; False when they had none."""
+    with db_connection() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM grant_feedback WHERE opp_id = %s AND email = %s;", (opp_id, email))
+        return cur.rowcount > 0
+
+
+def fetch_votes() -> List[Dict[str, Any]]:
+    """Every vote, with the grant's title, agency and summary as they were when it was cast."""
+    query = "SELECT opp_id, email, verdict, title, agency, summary, created_at FROM grant_feedback;"
+    with db_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(query)
+        return [dict(row) for row in cur.fetchall()]
+
+
+def fetch_vote_counts(opp_ids: Sequence[str], email: Optional[str] = None) -> Dict[str, Votes]:
+    """The votes on these grants, and ``email``'s own verdict on each; a grant nobody voted on is left out."""
+    if not opp_ids:
+        return {}
+    query = """
+        SELECT opp_id,
+               COUNT(*) FILTER (WHERE verdict = 1),
+               COUNT(*) FILTER (WHERE verdict = -1),
+               MAX(verdict) FILTER (WHERE email = %s)
+        FROM grant_feedback
+        WHERE opp_id = ANY(%s)
+        GROUP BY opp_id;
+    """
+    with db_connection() as conn, conn.cursor() as cur:
+        cur.execute(query, (email, list(opp_ids)))
+        return {opp_id: Votes(int(up), int(down), mine) for opp_id, up, down, mine in cur.fetchall()}

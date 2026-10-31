@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from grants.data.loader import LoadSummary, load_grants_from_records
 from grants.profile import Profile, load_profile
-from grants.sql_utils import fetch_relevance
+from grants.sql_utils import fetch_relevance, fetch_votes
 
 from grants_data.date_filter_data import date_filter_json_data, drop_closed_grants
 from grants_data.download_extract import gen_extract
@@ -179,7 +179,13 @@ def _score_relevance(
         cached.update(fetch_relevance(key))
     except Exception as exc:
         logger("warning", f"Could not read stored relevance scores from the database: {exc}")
-    outcome = score_records(records, profile, already_scored=cached, settings=settings)
+    votes: List[Dict[str, Any]] = []
+    if settings.enabled and profile.is_configured:
+        try:
+            votes = fetch_votes()
+        except Exception as exc:
+            logger("warning", f"Could not read the team's votes from the database: {exc}")
+    outcome = score_records(records, profile, already_scored=cached, settings=settings, feedback=votes)
     onlyTheGoodStuff.last_stats.update(  # type: ignore[attr-defined]
         scored=outcome.scored, cached=outcome.cached, failed=outcome.failed, deferred=outcome.deferred
     )

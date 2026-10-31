@@ -22,6 +22,10 @@ The rules:
 * A program posted by several services (see grants.display) is one row. It
   counts as announced once any of its postings was, so every posting is
   recorded when the row is shown, and its score is its best posting's.
+* The team's votes (see grants.feedback) are summed over a program's postings.
+  A program the team marked Not for us is left out of the new grants and the
+  overview, unless it is tracked. One marked Relevant counts as meeting the
+  threshold, whatever its score; a tie is no verdict.
 * A tracked grant gets one reminder each time its deadline passes one of the
   reminder marks. A new deadline resets the reminders and is announced once.
 * A tracked grant that is archived early or drops out of the extract is
@@ -38,6 +42,7 @@ from datetime import date
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from grants.display import Posting, days_until_deadline, firm_deadline, group_postings
+from grants.feedback import net_verdict
 
 NEW = "new"
 REMINDER = "reminder"
@@ -76,6 +81,7 @@ class GrantState:
     listed: bool = True  # present in a recent extract
     matches: int = 0  # how many profile keywords it mentions
     agency_code: str = ""
+    net_votes: int = 0  # the team's Relevant votes minus its Not for us votes
     also: Tuple["GrantState", ...] = ()  # the same program's other postings; the planner fills this in
 
     def days_left(self, today: date) -> Optional[int]:
@@ -253,11 +259,18 @@ def plan_email(
     def row(members: List[GrantState]) -> GrantState:
         return replace(members[0], also=tuple(members[1:])) if len(members) > 1 else members[0]
 
+    def verdict(members: List[GrantState]) -> int:
+        """What the team thinks of the program: 1 Relevant, -1 Not for us, 0 no verdict (or a tie)."""
+        return net_verdict(sum(g.net_votes for g in members))
+
+    def declined(members: List[GrantState]) -> bool:
+        return verdict(members) < 0 and not any(g.watched for g in members)
+
     # A program is announced once any of its postings was, and a tracked posting means the
     # team already has it. Its score is its best posting's.
     fresh: List[Tuple[int, GrantState]] = []
     for members in programs:
-        if any(g.watched or g.opp_id in announced for g in members):
+        if any(g.watched or g.opp_id in announced for g in members) or declined(members):
             continue
         if scoring_active:
             rank = max((g.score for g in members if g.score is not None), default=None)
@@ -268,6 +281,8 @@ def plan_email(
             # threshold is checked here (and at least one match is always needed).
             rank = max(g.matches for g in members)
             qualifies = rank >= needed
+        if verdict(members) > 0:  # the team said yes: as good as the threshold
+            rank, qualifies = max(rank or 0, min_score if scoring_active else needed), True
         if qualifies:
             fresh.append((rank, row(members)))
     # Those closing within URGENT_DAYS first, soonest first; then the rest, best first.
@@ -282,7 +297,10 @@ def plan_email(
     plan.overview_due = overview_due(last_overview, today, settings.overview_day)
     if plan.overview_due:
         horizons = sorted({int(h) for h in settings.horizons if int(h) > 0}) or [7, 30, 60, 90]
-        candidates = [row(m) for m in programs if any(relevant(g) for g in m) and m[0].firm_deadline(today)]
+        candidates = [
+            row(m) for m in programs
+            if (any(relevant(g) for g in m) or verdict(m) > 0) and not declined(m) and m[0].firm_deadline(today)
+        ]
         lower = -1
         for upper in horizons:
             members = [g for g in candidates if lower < (g.days_left(today) or 0) <= upper]

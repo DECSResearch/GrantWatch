@@ -145,14 +145,34 @@ PYTHONPATH=. uvicorn web.app:app --app-dir src --reload   # http://localhost:800
 API: `GET /api/grants` (`q`, `min_score`, `closing_within`,
 `include_forecasted`, `watched_only`, `limit`), `GET /api/grants/{id}`,
 `GET /api/watchlist`, `GET /api/profile`, and for signed-in team members
-`POST /api/watchlist` and `DELETE /api/watchlist/{id}`. Sign-in:
+`POST /api/watchlist` and `DELETE /api/watchlist/{id}`, and
+`POST /api/feedback` (`{"opp_id": ..., "verdict": 1}` for Relevant or `-1` for
+Not for us) and `DELETE /api/feedback/{id}`. Sign-in:
 `POST /api/login` emails a link to a recipient, `GET /auth` sets the session,
 `GET /api/session`, `POST /api/logout`. `GET|POST /unsubscribe?token=` serves
 the links in the emails (a GET only asks; mail scanners fetch links).
 
-Reading is open to anyone with the URL; changing the tracked list needs
-`GRANTS_SECRET_KEY` on the server and a sign-in. Without the key the
+Reading is open to anyone with the URL; changing the tracked list or voting
+needs `GRANTS_SECRET_KEY` on the server and a sign-in. Without the key the
 dashboard is read-only.
+
+### Team feedback
+
+A team member can mark a grant Relevant or Not for us (one vote each, and a
+new vote replaces the old one; the votes are in the `grant_feedback` table).
+`GET /api/grants` adds `my_verdict` (null when signed out), `votes_up`,
+`votes_down`, `team_verdict` (1, -1, or 0 for none or a tie) and `hidden` (the
+team said Not for us and nobody tracks it) to each row. The votes work on the
+team's side of the pipeline directly, without rescoring anything:
+
+- a grant the team marked Not for us is left out of the email's new grants and
+  weekly overview, unless it is tracked; one marked Relevant counts as meeting
+  the score threshold; a tie is no verdict. A program posted by several
+  services is judged on all its postings' votes together;
+- up to 10 marked grants (5 of each, the most recent first) go to the model
+  with every scoring request as examples, so grants scored from then on lean
+  toward what the team wants. They are not part of the score cache key, so
+  voting never rescores old grants.
 
 ## Admin page
 
@@ -165,8 +185,10 @@ break?". It is read-only and shows:
   database, a live check of the model server (with a "Check now" button), and
   email;
 - the last 15 days of runs, each with its numbers and the log lines it wrote;
-- the team (research profile, thresholds, recipients), the emails sent per
-  day, and the settings that shape a run. No keys or passwords.
+- the team (research profile, thresholds, recipients, how many votes there
+  are and what share of the grants emailed in the last 30 days someone marked
+  Not for us), the emails sent per day, and the settings that shape a run. No
+  keys or passwords.
 
 It asks for HTTP Basic credentials: each person has a named account in
 `GRANTS_ADMIN_USERS`, one `name:scrypt$...` entry per person (comma or newline
