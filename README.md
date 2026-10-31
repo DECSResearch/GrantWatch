@@ -115,18 +115,19 @@ The email follows the member's profile too. Their own score and reason replace
 the team's, and only their own votes count for them (the team's marks do not),
 and the footer says the scores are for their own research profile. A grant not
 scored for them yet is not announced to them, whatever they marked, until it
-is, and a grant the eligibility rules ruled out stays at 0. Only scores made
-for the profile they have now count, with the key made from the cleaned stored
-text as the scoring pass makes it, so a profile typed by hand into the table
-still matches its own scores. While nothing is scored for their profile they
-get the team's scores with their own votes, and the email says their own
-matches start after the next daily run. `notify` reads every member's scores
-and votes once per run. If that read fails, each member gets only reminders,
-deadline changes and withdrawn notices that run, with no scores shown and
-nothing recorded for new grants or the overview, so the next run still has
-them; team recipients are not affected. A team recipient's email ends with a
-line inviting them to write a profile on the dashboard (when
-`GRANTS_DASHBOARD_URL` is set).
+is, and a grant the eligibility rules ruled out stays at 0. A program is
+announced to them only through a posting their profile has scored; a ruled-out
+posting never stands in for one it has not. A score made for an older version
+of their profile (another model, a new `SCORER_VERSION`, a changed institution)
+still counts until the next run rescores it, as the team's scores do. While
+nothing is scored for their profile they get the team's scores with their own
+votes, and the email says their own matches start after the next daily run.
+`notify` reads every member's scores and votes once per run. If that read
+fails, each member gets only reminders, deadline changes and withdrawn notices
+that run, with no scores shown and nothing recorded for new grants or the
+overview, so the next run still has them; team recipients are not affected.
+A team recipient's email ends with a line inviting them to write a profile on
+the dashboard (when `GRANTS_DASHBOARD_URL` is set).
 
 ### Running it
 
