@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, List
 
 import pytest
-from hypothesis import given, settings, strategies as st
+from hypothesis import example, given, settings, strategies as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -36,6 +36,14 @@ NO_SIGN_IN = {"auth_configured": False, "email": None}
 DATA = {"open": 1371, "scored": 1371, "watched": 2, "fit_count": 37, "data_as_of": "2026-10-31T06:00:00"}
 LIST_ON = {"configured": True, "data": {"open": 1371, "data_as_of": "2026-10-31T06:00:00"}}
 TEAM = {"configured": True, "summary": "Cyber-physical security research", "min_score": 4, "horizons": [7, 30, 60, 90], "data": DATA}
+
+def me(**fields):
+    """The ``me`` of /api/profile for a member who has a profile of their own, scored for 412 of the 1,371 open grants."""
+    base = {"has_profile": True, "updated_at": "2026-10-30T08:15:00", "min_score": 3, "using": "mine", "coverage": {"open": 1371, "scored": 412}}
+    base.update(fields)
+    return base
+
+
 # What only the team's side holds. None of it may reach anything a visitor is shown.
 SECRETS = ["ZSUMMARY", "ZREASON", "ZKEYWORD", "ZMODEL", "ZNOTE"]
 
@@ -163,6 +171,76 @@ class TestMembersPage:
 
     def test_there_is_no_member_without_an_email_in_the_session(self):
         assert [view(session, TEAM)["member"] for session in (VISITOR, NO_SIGN_IN, {"auth_configured": True, "email": ""}, None)] == [False] * 4
+
+
+class TestMembersOwnScores:
+    OWN_PENDING = "Your own matches start after the next daily run. Until then you see the team's."
+
+    def test_their_own_scores_are_the_ones_the_page_says_it_shows_and_counts(self):
+        got = view(MEMBER, {**TEAM, "me": me()})
+        assert got["personal"] is True and got["mine"] is True and got["notices"] == []
+        assert got["profileLine"] == "Scored for your own profile, updated Oct 30, 2026."
+        # 412 are scored for them, not the 1,371 the team has scored; the fit count is the server's, at their floor of 3
+        assert got["status"] == "Data as of Oct 31, 2026. 1371 open grants, 412 scored, 2 tracked. 37 score 3 or higher."
+
+    def test_until_the_daily_run_scores_them_they_see_the_teams_and_are_told_so(self):
+        got = view(MEMBER, {**TEAM, "me": me(using="team", coverage={"open": 1371, "scored": 0})})
+        assert got["personal"] is True and got["mine"] is False
+        assert got["notices"] == [self.OWN_PENDING]
+        assert got["profileLine"] == "Scored for: Cyber-physical security research."  # the scores shown are the team's
+        assert got["status"].endswith("1371 open grants, 1371 scored, 2 tracked. 37 score 3 or higher.")
+
+    def test_a_member_on_the_team_profile_has_no_note_about_their_own(self):
+        got = view(MEMBER, {**TEAM, "me": me(has_profile=False, using="team", min_score=4, coverage={"open": 1371, "scored": 0})})
+        assert got["personal"] is False and got["notices"] == [] and got["profileLine"].startswith("Scored for: Cyber")
+
+    def test_the_scoring_off_note_is_for_an_unset_team_profile_alone(self):
+        off = {"configured": False, "min_score": 4, "summary": "", "data": {**DATA, "scored": 0, "fit_count": None}}
+        pending = me(using="team", coverage={"open": 1371, "scored": 0})
+        scoring_off = view(MEMBER, off)["notices"][0]
+        assert view(MEMBER, {**TEAM, "me": pending})["notices"] == [self.OWN_PENDING]  # own scores still to come: not "scoring is off"
+        assert view(MEMBER, {**off, "me": pending})["notices"] == [scoring_off, self.OWN_PENDING]
+        # A configured team profile that has scored nothing yet is not an unset one.
+        unscored = {**TEAM, "data": {**DATA, "scored": 0, "fit_count": None}}
+        assert view(MEMBER, unscored)["notices"] == [] and view(MEMBER, {**unscored, "me": pending})["notices"] == [self.OWN_PENDING]
+
+    def test_the_default_floor_is_the_members_own(self):
+        floors = [view(MEMBER, {**TEAM, "me": me(has_profile=has, min_score=floor)})["floor"] for has in (True, False) for floor in (0, 3, 5)]
+        assert floors == [0, 3, 5, 0, 3, 5]  # a member with no profile of their own may still have set a threshold; 0 is not "unset"
+        assert view(MEMBER, {**TEAM, "me": me(min_score=None)})["floor"] == 4 and view(MEMBER, TEAM)["floor"] == 4  # the team's
+        assert view(MEMBER, {**TEAM, "min_score": 2})["floor"] == 2
+        assert view(VISITOR, {**TEAM, "me": me()})["floor"] == 0
+
+    def test_with_no_profile_and_no_scores_there_is_no_floor_to_apply(self):
+        off = {"configured": False, "min_score": 4, "summary": "", "data": {**DATA, "scored": 0, "fit_count": None}, "me": me(min_score=3)}
+        assert view(MEMBER, off)["floor"] == 0
+
+    @settings(max_examples=40, deadline=None)
+    @example(configured=True, scored=0, team_floor=4, floor=None, has_profile=False, using="team", signed_in=True)
+    @example(configured=False, scored=0, team_floor=4, floor=3, has_profile=True, using="team", signed_in=True)
+    @given(configured=st.booleans(), scored=st.integers(0, 50), team_floor=st.integers(0, 5), floor=st.none() | st.integers(0, 5),
+           has_profile=st.booleans(), using=st.sampled_from(["mine", "team"]), signed_in=st.booleans())
+    def test_the_floor_and_the_notes_follow_from_the_answers_alone(self, configured, scored, team_floor, floor, has_profile, using, signed_in):
+        profile = {"configured": configured, "summary": "We study things", "min_score": team_floor, "data": {**DATA, "scored": scored},
+                   "me": me(has_profile=has_profile, using=using, min_score=floor)}
+        got = view(MEMBER if signed_in else VISITOR, profile)
+        meaningful = configured or scored > 0
+        expected = (team_floor if floor is None else floor) if signed_in and meaningful else 0
+        assert got["floor"] == expected and 0 <= got["floor"] <= 5
+        assert (self.OWN_PENDING in got["notices"]) == (signed_in and has_profile and using == "team")
+        assert any(note.startswith("Relevance scoring is off") for note in got["notices"]) == (signed_in and not configured and scored == 0)
+
+    def test_a_personal_members_rows_show_no_team_counts_on_the_vote_buttons(self):
+        own = row(relevance_score=4, relevance_reason="Fits.", votes_up=None, votes_down=None, team_verdict=None, my_verdict=1, my_vote_opp_id="G-1", watched=False)
+        team = row(relevance_score=4, relevance_reason="Fits.", votes_up=2, votes_down=1, team_verdict=1, my_verdict=None, my_vote_opp_id="G-1", watched=False)
+        own_html, team_html = call(["rowHtml", own, {"member": True}], ["rowHtml", team, {"member": True}])
+        buttons = lambda html: re.findall(r'data-vote="(-?1)" aria-pressed="(\w+)"[^>]*>([^<]*)<', html)  # noqa: E731
+        assert buttons(own_html) == [("1", "true", "Relevant"), ("-1", "false", "Not for us")]
+        assert buttons(team_html) == [("1", "false", "Relevant 2"), ("-1", "false", "Not for us 1")]
+
+    def test_a_grant_not_scored_for_them_reads_as_such(self):
+        html = call(["rowHtml", row(relevance_score=None, relevance_reason="Not scored for your profile yet"), {"member": True}])[0]
+        assert "Not scored for your profile yet" in html and "unscored" in html
 
 
 class TestRows:

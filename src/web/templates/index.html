@@ -271,13 +271,17 @@
     publicEmpty: "Nothing matches. Widen the closing window or clear the search.",
     memberEmpty: "Nothing matches. Widen the closing window, lower the relevance bar, or clear the search.",
     scoringOff: "Relevance scoring is off. Fill in the summary in <code>config/research_profile.yml</code> and set a model to see fit scores and reasons.",
+    ownPending: "Your own matches start after the next daily run. Until then you see the team's.",
   };
 
-  // The score bar a list opens on. It means something once there is a profile or there are scores; a visitor has none.
+  // The score bar a list opens on. It means something once there is a profile or there are scores, and a visitor has none.
+  // A member's is their own (`me.min_score`: what they set for their email, else the team's, which the server works out),
+  // and it is the one `data.fit_count` is counted at.
   function defaultFloor(p, member) {
     if (!member) return 0;
     const scored = (p.data && p.data.scored) || 0;
-    return (p.configured || scored > 0) ? (p.min_score ?? 4) : 0;
+    if (!p.configured && scored === 0) return 0;
+    return (p.me && p.me.min_score) ?? p.min_score ?? 4;
   }
 
   function publicStatus(p) {
@@ -287,12 +291,13 @@
     return d.data_as_of ? `Open Grants.gov opportunities as of ${fmtDate(d.data_as_of)}: ${fmtNum(d.open)}.` : "No pipeline run recorded yet.";
   }
 
-  function memberStatus(p, floor) {
+  // `scored` is how many open grants have a score in the list: the team's, or the member's own when they are shown those.
+  function memberStatus(p, floor, scored) {
     const d = p.data;
     if (!d) return "Database unavailable.";
     if (!d.data_as_of) return "No pipeline run recorded yet.";
-    const fit = d.scored > 0 && floor > 0 && d.fit_count != null ? ` ${d.fit_count} score ${floor} or higher.` : "";
-    return `Data as of ${fmtDate(d.data_as_of)}. ${plural(d.open, "open grant")}, ${d.scored} scored, ${d.watched} tracked.${fit}`;
+    const fit = scored > 0 && floor > 0 && d.fit_count != null ? ` ${d.fit_count} score ${floor} or higher.` : "";
+    return `Data as of ${fmtDate(d.data_as_of)}. ${plural(d.open, "open grant")}, ${scored} scored, ${d.watched} tracked.${fit}`;
   }
 
   // Everything that depends on who is looking, from the session and the profile answers (either may be missing).
@@ -303,16 +308,28 @@
     const p = profile || {};
     const member = Boolean(s.email);
     const signIn = Boolean(s.auth_configured);
+    const me = member && p.me ? p.me : null;
+    const personal = Boolean(me && me.has_profile);
+    // Their own scores once any are stored, the team's before that (`me.using`, which the list answers by too).
+    const mine = personal && me.using === "mine";
     const floor = defaultFloor(p, member);
-    const scored = (p.data && p.data.scored) || 0;
+    const teamScored = (p.data && p.data.scored) || 0;
+    const shownScored = mine && me.coverage ? me.coverage.scored : teamScored;
+    const teamLine = p.configured && p.summary ? `Scored for: ${p.summary}${p.summary.endsWith(".") ? "" : "."}` : "";
+    const notices = [];
+    // The team profile is what scoring needs, so a member's own scores still to come do not turn this note on.
+    if (member && !p.configured && teamScored === 0) notices.push(TEXT.scoringOff);
+    if (personal && !mine) notices.push(TEXT.ownPending);
     return {
       member,
       signIn,
+      personal,
+      mine,
       list: member || p.configured === true,
       floor,
-      status: member ? memberStatus(p, floor) : publicStatus(p),
-      profileLine: member && p.configured && p.summary ? `Scored for: ${p.summary}${p.summary.endsWith(".") ? "" : "."}` : "",
-      notices: member && !p.configured && scored === 0 ? [TEXT.scoringOff] : [],
+      status: member ? memberStatus(p, floor, shownScored) : publicStatus(p),
+      profileLine: !member ? "" : mine ? `Scored for your own profile${me.updated_at ? `, updated ${fmtDate(me.updated_at)}` : ""}.` : teamLine,
+      notices,
       accountText: member ? `Signed in as ${s.email}.` : signIn ? TEXT.publicAccount : "",
       signInHelp: !member && signIn ? TEXT.signInHelp : "",
       stripHint: member ? TEXT.memberStrip : TEXT.publicStrip,
@@ -425,7 +442,7 @@
   function setupFilters() {
     const p = state.profile || {};
     const threshold = state.view.floor;
-    // The team threshold can be any of 0 to 5; it must be a choice, or Reset filters could not restore it.
+    // The floor can be any of 0 to 5; it must be a choice, or Reset filters could not restore it.
     const scoreOptions = [...new Set([0, 3, 4, 5, threshold])].sort((a, b) => a - b).map((v) => ({ value: v, label: v === 0 ? "Any" : `${v} of 5` }));
     fillSelect(els.minScore, scoreOptions, threshold);
     const windows = [{ value: "", label: "Any date" }];
