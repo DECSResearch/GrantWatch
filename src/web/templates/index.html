@@ -252,6 +252,11 @@
   const placeholderDate = (g) => Boolean(g.close_date) && g.firm_deadline === false;
   // Grants the team marked Not for us stay out of the list unless asked for.
   const visible = () => (els.showHidden.checked ? state.grants : state.grants.filter((g) => !g.hidden));
+  // The line over the list. `total` counts postings, but the list folds one program's postings into a row and
+  // leaves out the ones marked Not for us, so when the limit cuts it short this says how many rows are drawn.
+  const countLine = (drawn, total) => total > LIMIT
+    ? `Showing ${plural(drawn, "grant")} from the first ${LIMIT} of ${total} postings. Narrow the filters to see the rest.`
+    : plural(drawn, "grant");
 
   function fillSelect(select, options, value) {
     select.innerHTML = options.map((o) => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join("");
@@ -436,7 +441,7 @@
     const shown = visible();
     const gs = groups();
     els.results.classList.toggle("readonly", !signInOn());
-    els.count.textContent = state.total > LIMIT ? `Showing ${LIMIT} of ${state.total} grants. Narrow the filters to see the rest.` : plural(shown.length, "grant");
+    els.count.textContent = countLine(shown.length, state.total);
     if (!shown.length) {
       els.results.innerHTML = state.grants.length
         ? `<p class="empty">Everything here was marked Not for us. Turn on Show hidden to see it.</p>`

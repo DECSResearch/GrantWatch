@@ -472,7 +472,10 @@ resolutions win over the text above.
   - The page awaits the session before the first render.
   - `<=` with a date computed in Python.
   - `fit_count` uses the team threshold.
-  - "showing 500 of N" appears when the limit is hit.
+  - A cut list reads "Showing N grants from the first 500 of M postings" (#45).
+    `total` counts postings, as `limit` does, but the list folds one program's
+    postings into a row and leaves out those marked Not for us, so N is the
+    rows drawn and M says what it counts.
   - The button is renamed "Reset filters".
   - Row ids are index-based, rows get `tabindex=-1`, and vote buttons use
     `.vote`.

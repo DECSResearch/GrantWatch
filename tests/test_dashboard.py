@@ -6,6 +6,7 @@ through ``node --check`` when node is installed.
 """
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
@@ -16,7 +17,7 @@ from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
-from hypothesis import given, strategies as st
+from hypothesis import given, settings, strategies as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -256,10 +257,39 @@ class TestFilters:
         js = script()
         assert "d.fit_count" in js and "score ${p.min_score} or higher." in js
 
-    def test_a_full_list_says_how_many_matched(self):
+    def test_a_full_list_says_how_many_rows_are_drawn_not_how_many_were_fetched(self):
         js = script()
         assert "const LIMIT = 500;" in js and 'q.set("limit", String(LIMIT));' in js
-        assert "`Showing ${LIMIT} of ${state.total} grants." in js and "state.total > LIMIT" in js
+        assert "els.count.textContent = countLine(shown.length, state.total);" in js  # shown: folded into programs, Not for us left out
+        assert "Showing ${LIMIT}" not in js and "of ${total} postings." in js  # the total counts postings
+
+    @staticmethod
+    def count_lines(pairs):
+        """What the page's own ``countLine`` says for each (rows drawn, postings matched), run under node."""
+        js = script()
+        parts = [re.search(pattern, js, re.S).group(0) for pattern in (r"const LIMIT = 500;", r"const plural = [^\n]*", r"const countLine = .*?;\n")]
+        program = "\n".join(parts) + f"\nconsole.log(JSON.stringify({json.dumps([list(pair) for pair in pairs])}.map(([d, t]) => countLine(d, t))));"
+        done = subprocess.run(["node", "-e", program], capture_output=True, text=True)
+        assert done.returncode == 0, done.stderr
+        return json.loads(done.stdout)
+
+    @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+    def test_the_line_over_the_list(self):
+        short, cut, one = self.count_lines([(12, 12), (212, 640), (1, 501)])
+        assert short == "12 grants"
+        assert cut == "Showing 212 grants from the first 500 of 640 postings. Narrow the filters to see the rest."
+        assert one.startswith("Showing 1 grant from the first 500 of 501 postings.")
+        assert self.count_lines([(500, 500), (0, 0)]) == ["500 grants", "0 grants"]  # the limit is not a cut until something is left over
+
+    @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+    @settings(max_examples=15, deadline=None)  # one node run per example, each over a batch
+    @given(st.lists(st.integers(0, 700).flatmap(lambda total: st.tuples(st.integers(0, min(total, 500)), st.just(total))), min_size=1, max_size=40))
+    def test_the_line_names_the_rows_drawn_and_only_a_cut_list_names_the_postings(self, pairs):
+        for (drawn, total), line in zip(pairs, self.count_lines(pairs)):
+            if total <= 500:
+                assert line == f"{drawn} grant{'' if drawn == 1 else 's'}"
+            else:  # cut short: the rows drawn (never the 500 postings fetched), out of the postings that matched
+                assert line.startswith(f"Showing {drawn} grant") and f" of {total} postings. Narrow the filters" in line
 
 
 class TestRows:
