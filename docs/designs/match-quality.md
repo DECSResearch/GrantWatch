@@ -348,6 +348,10 @@ resolutions win over the text above.
     match: Grants.gov says this applicant cannot apply.
   - The loader keeps a stored summary when the incoming score is a rule's,
     because that row carries only the truncated fallback.
+  - A program posted by several services is led by its best scored posting
+    that the rules did not rule out, or by a tracked one, in the email's new
+    grants and its overview alike. A ruled-out posting only follows as "Also
+    posted by".
 - **A2 wording.** The stat is renamed to "sent to the model"; the admin
   funnel shows "candidates for scoring".
 

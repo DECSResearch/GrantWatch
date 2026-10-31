@@ -23,7 +23,9 @@ The rules:
   held back while a less urgent one is shown.
 * A program posted by several services (see grants.display) is one row. It
   counts as announced once any of its postings was, so every posting is
-  recorded when the row is shown, and its score is its best posting's.
+  recorded when the row is shown, and its score is its best posting's. The
+  row is led by the best scored posting the eligibility rules did not rule
+  out, or by a tracked one; a ruled-out posting only follows it.
 * The team's votes (see grants.feedback) are summed over a program's postings.
   A program the team marked Not for us is left out of the new grants and the
   overview, unless it is tracked. One marked Relevant counts as meeting the
@@ -250,7 +252,8 @@ def plan_email(
         if g.watched and g.withdrawn(today) and g.opp_id not in withdrawn_sent:
             plan.removed.append(Notice(REMOVED, g))
 
-    # One program per row: the postings of a joint call fold into the best scored one.
+    # One program per row: the postings of a joint call fold into one row, led by the best scored
+    # posting the rules did not rule out (or a tracked one).
     by_id = {g.opp_id: g for g in open_grants}
     postings = [
         Posting(opp_id=g.opp_id, title=g.title, agency_code=g.agency_code, close=g.close_date,
