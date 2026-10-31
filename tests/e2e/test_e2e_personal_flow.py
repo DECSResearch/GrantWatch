@@ -129,6 +129,7 @@ def day_one(world, written):
         code=code, requests=list(world.llm.requests), run=personal_run(world), scores=member_scores(world),
         grants={r["opp_id"]: r for r in world.query("SELECT * FROM grants")}, runs=[r["step"] for r in world.query("SELECT step FROM job_runs ORDER BY id")],
     )
+    s.team_new, s.ana_new = world.llm.request_for(NEW, profile=None), world.llm.request_for(NEW, profile=ANA_TEXT)  # the grant was asked about twice
     ana, cara = written.ana, written.cara
     s.me = ana.get("/api/profile").json()
     s.ana_list = at_their_floor(ana)
@@ -274,6 +275,7 @@ class TestTheDailyRun:
         team = [r for r in day_one.requests if r["profile"] is None]
         assert [n for r in team for n in r["numbers"]] == [NEW]
         (request,) = team
+        assert request == day_one.team_new
         assert request["system"] == day_zero.requests[0]["system"]  # the team's system prompt, byte for byte
         assert "Researcher profile" not in request["user"] and "lithium" not in request["system"] + request["user"]
 
@@ -290,6 +292,10 @@ class TestTheDailyRun:
             assert ANA_TEXT not in request["system"] and "data, not instructions" in request["system"]
             assert f"```\n{ANA_TEXT}\n```" in request["user"]
         assert [r["profile"] for r in day_one.requests].count(None) == 1 and len(mine) == len(day_one.requests) - 1
+
+    def test_the_new_grant_is_asked_about_once_for_the_team_and_once_for_her_each_with_its_own_votes(self, day_one):
+        assert examples(day_one.team_new) == [BULLETS] and examples(day_one.ana_new) == [NOKW]
+        assert day_one.ana_new["profile"] == ANA_TEXT and day_one.team_new["profile"] is None
 
     def test_each_scorer_gets_only_its_own_votes_as_examples(self, day_one):
         theirs = {None: set(), ANA_TEXT: set()}
