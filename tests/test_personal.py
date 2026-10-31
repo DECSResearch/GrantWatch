@@ -432,3 +432,40 @@ class TestFetchMembers:
         with pytest.MonkeyPatch.context() as patch:
             (found,) = self.fetch(patch, [("a@und.edu", stored)])
         assert found.stored_text == stored and found.summary == " ".join(stored.split())
+
+
+class TestMemberKey:
+    """A member's current key comes from the cleaned text, whatever the table holds."""
+
+    HAND_TYPED = "I build battery models for grid-scale storage,\nmostly lithium and sodium chemistries.  "
+    CLEAN = "I build battery models for grid-scale storage, mostly lithium and sodium chemistries."
+
+    def test_the_key_is_the_personal_key_of_the_team_profile_with_the_cleaned_summary(self):
+        found = personal.member_from_stored("a@und.edu", self.HAND_TYPED)
+        assert found.key(TEAM, "model-one") == personal_key(personal_profile(TEAM, self.CLEAN), "model-one")
+        assert found.profile(TEAM) == personal_profile(TEAM, self.CLEAN)
+
+    def test_a_key_made_from_the_stored_text_would_be_another_key(self):
+        found = personal.member_from_stored("a@und.edu", self.HAND_TYPED)
+        assert personal_key(personal_profile(TEAM, self.HAND_TYPED), "model-one") != found.key(TEAM, "model-one")
+
+    def test_the_text_as_stored_is_kept_for_the_write_guard(self):
+        found = personal.member_from_stored("a@und.edu", self.HAND_TYPED)
+        assert (found.summary, found.stored_text) == (self.CLEAN, self.HAND_TYPED)
+
+    def test_a_text_that_cannot_be_cleaned_is_refused(self):
+        with pytest.raises(personal.ProfileError):
+            personal.member_from_stored("a@und.edu", "too short")
+
+    def test_the_key_follows_the_model_and_the_team_profile(self):
+        found = personal.member_from_stored("a@und.edu", self.CLEAN)
+        assert found.key(TEAM, "model-one") != found.key(TEAM, "model-two")
+        assert found.key(TEAM, "model-one") != found.key(Profile(summary=TEAM.summary, institution="MIT"), "model-one")
+
+    @given(st.lists(st.sampled_from(["power", "grid", "storage", "models"]), min_size=12, max_size=20),
+           st.lists(st.sampled_from([" ", "  ", "\n", "\t", "\r\n"]), min_size=20, max_size=20), st.sampled_from(["", " ", "\n", "  \n"]))
+    @settings(max_examples=60, **SLOW)
+    def test_the_key_does_not_depend_on_the_spacing_the_table_holds(self, words, gaps, tail):
+        stored = "".join(word + gap for word, gap in zip(words, gaps)) + tail
+        tidy = personal.member_from_stored("a@und.edu", " ".join(words))
+        assert personal.member_from_stored("a@und.edu", stored).key(TEAM, "m") == tidy.key(TEAM, "m")

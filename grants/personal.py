@@ -45,6 +45,22 @@ class Member:
     def stored_text(self) -> str:
         return self.summary if self.stored is None else self.stored
 
+    def profile(self, team: Profile) -> Profile:
+        """The team profile with this member's cleaned summary: what the model scores them against."""
+        return personal_profile(team, self.summary)
+
+    def key(self, team: Profile, model: str) -> str:
+        """What a score of theirs is valid for. Made from the cleaned text, never the stored one, as the scoring pass makes it."""
+        return personal_key(self.profile(team), model)
+
+
+def member_from_stored(email: str, stored: str) -> Member:
+    """The member whose profile is ``stored``, the text as ``member_profiles`` holds it (``ProfileError`` if it cannot be cleaned).
+
+    The one way a member is made from a row, so the scoring pass and the email build the same key from the same text.
+    """
+    return Member(email, clean_summary(stored), stored)
+
 
 @dataclass
 class Totals:
@@ -105,7 +121,7 @@ def fetch_members() -> List[Member]:
     members = []
     for email, summary in rows:
         try:
-            members.append(Member(email, clean_summary(summary), summary))
+            members.append(member_from_stored(email, summary))
         except ProfileError as exc:
             logger("warning", f"Skipping the profile of {email}: {exc}")
     return members
@@ -177,8 +193,7 @@ class _Person:
 
 
 def _pending(member: Member, team: Profile, model: str, candidates: Sequence[Dict[str, Any]], scored_numbers: Callable[[str, str], Set[str]]) -> _Person:
-    profile = personal_profile(team, member.summary)
-    key = personal_key(profile, model)
+    profile, key = member.profile(team), member.key(team, model)
     done = scored_numbers(member.email, key)
     unique = {str(record["OPPORTUNITY_NUMBER"]): record for record in candidates if record.get("OPPORTUNITY_NUMBER")}
     todo = sorted((record for number, record in unique.items() if number not in done), key=close_order)
