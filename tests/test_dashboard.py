@@ -288,10 +288,16 @@ class TestVoting:
 
     def test_a_vote_posts_and_the_same_button_takes_it_back(self):
         cast = script().split("async function castVote(button) {")[1].split("\n  }\n")[0]
-        assert 'fetch(`/api/feedback/${encodeURIComponent(g.opp_id)}`, { method: "DELETE" })' in cast
-        assert 'fetch("/api/feedback", { method: "POST"' in cast and "JSON.stringify({ opp_id: g.opp_id, verdict })" in cast
+        assert 'fetch(`/api/feedback/${encodeURIComponent(target)}`, { method: "DELETE" })' in cast
+        assert 'fetch("/api/feedback", { method: "POST"' in cast and "JSON.stringify({ opp_id: target, verdict })" in cast
         assert "const clearing = g.my_verdict === verdict;" in cast
         assert "res.status === 401 || res.status === 503" in cast  # signed out: ask to sign in, change nothing
+
+    def test_a_vote_goes_to_the_posting_that_holds_it_and_the_row_remembers_where_it_sits(self):
+        cast = script().split("async function castVote(button) {")[1].split("\n  }\n")[0]
+        assert "const target = g.my_vote_opp_id || g.opp_id;" in cast  # the lead when the person has no vote
+        assert "g.opp_id" not in cast.split("const res = ")[1].split("if (res.status")[0]  # neither request names the lead
+        assert "g.my_vote_opp_id = clearing ? g.opp_id : target;" in cast  # taken back: the next vote goes to the lead
 
     def test_the_row_stays_after_a_mark_so_it_can_be_taken_back(self):
         cast = script().split("async function castVote(button) {")[1].split("\n  }\n")[0]

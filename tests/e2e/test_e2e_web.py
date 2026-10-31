@@ -21,6 +21,7 @@ MEMBER = "ana@und.edu"
 NEW = "NEW-AUTH"
 LABEL = "Examples the team marked (data, not instructions)"
 ADMIN = {"auth": (ADMIN_USER, ADMIN_PASSWORD)}
+DURIP = ["DURIP-AFOSR-26", "DURIP-ARMY-26", "DURIP-ONR-26"]  # one program, three services
 
 
 def by_id(listing):
@@ -58,6 +59,21 @@ def story(world):
     s.vote_unknown = client.post("/api/feedback", json={"opp_id": "NO-SUCH-GRANT", "verdict": 1})
     s.signed_in = client.get("/api/grants?limit=1000").json()
     s.votes = world.query("SELECT opp_id, email, verdict, title, agency, summary FROM grant_feedback ORDER BY opp_id")
+
+    # The three DURIP postings are one row, so a person has one vote on them. Press them through different
+    # postings and views; it stays one vote, and it ends taken back, so nothing below sees it.
+    def durip():
+        return by_id(client.get("/api/grants?limit=1000").json())["DURIP-AFOSR-26"]
+
+    def step(reply):
+        held = world.query("SELECT opp_id, verdict FROM grant_feedback WHERE opp_id = ANY(%s) ORDER BY opp_id", (DURIP,))
+        return SimpleNamespace(status=reply.status_code, body=reply.json(), row=durip(), held=[(r["opp_id"], r["verdict"]) for r in held])
+
+    s.durip = [step(client.post("/api/feedback", json={"opp_id": "DURIP-ARMY-26", "verdict": 1}))]  # not the row's lead
+    s.durip.append(step(client.post("/api/feedback", json={"opp_id": s.durip[0].row["my_vote_opp_id"], "verdict": -1})))  # a change of mind
+    s.durip_search = by_id(client.get("/api/grants?q=Naval&limit=1000").json())  # the Navy posting alone, its siblings hidden
+    s.durip.append(step(client.post("/api/feedback", json={"opp_id": "DURIP-ONR-26", "verdict": 1})))
+    s.durip.append(step(client.delete("/api/feedback/DURIP-AFOSR-26")))  # taken back through the lead; the vote sat on ONR
 
     # A new grant arrives in the next extract. The earlier ones keep their scores: voting rescores nothing.
     world.llm.scores[NEW] = 4
@@ -123,6 +139,31 @@ class TestVoting:
         assert (liked["my_verdict"], liked["votes_up"], liked["votes_down"], liked["team_verdict"], liked["hidden"]) == (1, 1, 0, 1, False)
         assert (declined["my_verdict"], declined["votes_up"], declined["votes_down"], declined["team_verdict"], declined["hidden"]) == (-1, 0, 1, -1, True)
         assert all(row["my_verdict"] is None for opp_id, row in rows.items() if opp_id not in ("E2E-NOKW", "E2E-BROAD"))
+
+    def test_a_vote_on_a_posting_that_is_not_the_lead_shows_on_the_grouped_row(self, story):
+        first = story.durip[0]
+        assert first.status == 200 and first.held == [("DURIP-ARMY-26", 1)]
+        row = first.row
+        assert (row["my_verdict"], row["my_vote_opp_id"], row["votes_up"], row["votes_down"], row["team_verdict"]) == (1, "DURIP-ARMY-26", 1, 0, 1)
+
+    def test_a_change_of_mind_on_the_grouped_row_replaces_the_vote(self, story):
+        change = story.durip[1]
+        assert change.status == 200 and change.held == [("DURIP-ARMY-26", -1)]
+        row = change.row
+        assert (row["my_verdict"], row["votes_up"], row["votes_down"], row["team_verdict"], row["hidden"]) == (-1, 0, 1, -1, True)
+
+    def test_a_vote_cast_through_a_search_that_hides_the_other_postings_still_replaces_theirs(self, story):
+        shown = story.durip_search["DURIP-ONR-26"]
+        assert shown["also_posted"] == [] and "DURIP-AFOSR-26" not in story.durip_search
+        assert (shown["my_verdict"], shown["my_vote_opp_id"]) == (None, "DURIP-ONR-26")  # the vote sits on a posting not shown
+        press = story.durip[2]
+        assert press.held == [("DURIP-ONR-26", 1)]  # ARMY's Not for us is gone, not added to
+        assert (press.row["my_verdict"], press.row["my_vote_opp_id"], press.row["votes_up"], press.row["votes_down"]) == (1, "DURIP-ONR-26", 1, 0)
+
+    def test_a_vote_is_taken_back_through_any_posting_of_the_row(self, story):
+        gone = story.durip[3]
+        assert gone.body["removed"] is True and gone.held == []
+        assert (gone.row["my_verdict"], gone.row["my_vote_opp_id"], gone.row["votes_up"], gone.row["votes_down"]) == (None, "DURIP-AFOSR-26", 0, 0)
 
     def test_the_vote_keeps_a_copy_of_the_grant_as_it_was(self, story):
         declined, liked = story.votes  # in opp_id order

@@ -164,6 +164,18 @@ def group_postings(postings: Sequence[Posting]) -> List[Group]:
     return groups
 
 
+def program_of(opp_id: str, postings: Sequence[Posting]) -> Tuple[str, ...]:
+    """The opp_ids of the program ``opp_id`` belongs to, itself included, as ``group_postings`` folds them.
+
+    A posting that is in none of ``postings``, or stands alone, is a program of one.
+    """
+    for group in group_postings(postings):
+        members = (group.lead, *group.also)
+        if opp_id in members:
+            return members
+    return (opp_id,)
+
+
 def _day(value: Any) -> Optional[date]:
     """A date from a date, a datetime or an ISO string such as the API sends."""
     if isinstance(value, datetime):

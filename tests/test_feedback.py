@@ -22,6 +22,7 @@ from psycopg2.errors import UndefinedTable
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from grants import sql_utils  # noqa: E402
+from grants.display import Posting, program_of  # noqa: E402
 from grants.feedback import ENTRY_CHARS, EXAMPLE_LIMIT, Votes, clean_text, feedback_examples, net_verdict, with_feedback  # noqa: E402
 from grants.profile import Profile  # noqa: E402
 from grants_data import pipeline  # noqa: E402
@@ -326,22 +327,25 @@ class FakeCursor:
         return False
 
     def execute(self, sql, params=None):
-        self.db.executed.append((" ".join(sql.split()), params))
+        self.last = " ".join(sql.split())
+        self.db.executed.append((self.last, params))
         self.rowcount = self.db.rowcount
 
     def fetchone(self):
         return self.db.row
 
     def fetchall(self):
-        return self.db.rows
+        return self.db.program if self.last == " ".join(sql_utils._PROGRAM_SQL.split()) else self.db.rows
 
 
 class FakeDb:
-    def __init__(self, row=None, rows=(), rowcount=1):
-        self.executed, self.row, self.rows, self.rowcount = [], row, list(rows), rowcount
+    def __init__(self, row=None, rows=(), rowcount=1, program=()):
+        self.executed, self.row, self.rows, self.rowcount, self.program = [], row, list(rows), rowcount, list(program)
+        self.connections = 0
 
     def connection(self):
         db = self
+        db.connections += 1
 
         class Conn:
             def __enter__(self):
@@ -359,6 +363,10 @@ class FakeDb:
         return Conn()
 
 
+DAY = date(2026, 11, 6)
+DURIP_ROWS = [("D-AFOSR", "Program (DURIP)", "AFOSR", DAY), ("D-ARMY", "Program (DURIP)", "ARMY", DAY), ("D-ONR", "Program (DURIP)", "ONR", DAY)]
+
+
 class TestSqlHelpers:
     def patch(self, monkeypatch, **kw):
         db = FakeDb(**kw)
@@ -368,23 +376,46 @@ class TestSqlHelpers:
     def test_a_vote_copies_the_cleaned_grant_text_and_replaces_an_earlier_one(self, monkeypatch):
         db = self.patch(monkeypatch, row=("Wind \n  forecasting\x00", "  NSF ", None))
         assert sql_utils.record_vote("A-1", "me@und.edu", -1) is True
-        (select, select_params), (insert, params) = db.executed
+        (select, select_params), _program, (insert, params) = db.executed
         assert select == "SELECT title, agency, summary FROM grants WHERE opp_id = %s;" and select_params == ("A-1",)
         assert "INSERT INTO grant_feedback (opp_id, email, verdict, title, agency, summary)" in insert
         assert "ON CONFLICT (opp_id, email) DO UPDATE SET verdict = EXCLUDED.verdict, created_at = NOW()" in insert
         assert params == ("A-1", "me@und.edu", -1, "Wind forecasting", "NSF", None)
 
-    def test_an_unknown_grant_stores_nothing(self, monkeypatch):
+    def test_an_unknown_grant_stores_nothing_and_removes_nothing(self, monkeypatch):
         db = self.patch(monkeypatch, row=None)
         assert sql_utils.record_vote("NOPE", "me@und.edu", 1) is False
         assert len(db.executed) == 1 and "INSERT" not in db.executed[0][0]
 
-    def test_clearing_deletes_only_the_callers_own_vote(self, monkeypatch):
-        db = self.patch(monkeypatch, rowcount=1)
-        assert sql_utils.clear_vote("A-1", "me@und.edu") is True
-        assert db.executed == [("DELETE FROM grant_feedback WHERE opp_id = %s AND email = %s;", ("A-1", "me@und.edu"))]
-        self.patch(monkeypatch, rowcount=0)
-        assert sql_utils.clear_vote("A-1", "me@und.edu") is False
+    def test_a_vote_removes_the_callers_votes_on_the_programs_other_postings_in_the_same_transaction(self, monkeypatch):
+        db = self.patch(monkeypatch, row=("Program (DURIP)", "ONR", None), program=DURIP_ROWS)
+        assert sql_utils.record_vote("D-ONR", "me@und.edu", -1) is True
+        statements = [sql.split()[0] for sql, _ in db.executed]
+        assert statements == ["SELECT", "SELECT", "DELETE", "INSERT"]  # the old votes go before the new one is written
+        delete, params = db.executed[2]
+        assert delete == "DELETE FROM grant_feedback WHERE email = %s AND opp_id = ANY(%s);"
+        assert params[0] == "me@und.edu" and sorted(params[1]) == ["D-AFOSR", "D-ARMY"]  # not D-ONR, not other people's
+        assert db.connections == 1
+
+    def test_a_grant_that_is_alone_in_its_program_removes_nothing_else(self, monkeypatch):
+        db = self.patch(monkeypatch, row=("Wind", "NSF", None), program=[("A-1", "Wind", "NSF", DAY)])
+        assert sql_utils.record_vote("A-1", "me@und.edu", 1) is True
+        assert [sql.split()[0] for sql, _ in db.executed] == ["SELECT", "SELECT", "INSERT"]
+
+    def test_clearing_deletes_only_the_callers_own_votes_on_the_whole_program(self, monkeypatch):
+        db = self.patch(monkeypatch, rowcount=1, program=DURIP_ROWS)
+        assert sql_utils.clear_vote("D-ONR", "me@und.edu") is True
+        (_program, _), (delete, params) = db.executed
+        assert delete == "DELETE FROM grant_feedback WHERE email = %s AND opp_id = ANY(%s);"
+        assert params[0] == "me@und.edu" and sorted(params[1]) == ["D-AFOSR", "D-ARMY", "D-ONR"]
+        assert db.connections == 1
+        self.patch(monkeypatch, rowcount=0, program=DURIP_ROWS)
+        assert sql_utils.clear_vote("D-ONR", "me@und.edu") is False
+
+    def test_clearing_a_grant_the_database_no_longer_has_still_removes_its_own_vote(self, monkeypatch):
+        db = self.patch(monkeypatch, rowcount=1, program=[])
+        assert sql_utils.clear_vote("GONE", "me@und.edu") is True
+        assert db.executed[-1][1] == ("me@und.edu", ["GONE"])
 
     def test_counts_are_for_the_listed_grants_with_the_viewers_own_verdict(self, monkeypatch):
         db = self.patch(monkeypatch, rows=[("A", 2, 1, -1), ("B", 0, 3, None)])
@@ -403,6 +434,175 @@ class TestSqlHelpers:
         assert "title, agency, summary, created_at FROM grant_feedback" in db.executed[0][0]
 
 
+class VoteDb:
+    """The grants and grant_feedback tables in memory, for the statements record_vote and clear_vote run."""
+
+    def __init__(self, grants):
+        self.grants = grants  # opp_id -> (title, agency_code, close date)
+        self.votes = {}  # (opp_id, email) -> verdict
+        self.connections = 0
+
+    def connection(self):
+        db = self
+        db.connections += 1
+
+        class Cursor:
+            rows, rowcount = [], 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def execute(self, sql, params=None):
+                sql = " ".join(sql.split())
+                if sql.startswith("SELECT title, agency, summary FROM grants"):
+                    found = db.grants.get(params[0])
+                    self.rows = [(found[0], "Agency", None)] if found else []
+                elif sql == " ".join(sql_utils._PROGRAM_SQL.split()):
+                    close = db.grants.get(params[0], (None, None, None))[2]
+                    self.rows = [(opp, *grant) for opp, grant in db.grants.items() if close is not None and grant[2] == close]
+                elif sql.startswith("DELETE FROM grant_feedback WHERE email = %s AND opp_id = ANY(%s)"):
+                    email, ids = params
+                    gone = [key for key in db.votes if key[1] == email and key[0] in ids]
+                    for key in gone:
+                        del db.votes[key]
+                    self.rowcount = len(gone)
+                elif sql.startswith("INSERT INTO grant_feedback"):
+                    db.votes[(params[0], params[1])] = params[2]
+                else:
+                    raise AssertionError(f"a statement the helpers should not run: {sql}")
+
+            def fetchone(self):
+                return self.rows[0] if self.rows else None
+
+            def fetchall(self):
+                return self.rows
+
+        class Conn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def cursor(self, cursor_factory=None):
+                return Cursor()
+
+            def close(self):
+                pass
+
+        return Conn()
+
+
+DURIP_TITLE = "Instrumentation Program (DURIP)"
+PROGRAM_GRANTS = {
+    "D-AFOSR": (DURIP_TITLE, "AFOSR", DAY), "D-ARMY": (DURIP_TITLE, "ARMY", DAY), "D-ONR": (DURIP_TITLE, "ONR", DAY),
+    "PLAIN": ("Plain call", "NSF", DAY),  # closes the same day, but is not that program
+    "OTHER": (DURIP_TITLE, "AFOSR", date(2026, 12, 1)),  # the same name on another day
+}
+PROGRAM_OF = {"D-AFOSR": "durip", "D-ARMY": "durip", "D-ONR": "durip", "PLAIN": "plain", "OTHER": "other"}
+PEOPLE = ["me@und.edu", "you@und.edu"]
+
+
+def durip_row(db, email):
+    """The dashboard row of the DURIP program as it is for ``email``: the lead with the other two postings under it."""
+    counts = {}
+    for opp in PROGRAM_GRANTS:
+        verdicts = [v for (o, _), v in db.votes.items() if o == opp]
+        counts[opp] = Votes(verdicts.count(1), verdicts.count(-1), db.votes.get((opp, email)))
+    return with_feedback([posting("D-AFOSR", also_posted=[{"opp_id": "D-ARMY"}, {"opp_id": "D-ONR"}])], counts)[0]
+
+
+class TestOneVotePerProgram:
+    @pytest.fixture
+    def db(self, monkeypatch):
+        db = VoteDb(PROGRAM_GRANTS)
+        monkeypatch.setattr(sql_utils, "get_connection", db.connection)
+        return db
+
+    def test_a_vote_on_a_posting_that_is_not_the_lead_shows_as_mine_on_the_grouped_row(self, db):
+        assert sql_utils.record_vote("D-ONR", "me@und.edu", 1) is True
+        row = durip_row(db, "me@und.edu")
+        assert (row["my_verdict"], row["my_vote_opp_id"], row["votes_up"], row["votes_down"]) == (1, "D-ONR", 1, 0)
+        assert durip_row(db, "you@und.edu")["my_verdict"] is None  # not anyone else's
+
+    def test_a_change_of_mind_on_the_grouped_row_replaces_the_vote_instead_of_adding_one(self, db):
+        sql_utils.record_vote("D-ONR", "me@und.edu", 1)
+        before = durip_row(db, "me@und.edu")
+        sql_utils.record_vote(before["my_vote_opp_id"], "me@und.edu", -1)  # what the dashboard sends now
+        sql_utils.record_vote("D-AFOSR", "me@und.edu", -1)  # and what it used to send: the lead
+        assert db.votes == {("D-AFOSR", "me@und.edu"): -1}
+        row = durip_row(db, "me@und.edu")
+        assert (row["my_verdict"], row["votes_up"], row["votes_down"], row["team_verdict"]) == (-1, 0, 1, -1)
+
+    def test_pressing_relevant_after_a_vote_elsewhere_does_not_double_the_weight(self, db):
+        sql_utils.record_vote("D-ARMY", "me@und.edu", 1)
+        sql_utils.record_vote("D-AFOSR", "me@und.edu", 1)
+        assert db.votes == {("D-AFOSR", "me@und.edu"): 1}
+        assert durip_row(db, "me@und.edu")["votes_up"] == 1
+
+    def test_a_vote_can_be_taken_back_from_the_grouped_row(self, db):
+        sql_utils.record_vote("D-ONR", "me@und.edu", 1)
+        assert sql_utils.clear_vote("D-ONR", "me@und.edu") is True
+        assert db.votes == {}
+        sql_utils.record_vote("D-ONR", "me@und.edu", 1)
+        assert sql_utils.clear_vote("D-AFOSR", "me@und.edu") is True  # asked through the lead, the vote sat on ONR
+        assert db.votes == {} and durip_row(db, "me@und.edu")["my_verdict"] is None
+        assert sql_utils.clear_vote("D-AFOSR", "me@und.edu") is False
+
+    def test_a_program_voted_twice_before_this_fix_is_cleaned_up_by_the_next_vote_or_take_back(self, db):
+        db.votes.update({("D-AFOSR", "me@und.edu"): -1, ("D-ONR", "me@und.edu"): 1})  # the old double vote
+        assert durip_row(db, "me@und.edu")["team_verdict"] == 0
+        sql_utils.record_vote("D-AFOSR", "me@und.edu", -1)
+        assert db.votes == {("D-AFOSR", "me@und.edu"): -1}
+        db.votes[("D-ONR", "me@und.edu")] = 1
+        assert sql_utils.clear_vote("D-AFOSR", "me@und.edu") is True and db.votes == {}
+
+    def test_other_people_and_other_programs_keep_their_votes(self, db):
+        db.votes.update({("D-ARMY", "you@und.edu"): -1, ("PLAIN", "me@und.edu"): 1, ("OTHER", "me@und.edu"): -1})
+        sql_utils.record_vote("D-ONR", "me@und.edu", 1)
+        sql_utils.record_vote("D-AFOSR", "me@und.edu", -1)
+        sql_utils.clear_vote("D-ARMY", "me@und.edu")
+        assert db.votes == {("D-ARMY", "you@und.edu"): -1, ("PLAIN", "me@und.edu"): 1, ("OTHER", "me@und.edu"): -1}
+
+    def test_an_unknown_grant_changes_nothing(self, db):
+        sql_utils.record_vote("D-ONR", "me@und.edu", 1)
+        assert sql_utils.record_vote("NOPE", "me@und.edu", -1) is False
+        assert sql_utils.clear_vote("NOPE", "me@und.edu") is False
+        assert db.votes == {("D-ONR", "me@und.edu"): 1}
+
+    def test_each_call_is_one_transaction(self, db):
+        sql_utils.record_vote("D-ONR", "me@und.edu", 1)
+        sql_utils.clear_vote("D-ONR", "me@und.edu")
+        assert db.connections == 2
+
+    @given(st.lists(st.tuples(st.sampled_from(["vote", "clear"]), st.sampled_from(sorted(PROGRAM_OF)), st.sampled_from(PEOPLE), st.sampled_from([1, -1])), max_size=25))
+    def test_whatever_postings_are_pressed_a_person_holds_at_most_one_vote_per_program_and_it_is_their_latest(self, ops):
+        with pytest.MonkeyPatch.context() as mp:
+            db = VoteDb(PROGRAM_GRANTS)
+            mp.setattr(sql_utils, "get_connection", db.connection)
+            latest = {}  # (person, program) -> the verdict they last gave it, absent when they took it back
+            for action, opp, email, verdict in ops:
+                key = (email, PROGRAM_OF[opp])
+                if action == "vote":
+                    assert sql_utils.record_vote(opp, email, verdict) is True
+                    latest[key] = verdict
+                else:
+                    assert sql_utils.clear_vote(opp, email) is (key in latest)
+                    latest.pop(key, None)
+            assert {(email, PROGRAM_OF[opp]): v for (opp, email), v in db.votes.items()} == latest
+            assert len(db.votes) == len(latest)  # nobody holds two votes on one program
+            for email in PEOPLE:
+                row = durip_row(db, email)
+                held = sum(1 for (_, program) in latest if program == "durip")
+                assert row["my_verdict"] == latest.get((email, "durip"))
+                assert row["votes_up"] + row["votes_down"] == held
+                if row["my_verdict"] is not None:
+                    assert db.votes[(row["my_vote_opp_id"], email)] == row["my_verdict"]
+
+
 def posting(opp, **kw):
     row = {"opp_id": opp, "title": f"Grant {opp}", "agency_code": opp, "close_date": "2026-11-06", "post_date": "2026-08-01",
            "opportunity_status": "Posted", "relevance_score": 4, "watched": False, "url": f"https://x/{opp}", "also_posted": []}
@@ -412,8 +612,9 @@ def posting(opp, **kw):
 
 class TestWithFeedback:
     def test_without_counts_the_fields_are_null_and_nothing_is_hidden(self):
-        out = with_feedback([posting("A")], None)[0]
+        out = with_feedback([posting("A", also_posted=[{"opp_id": "B"}])], None)[0]
         assert (out["my_verdict"], out["votes_up"], out["votes_down"], out["team_verdict"], out["hidden"]) == (None, None, None, None, False)
+        assert out["my_vote_opp_id"] == "A"  # a vote with nothing known goes to the lead
 
     def test_votes_the_team_verdict_and_the_viewers_own(self):
         rows = [posting("A"), posting("B"), posting("C"), posting("D")]
@@ -428,11 +629,27 @@ class TestWithFeedback:
         out = with_feedback([posting("A", watched=True)], {"A": Votes(0, 3, None)})[0]
         assert out["team_verdict"] == -1 and out["hidden"] is False
 
-    def test_a_program_counts_every_posting_but_my_verdict_is_the_rows_own(self):
+    def test_a_program_counts_every_posting_and_my_verdict_is_my_vote_wherever_it_sits(self):
         row = posting("A", also_posted=[{"opp_id": "B"}, {"opp_id": "C"}])
-        counts = {"A": Votes(1, 0, 1), "B": Votes(0, 2, -1), "C": Votes(0, 1, None)}
-        out = with_feedback([row], counts)[0]
-        assert (out["votes_up"], out["votes_down"], out["team_verdict"], out["my_verdict"], out["hidden"]) == (1, 3, -1, 1, True)
+        counts = {"A": Votes(1, 0, None), "B": Votes(0, 2, -1), "C": Votes(0, 1, None)}
+        out = with_feedback([row], counts)[0]  # my Not for us sits on B, which is not the lead
+        assert (out["votes_up"], out["votes_down"], out["team_verdict"], out["hidden"]) == (1, 3, -1, True)
+        assert (out["my_verdict"], out["my_vote_opp_id"]) == (-1, "B")
+
+    def test_a_vote_on_the_lead_is_found_there(self):
+        row = posting("A", also_posted=[{"opp_id": "B"}])
+        out = with_feedback([row], {"A": Votes(1, 0, 1), "B": Votes(0, 1, None)})[0]
+        assert (out["my_verdict"], out["my_vote_opp_id"]) == (1, "A")
+
+    def test_with_no_vote_of_mine_a_new_one_goes_to_the_lead(self):
+        row = posting("A", also_posted=[{"opp_id": "B"}])
+        out = with_feedback([row], {"B": Votes(0, 1, None)})[0]
+        assert (out["my_verdict"], out["my_vote_opp_id"]) == (None, "A")
+
+    def test_of_two_old_votes_of_mine_the_first_in_row_order_is_the_one_shown(self):
+        row = posting("A", also_posted=[{"opp_id": "B"}, {"opp_id": "C"}])
+        out = with_feedback([row], {"B": Votes(1, 0, 1), "C": Votes(0, 1, -1)})[0]
+        assert (out["my_verdict"], out["my_vote_opp_id"]) == (1, "B")
 
     def test_rows_keep_their_order_and_the_input_is_not_changed(self):
         rows = [posting("B"), posting("A")]
@@ -445,6 +662,18 @@ class TestWithFeedback:
         out = with_feedback([posting("A", watched=watched)], {"A": Votes(up, down, None)})[0]
         assert out["hidden"] == (down > up and not watched)
         assert out["team_verdict"] == (up > down) - (up < down)
+
+    @given(st.lists(st.tuples(st.integers(0, 2), st.integers(0, 2), st.sampled_from([None, 1, -1])), min_size=1, max_size=4))
+    def test_my_vote_is_the_first_one_held_and_otherwise_the_lead(self, postings):
+        ids = [f"P{i}" for i in range(len(postings))]
+        counts = {opp_id: Votes(up, down, mine) for opp_id, (up, down, mine) in zip(ids, postings)}
+        row = posting(ids[0], also_posted=[{"opp_id": opp_id} for opp_id in ids[1:]])
+        out = with_feedback([row], counts)[0]
+        assert out["my_vote_opp_id"] in ids
+        held = [opp_id for opp_id in ids if counts[opp_id].mine is not None]
+        assert out["my_vote_opp_id"] == (held[0] if held else ids[0])
+        assert out["my_verdict"] == counts[out["my_vote_opp_id"]].mine
+        assert out["votes_up"] == sum(p[0] for p in postings) and out["votes_down"] == sum(p[1] for p in postings)
 
 
 ME = Recipient(id=1, email="me@und.edu", unsubscribe_token="tok")
@@ -612,6 +841,18 @@ class TestGrantsApi:
         assert state.asked[0][1] == "me@und.edu"
         assert rows["C"]["my_verdict"] == -1 and rows["C"]["hidden"] is True
 
+    def test_a_vote_on_the_other_posting_of_a_program_is_mine_and_the_row_says_where_it_sits(self, web):
+        client, state = web
+        state.rows = [dict(r) for r in self.ROWS]
+        state.counts = {"B": Votes(0, 1, -1)}  # the program's lead is A
+        sign_in(client)
+        row = {r["opp_id"]: r for r in client.get("/api/grants").json()["results"]}["A"]
+        assert (row["my_verdict"], row["my_vote_opp_id"], row["votes_down"]) == (-1, "B", 1)
+
+    def test_a_row_with_no_vote_of_mine_points_new_votes_at_the_lead(self, web):
+        rows, _ = self.get(web, signed_in=False)
+        assert {opp: r["my_vote_opp_id"] for opp, r in rows.items()} == {"A": "A", "C": "C", "D": "D"}
+
     def test_the_votes_asked_for_cover_every_posting_of_a_program(self, web):
         rows, state = self.get(web, signed_in=False)
         assert sorted(state.asked[0][0]) == ["A", "B", "C", "D"]
@@ -632,6 +873,7 @@ class TestGrantsApi:
         assert body["count"] == 3  # the grants still come back, with the pair folded
         for row in body["results"]:
             assert (row["my_verdict"], row["votes_up"], row["votes_down"], row["team_verdict"], row["hidden"]) == (None, None, None, None, False)
+            assert row["my_vote_opp_id"] == row["opp_id"]
         assert ("Could not read the team's votes" in caplog.text) == isinstance(error, RuntimeError)
 
     def test_the_existing_fields_are_still_there(self, web):

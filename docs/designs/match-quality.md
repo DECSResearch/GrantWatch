@@ -400,6 +400,16 @@ resolutions win over the text above.
 - **Missing table.** If `grant_feedback` doesn't exist yet, feedback fields
   read as null. POST runs `ensure_schema` once, then retries.
   `_SCHEMA_STALE_SQL` also checks `to_regclass('grant_feedback')`.
+- **One vote per program (#44).** A person's vote on a same-program group
+  lives on exactly one of its postings.
+  - POST and DELETE also remove the caller's votes on the program's other
+    postings, in the same transaction. The server works the program out from
+    every grant (`program_of`), not from the rows the page showed, so a search
+    or a score floor that hides a posting does not leave its vote behind.
+  - `with_feedback` takes `my_verdict` from the first posting in
+    `[lead, *also_posted]` that holds the viewer's vote and returns
+    `my_vote_opp_id`: that posting, or the lead when there is none. The
+    dashboard sends its votes to that posting.
 
 ### UX
 

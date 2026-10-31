@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Sequence
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
+from grants.display import Posting, program_of
 from grants.feedback import Votes, clean_text
 
 _SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
@@ -229,11 +230,32 @@ def list_watchlist() -> List[Dict[str, Any]]:
         return [dict(row) for row in cur.fetchall()]
 
 
+# The grants that share a close date with one grant: every posting it could be folded with.
+_PROGRAM_SQL = """
+    SELECT opp_id, title, agency_code, close_date::date
+    FROM grants
+    WHERE close_date::date = (SELECT close_date::date FROM grants WHERE opp_id = %s);
+"""
+
+
+def _program_opp_ids(cur: Any, opp_id: str) -> List[str]:
+    """``opp_id`` and the other postings of its program, whatever filter the person was looking through.
+
+    Read from every grant, not from the rows the dashboard showed, so a search or a score
+    floor that hides a sibling does not leave that sibling's vote behind.
+    """
+    cur.execute(_PROGRAM_SQL, (opp_id,))
+    postings = [Posting(opp_id=o, title=t or "", agency_code=a or "", close=c) for o, t, a, c in cur.fetchall()]
+    return list(program_of(opp_id, postings))
+
+
 def record_vote(opp_id: str, email: str, verdict: int) -> bool:
     """Store ``email``'s verdict (1 or -1) on a grant, replacing their earlier one; False when there is no such grant.
 
-    The title, agency and summary are copied from the grants row, cleaned, so
-    the vote can still serve as an example after the grant leaves the extract.
+    A person has one vote per program, so their votes on the program's other postings
+    are removed in the same transaction. The title, agency and summary are copied from
+    the grants row, cleaned, so the vote can still serve as an example after the grant
+    leaves the extract.
     """
     query = """
         INSERT INTO grant_feedback (opp_id, email, verdict, title, agency, summary)
@@ -246,14 +268,18 @@ def record_vote(opp_id: str, email: str, verdict: int) -> bool:
         if row is None:
             return False
         title, agency, summary = (clean_text(value) or None for value in row)
+        others = [other for other in _program_opp_ids(cur, opp_id) if other != opp_id]
+        if others:
+            cur.execute("DELETE FROM grant_feedback WHERE email = %s AND opp_id = ANY(%s);", (email, others))
         cur.execute(query, (opp_id, email, verdict, title, agency, summary))
     return True
 
 
 def clear_vote(opp_id: str, email: str) -> bool:
-    """Take back ``email``'s own vote on a grant; False when they had none."""
+    """Take back ``email``'s own vote on a grant's program, whichever posting it sits on; False when they had none."""
     with db_connection() as conn, conn.cursor() as cur:
-        cur.execute("DELETE FROM grant_feedback WHERE opp_id = %s AND email = %s;", (opp_id, email))
+        ids = _program_opp_ids(cur, opp_id)
+        cur.execute("DELETE FROM grant_feedback WHERE email = %s AND opp_id = ANY(%s);", (email, ids))
         return cur.rowcount > 0
 
 

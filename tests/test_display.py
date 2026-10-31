@@ -14,10 +14,12 @@ from grants.display import (  # noqa: E402
     COUNTDOWN_DAYS,
     FIRM_DEADLINE_DAYS,
     PLACEHOLDER_CEILING,
+    Posting,
     base_title,
     days_until_deadline,
     firm_deadline,
     group_rows,
+    program_of,
     real_ceiling,
     trailing_acronym,
 )
@@ -427,6 +429,50 @@ class TestGroupingProperties:
         position = {r["opp_id"]: n for n, r in enumerate(rows)}
         leads = [position[r["opp_id"]] for r in group_rows(rows)]
         assert leads == sorted(leads)
+
+
+def as_postings(rows):
+    """The facts program_of reads, from API rows."""
+    return [
+        Posting(opp_id=r["opp_id"], title=r["title"], agency_code=r["agency_code"] or "",
+                close=date.fromisoformat(r["close_date"][:10]) if r["close_date"] else None)
+        for r in rows
+    ]
+
+
+class TestProgramOf:
+    DURIP = TestSamePrograms.DURIP
+
+    def test_it_is_the_whole_group_whichever_posting_is_asked_about(self):
+        postings = as_postings(TestSamePrograms().triple())
+        for opp_id in ("ARMY", "ONR", "AFOSR"):
+            assert program_of(opp_id, postings) == ("AFOSR", "ARMY", "ONR")  # the lead, then the others by agency
+
+    def test_a_posting_that_stands_alone_or_is_unknown_is_a_program_of_one(self):
+        postings = as_postings(TestSamePrograms().triple() + [row("PLAIN", "Plain title", "NSF", "2026-11-06")])
+        assert program_of("PLAIN", postings) == ("PLAIN",)
+        assert program_of("NOPE", postings) == ("NOPE",) and program_of("NOPE", []) == ("NOPE",)
+
+    def test_a_posting_the_filter_left_out_of_the_list_is_still_part_of_the_program(self):
+        postings = as_postings(TestSamePrograms().triple())
+        shown = [p for p in postings if p.opp_id != "ARMY"]  # a score floor or a search dropped it
+        assert program_of("ONR", shown) == ("AFOSR", "ONR")
+        assert program_of("ONR", postings) == ("AFOSR", "ARMY", "ONR")
+
+    @given(ANY)
+    def test_it_has_the_members_of_the_group_the_dashboard_row_shows(self, rows):
+        postings = as_postings(rows)  # no scores, so the lead may differ; the members may not
+        for r in group_rows(rows):
+            for opp_id in members(r):
+                assert sorted(program_of(opp_id, postings)) == sorted(members(r))
+
+    @given(ANY, st.data())
+    def test_it_contains_the_posting_and_does_not_depend_on_the_input_order(self, rows, data):
+        shuffled = as_postings(data.draw(st.permutations(rows)))
+        for p in as_postings(rows):
+            program = program_of(p.opp_id, as_postings(rows))
+            assert p.opp_id in program and len(set(program)) == len(program)
+            assert program_of(p.opp_id, shuffled) == program
 
 
 class TestSupersededProperties:

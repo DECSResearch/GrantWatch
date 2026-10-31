@@ -7,7 +7,8 @@ A vote is 1 (Relevant) or -1 (Not for us); a person has one vote per grant and
 a new one replaces the old. A grant's net verdict is the sign of its votes'
 sum: more Relevant than Not for us is 1, the reverse is -1, and a tie is 0,
 which counts as no verdict. A program posted by several services (see
-grants.display) is judged on the sum of its postings' votes.
+grants.display) is judged on the sum of its postings' votes, and a person's
+vote on a program sits on exactly one of its postings.
 """
 from __future__ import annotations
 
@@ -107,21 +108,26 @@ def feedback_examples(rows: Iterable[Mapping[str, Any]], limit: int = EXAMPLE_LI
 def with_feedback(rows: Sequence[Mapping[str, Any]], counts: Optional[Mapping[str, Votes]]) -> List[Dict[str, Any]]:
     """API rows (see grants.display.group_rows) with what the team thinks of each.
 
-    Adds ``my_verdict`` (the viewer's own vote on the row's posting, null when signed out),
-    ``votes_up`` and ``votes_down`` (all the program's postings together), ``team_verdict``
-    (1, -1, or 0 for none or a tie) and ``hidden``: the team said Not for us and nobody
-    tracks it. Without ``counts`` (the votes could not be read) those are null and
-    nothing is hidden. Rows keep their order; the input is not changed.
+    Adds ``my_verdict`` (the viewer's own vote on the program, null when signed out) and
+    ``my_vote_opp_id`` (the posting that vote sits on: the first of the lead and the
+    ``also_posted`` ones that holds it, else the lead, where a new vote goes), ``votes_up``
+    and ``votes_down`` (all the program's postings together), ``team_verdict`` (1, -1, or 0
+    for none or a tie) and ``hidden``: the team said Not for us and nobody tracks it.
+    Without ``counts`` (the votes could not be read) those are null and nothing is hidden.
+    Rows keep their order; the input is not changed.
     """
     out = []
     for source in rows:
         row = dict(source)
         if counts is None:
-            row.update(my_verdict=None, votes_up=None, votes_down=None, team_verdict=None, hidden=False)
+            row.update(my_verdict=None, my_vote_opp_id=row["opp_id"], votes_up=None, votes_down=None, team_verdict=None, hidden=False)
         else:
-            postings = [counts.get(row["opp_id"], Votes())] + [counts.get(a["opp_id"], Votes()) for a in row.get("also_posted") or ()]
+            ids = [row["opp_id"]] + [a["opp_id"] for a in row.get("also_posted") or ()]
+            postings = [counts.get(opp_id, Votes()) for opp_id in ids]
             up, down = sum(v.up for v in postings), sum(v.down for v in postings)
             team = net_verdict(up - down)
-            row.update(my_verdict=postings[0].mine, votes_up=up, votes_down=down, team_verdict=team, hidden=team < 0 and not row.get("watched"))
+            mine = next(((opp_id, v.mine) for opp_id, v in zip(ids, postings) if v.mine is not None), (ids[0], None))
+            row.update(my_verdict=mine[1], my_vote_opp_id=mine[0], votes_up=up, votes_down=down, team_verdict=team,
+                       hidden=team < 0 and not row.get("watched"))
         out.append(row)
     return out

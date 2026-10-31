@@ -167,10 +167,15 @@ grants the MCP server tracked with a plain "Tracked" label.
 
 A team member can mark a grant Relevant or Not for us (one vote each, and a
 new vote replaces the old one; the votes are in the `grant_feedback` table).
-`GET /api/grants` adds `my_verdict` (null when signed out), `votes_up`,
-`votes_down`, `team_verdict` (1, -1, or 0 for none or a tie) and `hidden` (the
-team said Not for us and nobody tracks it) to each row. The votes work on the
-team's side of the pipeline directly, without rescoring anything:
+A program posted by several services is one grant to vote on: a person's vote
+sits on one of its postings, and voting or taking the vote back through any
+posting replaces or removes it on the others.
+`GET /api/grants` adds `my_verdict` (null when signed out), `my_vote_opp_id`
+(the posting that holds the viewer's vote, else the row's own, which is where a
+new vote goes), `votes_up`, `votes_down`, `team_verdict` (1, -1, or 0 for none
+or a tie) and `hidden` (the team said Not for us and nobody tracks it) to each
+row. The votes work on the team's side of the pipeline directly, without
+rescoring anything:
 
 - a grant the team marked Not for us is left out of the email's new grants and
   weekly overview, unless it is tracked; one marked Relevant counts as meeting

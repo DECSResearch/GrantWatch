@@ -527,17 +527,19 @@
   }
 
   // Mark a grant Relevant or Not for us; the same button again takes the mark back.
+  // A program's one vote sits on one of its postings, which may not be the one the row leads with.
   async function castVote(button) {
     const row = button.closest(".row");
     const g = row && state.grants[Number(row.dataset.idx)];
     if (!g || row.dataset.busy) return;
     const verdict = Number(button.dataset.vote);
     const clearing = g.my_verdict === verdict;
+    const target = g.my_vote_opp_id || g.opp_id;
     row.dataset.busy = "1";
     try {
       const res = clearing
-        ? await fetch(`/api/feedback/${encodeURIComponent(g.opp_id)}`, { method: "DELETE" })
-        : await fetch("/api/feedback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ opp_id: g.opp_id, verdict }) });
+        ? await fetch(`/api/feedback/${encodeURIComponent(target)}`, { method: "DELETE" })
+        : await fetch("/api/feedback", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ opp_id: target, verdict }) });
       if (res.status === 401 || res.status === 503) {
         const body = await res.json().catch(() => ({}));
         askToSignIn(body.detail || "Sign in to mark grants.");
@@ -545,6 +547,7 @@
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       applyVote(g, clearing ? null : verdict);
+      g.my_vote_opp_id = clearing ? g.opp_id : target;
       row.querySelectorAll(".vote").forEach((b) => {
         const v = Number(b.dataset.vote);
         b.setAttribute("aria-pressed", String(g.my_verdict === v));
