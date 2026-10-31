@@ -205,6 +205,8 @@ _FIT_SQL = f"""
 def data_status(min_score: Optional[int] = None) -> Dict[str, Any]:
     """Freshness and coverage numbers for the UI header and the MCP server.
 
+    ``scored`` counts open grants only, so it is never more than ``open``.
+
     With ``min_score``, ``fit_count`` is how many open grants score at least that
     (the team threshold), counted as the dashboard lists them: a program posted
     by several services is one. It is None without a ``min_score``.
@@ -212,7 +214,7 @@ def data_status(min_score: Optional[int] = None) -> Dict[str, Any]:
     sql = f"""
         SELECT COUNT(*) AS total,
                COUNT(*) FILTER (WHERE {open_grant_sql("g")}) AS open,
-               COUNT(g.relevance_score) AS scored,
+               COUNT(g.relevance_score) FILTER (WHERE {open_grant_sql("g")}) AS scored,
                MAX(g.last_seen_at) AS last_seen_at,
                (SELECT COUNT(*) FROM grant_watchlist) AS watched
         FROM grants g

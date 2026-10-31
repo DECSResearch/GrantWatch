@@ -153,6 +153,19 @@ class TestDashboardApi:
         assert story.profile["min_score"] == 4
         assert (data["open"], data["scored"], data["fit_count"]) == (14, 14, 7)  # DURIP's three postings count once
 
+    def test_a_closed_grant_is_not_counted_as_scored(self, world, story):
+        client = TestClient(webapp.app, base_url="http://localhost")
+        before = client.get("/api/profile").json()["data"]
+        world.query("INSERT INTO grants (opp_id, title, close_date, relevance_score) "
+                    "VALUES ('E2E-CLOSED-SCORED', 'Closed last month', CURRENT_DATE - 30, 5)")
+        try:
+            after = client.get("/api/profile").json()["data"]
+        finally:
+            world.query("DELETE FROM grants WHERE opp_id = 'E2E-CLOSED-SCORED'")
+        assert after["total"] == before["total"] + 1
+        assert (after["open"], after["scored"]) == (before["open"], before["scored"])
+        assert after["scored"] <= after["open"]
+
 
 class TestScoreFloor:
     def test_a_grant_scoring_under_the_threshold_is_not_listed_at_it(self, story):
