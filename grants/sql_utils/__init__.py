@@ -324,7 +324,7 @@ _PROGRAMS_OF_SQL = f"""
 def fetch_relevant_ids() -> List[str]:
     """Every posting of each program the team marked Relevant on balance (see ``relevant_postings``).
 
-    A program's votes are summed over all its postings, so a Not for us on a sibling counts.
+    A program's votes are summed over its open postings, so a Not for us on an open sibling counts.
     Raises ``UndefinedTable`` until the first run has created grant_feedback.
     """
     with db_connection() as conn, conn.cursor() as cur:

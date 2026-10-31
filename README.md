@@ -182,7 +182,7 @@ rescoring anything:
 - a grant the team marked Not for us is left out of the email's new grants and
   weekly overview, unless it is tracked; one marked Relevant counts as meeting
   the score threshold; a tie is no verdict. A program posted by several
-  services is judged on all its postings' votes together. The dashboard's
+  services is judged on its open postings' votes together. The dashboard's
   score bar (`min_score`) lets a grant or program the team marked Relevant
   through, like a tracked grant, so new grants the email lists because of the
   team's mark also show on the default dashboard;
