@@ -4,6 +4,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
 from hypothesis import given, strategies as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -11,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from grants_data.date_filter_data import date_filter_json_data
 from grants_data.keyword_filter_data import filter_grants_by_keywords
 from grants_data.normalize import normalize_records, strip_html
-from llm_utils.gpt_summarizer import SUMMARY_CHARS, cut_summary, description_summarizer
+from llm_utils.gpt_summarizer import SUMMARY_CHARS, SUMMARY_READ_CHARS, cut_summary, description_summarizer
 
 
 class TestStripHtml:
@@ -152,10 +153,22 @@ class TestCutSummary:
         stored = strip_html(raw)  # what the loader keeps as the description
         assert cut_summary(stored) == description_summarizer([{"FUNDING_DESCRIPTION": raw}])[0]["SUMMARY"]
 
-    @given(words=st.lists(st.text(alphabet="abcdefgh<>&;", min_size=1, max_size=12), max_size=120))
-    def test_reading_only_the_start_of_the_description_gives_the_same_summary(self, words):
-        stored = strip_html(" ".join(words))  # already one line, as the loader stores it
-        assert cut_summary(stored[: SUMMARY_CHARS + 1]) == cut_summary(stored)
+    @given(raw=st.one_of(
+        st.lists(st.text(alphabet="abcdefgh<>&;", min_size=1, max_size=12), max_size=120).map(" ".join),
+        # a word of about the cut's length, so the space after it falls just before, at or just after the 321st character
+        st.builds(lambda lead, rest: " ".join(["x" * lead, *rest]), st.integers(SUMMARY_CHARS - 4, SUMMARY_CHARS + 4),
+                  st.lists(st.text(alphabet="abcdefgh<>&;", min_size=1, max_size=12), max_size=30)),
+    ))
+    def test_reading_only_the_start_of_the_description_gives_the_summary_the_pipeline_writes(self, raw):
+        stored = strip_html(raw)  # already one line, as the loader stores it
+        assert cut_summary(stored[:SUMMARY_READ_CHARS]) == description_summarizer([{"FUNDING_DESCRIPTION": raw}])[0]["SUMMARY"]
+
+    @pytest.mark.parametrize("word", [SUMMARY_CHARS - 1, SUMMARY_CHARS, SUMMARY_CHARS + 1])
+    def test_a_space_where_the_cut_ends_does_not_hide_that_the_text_goes_on(self, word):
+        stored = "x" * word + " more words here"  # for word == 320 the 321st character is the space
+        out = cut_summary(stored[:SUMMARY_READ_CHARS])
+        assert out == description_summarizer([{"FUNDING_DESCRIPTION": stored}])[0]["SUMMARY"]
+        assert out.endswith("...") and out[:-3] == "x" * min(word, SUMMARY_CHARS)
 
     def test_the_text_is_not_stripped_a_second_time(self):
         # Escaped markup in the source is plain text once the loader has unescaped it, and stays text.

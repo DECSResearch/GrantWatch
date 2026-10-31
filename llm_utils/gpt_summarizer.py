@@ -11,6 +11,11 @@ from grants_data.normalize import strip_html
 from logs.status_logger import logger
 
 SUMMARY_CHARS = 320
+# The start of a description from which ``cut_summary`` makes what it makes of the whole: the 320
+# characters it keeps, one that shows there is more, and one more because that one may be the space
+# between two words, which ``cut_summary`` drops. Holds for text on one line, as the loader stores a
+# description (it never has two spaces in a row).
+SUMMARY_READ_CHARS = SUMMARY_CHARS + 2
 
 
 def cut_summary(plain: str) -> str:

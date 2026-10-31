@@ -14,6 +14,7 @@ from grants.display import PUBLIC_DETAIL_FIELDS, PUBLIC_FIELDS  # noqa: E402
 from grants.queries import (  # noqa: E402
     GrantQuery, build_public_sql, count_public_grants, get_public_grant, public_status, query_public_grants, serialize_public_row,
 )
+from llm_utils.gpt_summarizer import SUMMARY_READ_CHARS  # noqa: E402
 from support import patched  # noqa: E402
 
 TODAY = date(2026, 10, 30)
@@ -35,7 +36,7 @@ def queries_with_everything():
 class TestBuildPublicSql:
     def test_it_selects_grants_gov_columns_and_the_start_of_the_description(self):
         sql, params = build_public_sql(GrantQuery(today=TODAY))
-        assert "LEFT(g.description, 321) AS description_head" in sql  # the cut is 320 characters; one more shows it was cut
+        assert f"LEFT(g.description, {SUMMARY_READ_CHARS}) AS description_head" in sql  # enough to cut it as the whole description is cut
         assert "FROM grants g" in sql and "JOIN" not in sql
         assert params == [300]
 

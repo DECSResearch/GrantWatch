@@ -10,7 +10,7 @@ from psycopg2.extras import RealDictCursor
 
 from grants.display import days_until_deadline, firm_deadline, group_rows, public_row, real_ceiling
 from grants.sql_utils import db_connection, open_grant_sql
-from llm_utils.gpt_summarizer import SUMMARY_CHARS, cut_summary
+from llm_utils.gpt_summarizer import SUMMARY_READ_CHARS, cut_summary
 from llm_utils.relevance import RULE_MODEL
 
 _TEAM_SCORES = "g.relevance_score, g.relevance_reason, g.relevance_model, g.relevance_scored_at,"
@@ -293,7 +293,7 @@ _PUBLIC_COLUMNS = f"""
     g.opp_id, g.title, g.stage, g.opportunity_status, g.opportunity_category, g.funding_categories,
     g.agency, g.agency_code, g.url, g.post_date, g.close_date, g.archive_date,
     g.award_ceiling, g.estimated_total_funding,
-    LEFT(g.description, {SUMMARY_CHARS + 1}) AS description_head
+    LEFT(g.description, {SUMMARY_READ_CHARS}) AS description_head
 """
 # By the deadline, then how new the posting is: never by a score, so a visitor cannot read the team's
 # ranking from where a grant falls under ``limit`` or in a date window. ``opp_id`` makes it total.
