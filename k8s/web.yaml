@@ -1,4 +1,6 @@
 # The dashboard, at http://<node-ip>:30810 on the lab network.
+# GRANTS_SECRET_KEY (in grantwatch-cred) is what lets team members sign in. Without it every visitor
+# is served the public list of Grants.gov facts only, which is safe to put on a public address.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

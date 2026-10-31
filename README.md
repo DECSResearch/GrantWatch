@@ -194,11 +194,12 @@ PYTHONPATH=. uvicorn web.app:app --app-dir src --reload   # http://localhost:800
 ```
 
 API: `GET /api/grants` (`q`, `min_score`, `closing_within`,
-`include_forecasted`, `watched_only`, `limit`), `GET /api/grants/{id}`,
-`GET /api/watchlist`, `GET /api/profile`, and for signed-in team members
-`POST /api/watchlist` and `DELETE /api/watchlist/{id}`, and
+`include_forecasted`, `watched_only`, `limit`), `GET /api/grants/{id}` and
+`GET /api/profile` for anyone, and for signed-in team members
+`GET /api/watchlist`, `POST /api/watchlist` and `DELETE /api/watchlist/{id}`,
 `POST /api/feedback` (`{"opp_id": ..., "verdict": 1}` for Relevant or `-1` for
-Not for us) and `DELETE /api/feedback/{id}`. Sign-in:
+Not for us) and `DELETE /api/feedback/{id}`, and `GET`, `PUT` and `DELETE`
+`/api/me/profile` for their own research profile. Sign-in:
 `POST /api/login` emails a link to a recipient, `GET /auth` sets the session,
 `GET /api/session`, `POST /api/logout`. `GET|POST /unsubscribe?token=` serves
 the links in the emails (a GET only asks; mail scanners fetch links).
@@ -211,10 +212,11 @@ team threshold. The page opens on any closing date. When `limit` cuts the list
 short it says "Showing N grants from the first 500 of M postings", where N is
 the rows drawn and M is `total`.
 
-Reading is open to anyone with the URL; changing the tracked list or voting
-needs `GRANTS_SECRET_KEY` on the server and a sign-in. Without the key the
-dashboard is read-only: it hides Track and the vote buttons, and marks the
-grants the MCP server tracked with a plain "Tracked" label.
+Changing the tracked list, voting and writing a profile need
+`GRANTS_SECRET_KEY` on the server and a sign-in. Without a signed-in member,
+including every request to a server that has no key, the API gives only the
+public view described below, so a server put on a public address without
+`GRANTS_SECRET_KEY` shows nothing but Grants.gov's facts.
 
 When the sign-in email does not arrive (a university mail filter may hold it),
 an admin prints a link that works for one hour with
@@ -222,6 +224,53 @@ an admin prints a link that works for one hour with
 the web server's `GRANTS_SECRET_KEY`, and points at `GRANTS_DASHBOARD_URL`
 (which must be the address people open), else at `http://localhost:8000`.
 Anyone who has the link can sign in as that person, so send it to them only.
+
+### The public list and a member's own scores
+
+**A visitor** (no signed-in member) gets the open Grants.gov grants and
+nothing GrantWatch holds about the team: no scores or reasons, matched keywords,
+tracking, votes, thresholds or profile text. `GET /api/grants` has its own SQL
+that selects Grants.gov columns only, and a row is cut down by an allow list
+(`grants.display.public_row`) before the grouping of one program's postings
+reads it and again after, so which posting leads cannot depend on a score or on
+tracking (it is the lowest opportunity number). The summary is the Grants.gov
+description cut as the fallback summary is; the model's summary is written
+from the team's profile and is never sent. `q` searches the title, agency,
+opportunity number and description. Rows are ordered by close date, then post
+date, title and opportunity number, never by score, so `limit` cannot show
+where the team ranks a grant. `min_score`, `watched_only` and `include_closed`
+are ignored. `GET /api/grants/{id}` adds the full description, and
+`GET /api/profile` is `{"configured", "data": {"open", "data_as_of"}}` only.
+Without a model, or with the team profile unconfigured, the database holds
+the keyword matches (a pick made for the team), so a visitor gets no list, no
+detail and `"configured": false`.
+
+**A member with no profile of their own** gets the team's scores and votes as
+before. **A member with one** (see `PUT /api/me/profile`) gets their own scores
+from `member_scores`, once any is stored for them under any key (an old score
+stands until the daily run replaces it, as in their email), and the team's
+before that; `GET /api/grants` says which in `scores` (`"mine"` or `"team"`).
+A grant their profile has not scored has no score, the reason "Not scored for
+your profile yet" and fails a score floor unless it is tracked or they marked
+it Relevant; a grant the eligibility pre-check ruled out is 0 with the rule's
+reason. Their own votes decide for them alone: `votes_up`, `votes_down` and
+`team_verdict` are null, their Not for us hides a grant for them, and their
+Relevant marks pass their floor. `GET /api/profile` adds `me`: `has_profile`,
+`updated_at`, `min_score` (their default floor: `recipients.min_score`, else the
+team's; `/api/grants` applies a floor only when asked), `using`, and `coverage`,
+`{"open", "scored"}`, the open grants with a score under the key of their
+profile as it is now (made from the cleaned text, as the scoring pass makes it)
+plus the ones the pre-check ruled out. `data.fit_count` is taken at that floor
+by the scores they are shown.
+
+`PUT /api/me/profile` takes `{"summary"}` as JSON (any other content type is
+refused with a 415, so a cross-site form cannot send it): cleaned, 40 to 2,000
+characters, else a 400 with the reason. A changed text deletes the member's
+scores in the same transaction, so they see the team's until the next daily
+run. `DELETE` returns them to the team profile, scores deleted and votes back
+with the team's. Every `/api` answer is `Cache-Control: no-store` with
+`Vary: Cookie`, and the web app applies the database schema once when it
+starts (best effort, logged) so these tables exist before the first run.
 
 ### Team feedback
 
@@ -234,7 +283,7 @@ A member who has a research profile of their own (a row in
 `member_profiles`) votes for themselves only: their votes are left out of the
 team's counts, verdicts, hidden grants and scorer examples, and are the examples
 for their own scoring instead. Deleting the profile returns them to the team.
-`GET /api/grants` adds `my_verdict` (null when signed out), `my_vote_opp_id`
+For a signed-in member `GET /api/grants` adds `my_verdict`, `my_vote_opp_id`
 (the posting that holds the viewer's vote, else the row's own, which is where a
 new vote goes), `votes_up`, `votes_down`, `team_verdict` (1, -1, or 0 for none
 or a tie) and `hidden` (the team said Not for us and nobody tracks it) to each
