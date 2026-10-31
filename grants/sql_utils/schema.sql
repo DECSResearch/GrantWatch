@@ -77,6 +77,28 @@ CREATE TABLE IF NOT EXISTS recipients (
     login_sent_at TIMESTAMP
 );
 
+-- A member's own research description. One row per person; no row means the
+-- team profile. Removing the recipient removes it.
+CREATE TABLE IF NOT EXISTS member_profiles (
+    email TEXT PRIMARY KEY REFERENCES recipients(email) ON DELETE CASCADE,
+    summary TEXT NOT NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- A grant's score for one member's profile; the team's score stays on grants.
+-- score_key is llm_utils.relevance.personal_key of the profile it was scored for.
+CREATE TABLE IF NOT EXISTS member_scores (
+    opp_id TEXT NOT NULL,
+    email TEXT NOT NULL REFERENCES member_profiles(email) ON DELETE CASCADE,
+    score SMALLINT NOT NULL,
+    reason TEXT,
+    model TEXT,
+    score_key TEXT NOT NULL,
+    scored_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (opp_id, email)
+);
+CREATE INDEX IF NOT EXISTS idx_member_scores_email ON member_scores(email);
+
 -- One row per thing a recipient has been told, written only after the email
 -- went out. kind is new, reminder (threshold = days before the deadline),
 -- changed, removed, or overview (opp_id '' and ref_date = the day it went out).

@@ -158,6 +158,20 @@ def score_key(profile: Profile, model: str) -> str:
     return f"{profile.fingerprint()}:v{SCORER_VERSION}:{model}"
 
 
+# Versions the framing of a personal profile (see PERSONAL_NOTE) the way SCORER_VERSION
+# versions the team prompt: change that framing and bump this, and every personal score
+# is rescored once. It is not a SCORER_VERSION bump, so the team's scores stay.
+PERSONAL_KEY_SUFFIX = ":p1"
+
+
+def personal_key(profile: Profile, model: str) -> str:
+    """The score key of a member's own profile (the team profile with their summary): ``score_key`` plus a suffix.
+
+    The suffix keeps a personal score from ever being read as a team score under the same text.
+    """
+    return score_key(profile, model) + PERSONAL_KEY_SUFFIX
+
+
 def _env(name: str, default: str = "") -> str:
     value = os.getenv(name)
     return value.strip() if value and value.strip() else default
