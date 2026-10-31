@@ -15,7 +15,7 @@ from typing import Dict, List, Optional, Protocol, Sequence
 from grants.profile import Profile, load_profile
 from logs.status_logger import logger
 from notifications.digest import RenderedEmail, render_email
-from notifications.planner import GrantState, NotifySettings, Recipient, SentRecord, plan_email
+from notifications.planner import GrantState, NotifySettings, Personal, Recipient, SentRecord, plan_email
 from notifications.transport import Transport, build_message, get_transport, sender_address
 
 
@@ -24,6 +24,7 @@ class Store(Protocol):
     def sync_recipients(self, emails: Sequence[str]) -> int: ...
     def recipients(self) -> List[Recipient]: ...
     def grants(self) -> List[GrantState]: ...
+    def personal(self, emails: Sequence[str]) -> Dict[str, Personal]: ...
     def sent(self, recipient_ids: Sequence[int]) -> List[SentRecord]: ...
     def record(self, rows: Sequence[SentRecord]) -> int: ...
     def acquire_lock(self, minutes: int = 30) -> bool: ...
@@ -56,13 +57,31 @@ def settings_from_profile(profile: Profile) -> NotifySettings:
     )
 
 
+def _read_personal(store: Store, recipients: Sequence[Recipient]) -> Dict[str, Personal]:
+    """The own scores and votes of every recipient with a profile of their own, read once for all of them.
+
+    When the read fails the answer is empty, and ``plan_email`` gives each of them only their reminders,
+    deadline changes and withdrawn notices for this run. Team recipients do not need it.
+    """
+    emails = [r.email for r in recipients if r.has_profile]
+    if not emails:
+        return {}
+    try:
+        return store.personal(emails)
+    except Exception as exc:
+        logger("warning", f"Notify: could not read the own scores and votes of {len(emails)} member(s); "
+                          f"they get only reminders, deadline changes and withdrawn notices this run: {exc}")
+        return {}
+
+
 def plan_all(store: Store, recipients: Sequence[Recipient], today: date, settings: NotifySettings) -> Dict[int, Optional[RenderedEmail]]:
     grants = store.grants()
+    personal = _read_personal(store, recipients)
     by_recipient: Dict[int, List[SentRecord]] = defaultdict(list)
     for row in store.sent([r.id for r in recipients]):
         by_recipient[row.recipient_id].append(row)
     return {
-        r.id: render_email(plan_email(r, grants, by_recipient[r.id], today, settings), settings, today)
+        r.id: render_email(plan_email(r, grants, by_recipient[r.id], today, settings, personal.get(r.email)), settings, today)
         for r in recipients
     }
 

@@ -30,6 +30,14 @@ The rules:
   A program the team marked Not for us is left out of the new grants and the
   overview, unless it is tracked. One marked Relevant counts as meeting the
   threshold, whatever its score; a tie is no verdict.
+* A member with a profile of their own is planned from their own scores and votes (see
+  Personal and personalise). Their score and reason replace the team's, a rule's 0 still wins,
+  and the votes are theirs alone. A grant their profile has not scored is not announced to
+  them, whatever they marked, until it is, and the keyword fallback is never theirs. While
+  nothing at all is scored for their profile they get the team's scores and their own votes.
+  When their own data could not be read they get only the reminders, deadline changes and
+  withdrawn notices, with no scores shown, and nothing is recorded for new grants or the
+  overview, so nothing is lost for the next run.
 * A tracked grant gets one reminder each time its deadline passes one of the
   reminder marks. A new deadline resets the reminders and is announced once,
   unless the old and the new date are both placeholders (see grants.display).
@@ -57,6 +65,12 @@ OVERVIEW = "overview"
 
 # New grants closing within this many days are listed first, whatever their score.
 URGENT_DAYS = 30
+
+# Whose scores and votes a plan is made from (Plan.profile).
+TEAM = "team"  # the recipient has no profile of their own
+OWN = "own"  # their own scores and votes
+PENDING = "pending"  # a profile of their own with nothing scored for it yet: the team's scores, their own votes
+UNREAD = "unread"  # a profile of their own that could not be read this run
 
 _WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
@@ -194,6 +208,7 @@ class Plan:
     scoring_active: bool = False
     min_score: int = 4
     has_tracked: bool = False
+    profile: str = TEAM  # whose scores the entries carry: TEAM, OWN, PENDING or UNREAD
 
     @property
     def empty(self) -> bool:
@@ -223,14 +238,52 @@ def _date_key(value: Optional[date]) -> date:
     return value or date.max
 
 
+def mode_of(recipient: Recipient, personal: Optional[Personal]) -> str:
+    """Which scores and votes plan this recipient's email: ``personal`` is None when their own data could not be read."""
+    if not recipient.has_profile:
+        return TEAM
+    if personal is None:
+        return UNREAD
+    return OWN if personal.scores else PENDING
+
+
+def personalise(grants: Iterable[GrantState], personal: Optional[Personal]) -> List[GrantState]:
+    """``grants`` as a member with a profile of their own sees them; ``personal`` None when it could not be read.
+
+    Their own votes replace the team's. Their scores do too, once any is stored for them: a grant
+    with none is then unscored for them, and the team's score is never shown beside theirs. Until
+    the first is stored they keep the team's. A rule's 0 (the eligibility pre-check) stays whatever
+    is stored. With nothing read the scores and reasons are blanked: nothing is announced from them,
+    and a team score would sit in the email of a member who has a profile of their own.
+    """
+    out = []
+    for g in grants:
+        votes = 0 if personal is None else personal.votes.get(g.opp_id, 0)
+        if g.by_rule or (personal is not None and not personal.scores):
+            out.append(replace(g, net_votes=votes))
+            continue
+        own = None if personal is None else personal.scores.get(g.opp_id)
+        out.append(replace(g, score=own.score if own else None, reason=own.reason if own else "", net_votes=votes))
+    return out
+
+
 def plan_email(
     recipient: Recipient,
     grants: Iterable[GrantState],
     sent: Iterable[SentRecord],
     today: date,
     settings: NotifySettings,
+    personal: Optional[Personal] = None,
 ) -> Plan:
-    """Everything this recipient should hear about today, before any cap."""
+    """Everything this recipient should hear about today, before any cap.
+
+    ``personal`` is what a recipient with ``has_profile`` has of their own (``mode_of``); None for such
+    a recipient means it could not be read. It is not looked at for anyone else.
+    """
+    mode = mode_of(recipient, personal)
+    if mode != TEAM:
+        grants = personalise(grants, personal)
+    own, unread = mode == OWN, mode == UNREAD
     mine = [s for s in sent if s.recipient_id == recipient.id]
     announced = {s.opp_id for s in mine if s.kind == NEW}
     reminded = {(s.opp_id, s.threshold, s.ref_date) for s in mine if s.kind == REMINDER}
@@ -246,8 +299,9 @@ def plan_email(
     min_score = settings.min_score if recipient.min_score is None else recipient.min_score
     pool = [g for g in grants if settings.include_forecasted or not g.forecasted or g.watched]
     open_grants = [g for g in pool if g.is_open(today)]
-    scoring_active = any(g.score is not None and not g.by_rule for g in open_grants)
-    plan = Plan(recipient=recipient, scoring_active=scoring_active, min_score=min_score, has_tracked=any(g.watched for g in pool))
+    # A member's own scores are always judged by score: with none on an open grant yet, nothing is announced to them.
+    scoring_active = own or any(g.score is not None and not g.by_rule for g in open_grants)
+    plan = Plan(recipient=recipient, scoring_active=scoring_active, min_score=min_score, has_tracked=any(g.watched for g in pool), profile=mode)
 
     # With nothing scored by the model yet, only keyword matches count (see the fallback below).
     needed = max(1, settings.keyword_threshold)
@@ -285,12 +339,14 @@ def plan_email(
                 posted=not g.forecasted, score=g.score, watched=g.watched)
         for g in open_grants
     ]
-    programs = [[by_id[group.lead], *(by_id[o] for o in group.also)] for group in group_postings(postings)]
+    groups = [] if unread else group_postings(postings)  # nothing is announced from scores that could not be read
+    programs = [[by_id[group.lead], *(by_id[o] for o in group.also)] for group in groups]
 
     def row(members: List[GrantState]) -> GrantState:
         # A posting the eligibility codes ruled out (score 0 by rule) ranks above an unscored one
         # but must not stand for the program: lead with one that may apply, unless it is tracked.
-        lead = next((g for g in members if g.watched or not g.by_rule), members[0])
+        # For a member's own scores it must also be one their profile has scored, if there is one.
+        lead = next((g for g in members if g.watched or (not g.by_rule and (g.score is not None or not own))), members[0])
         return replace(lead, also=tuple(g for g in members if g is not lead)) if len(members) > 1 else lead
 
     def verdict(members: List[GrantState]) -> int:
@@ -319,7 +375,10 @@ def plan_email(
         if verdict(members) > 0:  # the team said yes: as good as the threshold
             rank, qualifies = max(rank or 0, min_score if scoring_active else needed), True
         if qualifies:
-            fresh.append((rank, row(members)))
+            chosen = row(members)
+            if own and chosen.score is None:
+                continue  # their profile has not scored it, whatever they marked: it is announced once it has
+            fresh.append((rank, chosen))
     # Those closing within URGENT_DAYS first, soonest first; then the rest, best first.
     urgent = sorted((f for f in fresh if f[1].urgent(today)), key=lambda f: (_date_key(f[1].close_date), -f[0], f[1].title, f[1].opp_id))
     later = sorted((f for f in fresh if not f[1].urgent(today)), key=lambda f: (-f[0], _date_key(f[1].close_date), f[1].title, f[1].opp_id))
@@ -336,6 +395,8 @@ def plan_email(
             row(m) for m in programs
             if (any(relevant(g) for g in m) or verdict(m) > 0) and not declined(m) and m[0].firm_deadline(today)
         ]
+        if own:  # a grant their profile has not scored is listed only if tracked, like a new one
+            candidates = [g for g in candidates if g.score is not None or g.watched]
         lower = -1
         for upper in horizons:
             members = [g for g in candidates if lower < (g.days_left(today) or 0) <= upper]
