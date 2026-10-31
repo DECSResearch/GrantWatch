@@ -25,7 +25,9 @@ questions about the same data.
 3. The dashboard (`src/web/app.py`, deployed on Vercel) reads Postgres: a
    90-day timeline, grants grouped by deadline, relevance scores with the
    model's reason, and a Track button for grants the group intends to pursue.
-   Team members sign in with an emailed link to track grants.
+   Team members sign in with an emailed link to track grants and to write
+   their own research profile; anyone else sees the public list of open
+   Grants.gov grants.
 4. `mcp_server/server.py` exposes the same queries to Claude Code or Claude
    Desktop.
 
@@ -272,6 +274,38 @@ with the team's. Every `/api` answer is `Cache-Control: no-store` with
 `Vary: Cookie`, and the web app applies the database schema once when it
 starts (best effort, logged) so these tables exist before the first run.
 
+### The dashboard page
+
+One page serves everyone and asks `/api/session` and `/api/profile` who is
+looking. **A visitor** sees "Open Grants.gov opportunities as of <date>: <n>.",
+a line saying this is a public list and team members sign in (with "Link not
+arriving? Ask the GrantWatch admin for one."), the deadline strip, and rows of
+two columns (when it closes, the grant with its Grants.gov description). The
+filters are Search, Closing within, Stage and Show forecasted. There is no
+score, reason, keyword, button, scoring-off note or Admin link, and the page's
+markup starts as this page, so a member's controls are never drawn and hidden
+again. With no model there is no list: only the sign-in prompt, and no grants
+are asked for. Where `GRANTS_SECRET_KEY` is not set nobody can sign in, so the
+page is the visitor's without the sign-in prompt.
+
+**A member** sees what they saw before, with their own floor (`me.min_score`,
+which `data.fit_count` and the status line are counted at) and, once they have
+a profile of their own, their own scores or, until the daily run has scored
+them, the team's with the note "Your own matches start after the next daily
+run. Until then you see the team's." Their vote buttons show no team counts,
+and their own Not for us hides a grant for them. "My profile" next to "Signed
+in as ..." opens a panel, built by the page's script for members only: a
+textarea for what they work on (the same 40 to 2,000 characters
+`PUT /api/me/profile` checks, and its message is shown as it comes), Save, "Use
+the team profile instead" and how many open grants are scored for their
+profile. Save and the switch ask first when they would delete scores. Signing
+out reloads the page.
+
+What depends on who is looking is decided by pure functions in one block of
+`src/web/templates/index.html` (`viewOf`, `rowHtml`, `planSave` and others).
+`tests/test_dashboard_view.py` runs that block under node (skipped when node is
+not installed), with Hypothesis for the rules.
+
 ### Team feedback
 
 A team member can mark a grant Relevant or Not for us (one vote each, and a
@@ -442,6 +476,10 @@ Configure these (see `.env.example`):
    pip install -r requirements-dev.txt
    pytest tests/ -q
    ```
+   The dashboard page's own rules (what a visitor and a member see) are
+   tested under node, so the tests need `node` on the path; they are skipped
+   without it.
+
    `tests/e2e/` runs the real flow (ingest through a model over HTTP, the email,
    the dashboard and admin APIs, a vote, and the failure paths) against a real
    Postgres and a fake model server. It is skipped unless `GRANTS_TEST_POSTGRES_URL`
