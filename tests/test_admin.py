@@ -146,14 +146,73 @@ class TestWarnings:
 
     def test_unscored_grants_only_matter_when_scoring_is_on(self):
         found = _warnings(_health(open_unscored=12))
-        assert found == [
-            "12 open grants have no relevance score yet; the model server may be unreachable, "
-            "or the per-run cap left them for later."
-        ]
+        assert found == ["12 open grants have no relevance score yet: no ingest has recorded why."]
         assert _warnings(_health(open_unscored=12), scoring_on=False) == []
 
     def test_one_unscored_grant(self):
         assert _warnings(_health(open_unscored=1))[0].startswith("1 open grant has no relevance score yet")
+
+    def test_unscored_grants_waiting_for_the_cap(self):
+        found = _warnings(_health(open_unscored=5), runs=[_run(stats={"kept": 400, "failed": 0, "deferred": 5})])
+        assert found == ["5 open grants have no relevance score yet: 5 waiting for the per-run cap."]
+
+    def test_unscored_grants_that_failed_are_retried(self):
+        found = _warnings(_health(open_unscored=1), runs=[_run(stats={"failed": 1, "deferred": 0})])
+        assert found == ["1 open grant has no relevance score yet: 1 could not be scored in the last successful ingest and is retried next run."]
+
+    def test_unscored_grants_can_be_both_failed_and_deferred(self):
+        found = _warnings(_health(open_unscored=1_240), runs=[_run(stats={"failed": 40, "deferred": 1_200})])
+        assert found == [
+            "1,240 open grants have no relevance score yet: 40 could not be scored in the last successful ingest "
+            "and are retried next run; 1,200 waiting for the per-run cap."
+        ]
+
+    def test_an_unreachable_model_is_named_and_the_batches_it_skipped_are_not_counted_as_failures(self):
+        stats = {"failed": 30, "deferred": 0, "scoring_abort": "cannot reach http://10.0.0.5:18100: Connection error."}
+        found = _warnings(_health(open_unscored=30), runs=[_run(stats=stats)])
+        assert found == [
+            f"Scoring stopped during the newest ingest: {stats['scoring_abort']}",
+            "30 open grants have no relevance score yet: the model server could not be reached in the last successful ingest.",
+        ]
+
+    def test_a_scorer_that_stopped_for_another_reason_is_not_called_unreachable(self):
+        for reason in ("authentication failed: bad key", "the model used all 600 completion tokens before answering"):
+            found = _warnings(_health(open_unscored=3), runs=[_run(stats={"failed": 3, "scoring_abort": reason})])
+            assert found[-1] == "3 open grants have no relevance score yet: scoring stopped early in the last successful ingest."
+
+    def test_the_cause_comes_from_the_ingest_that_finished_not_a_newer_one_that_is_going_or_failed(self):
+        good = _run(stats={"failed": 0, "deferred": 7})
+        expected = "7 open grants have no relevance score yet: 7 waiting for the per-run cap."
+        assert _warnings(_health(open_unscored=7), runs=[_run(state="running"), good]) == [expected]
+        assert _warnings(_health(open_unscored=7), runs=[_run(state="failed", detail="boom"), good]) == [
+            "The newest ingest run failed. boom", expected,
+        ]
+
+    def test_unscored_grants_with_no_numbers_to_explain_them(self):
+        quiet = "3 open grants have no relevance score yet: no ingest has recorded why."
+        for stats in (None, {}, {"scored": 9, "failed": 0, "deferred": 0}, {"failed": "x", "deferred": True}):
+            assert _warnings(_health(open_unscored=3), runs=[_run(stats=stats)]) == [quiet]
+        assert _warnings(_health(open_unscored=3), runs=[_run("notify")]) == [quiet]
+
+    @settings(max_examples=100, deadline=None)
+    @given(
+        unscored=st.integers(1, 5_000),
+        failed=st.one_of(st.none(), st.integers(0, 5_000), st.text(max_size=5)),
+        deferred=st.one_of(st.none(), st.integers(0, 5_000), st.booleans()),
+        abort=st.one_of(st.none(), st.just(""), st.text(max_size=40), st.just("cannot reach http://x: down").map(lambda t: t + "!")),
+    )
+    def test_one_unscored_sentence_whose_cause_follows_the_numbers(self, unscored, failed, deferred, abort):
+        stats = {key: value for key, value in (("failed", failed), ("deferred", deferred), ("scoring_abort", abort)) if value is not None}
+        found = [w for w in _warnings(_health(open_unscored=unscored), runs=[_run(stats=stats)]) if "no relevance score yet" in w]
+        assert len(found) == 1 and found[0].startswith(f"{unscored:,} open grant")
+        cause = found[0].split(" yet: ", 1)[1]
+        count = lambda value: value if isinstance(value, int) and not isinstance(value, bool) else 0
+        reached = bool(abort) and abort.startswith("cannot reach")
+        assert ("could not be reached" in cause) == reached
+        assert ("scoring stopped early" in cause) == (bool(abort) and not reached)
+        assert ("could not be scored" in cause) == (not abort and count(failed) > 0)
+        assert ("waiting for the per-run cap" in cause) == (count(deferred) > 0)
+        assert ("no ingest has recorded why" in cause) == (not abort and count(failed) == 0 and count(deferred) == 0)
 
     def test_nobody_to_email(self):
         assert _warnings(recipients=0) == ["Nobody gets email yet: there are no active recipients."]
@@ -298,10 +357,16 @@ class TestAdminStatus:
         assert status["emails"][0]["day"] == "2026-09-14"
         assert status["warnings"] == [
             "The newest ingest run did not finish.",
-            "2 open grants have no relevance score yet; the model server may be unreachable, "
-            "or the per-run cap left them for later.",
+            "2 open grants have no relevance score yet: no ingest has recorded why.",
         ]
         assert [w for w in status["warnings"] if "recipients" in w] == []  # one active recipient
+
+    def test_the_page_is_told_whether_keywords_filter_anything(self, fake_db, monkeypatch):
+        assert admin.admin_status()["health"]["scores_every_grant"] is False  # a profile, but no model
+        monkeypatch.setenv("GRANTS_LLM_MODEL", "qwen")
+        assert admin.admin_status()["health"]["scores_every_grant"] is True
+        monkeypatch.setattr(admin, "load_profile", lambda: Profile())  # a model, but no profile summary yet
+        assert admin.admin_status()["health"]["scores_every_grant"] is False
 
     def test_a_run_replaced_by_a_newer_one_did_not_finish_however_young(self, fake_db):
         assert admin.admin_status()["runs"][2]["state"] == "did not finish"
@@ -982,6 +1047,20 @@ class TestAdminPage:
     def test_the_team_section_has_a_feedback_line(self):
         team = webapp.ADMIN_HTML.split("function renderTeam(data) {")[1].split("\n  }\n")[0]
         assert "data.feedback" in team and "marked Not for us" in team and "Feedback: no votes yet." in team
+
+    def test_the_keyword_lines_say_so_when_keywords_do_not_filter(self):
+        team = webapp.ADMIN_HTML.split("function renderTeam(data) {")[1].split("\n  }\n")[0]
+        assert "data.health.scores_every_grant" in team and "Keywords do not filter; every open grant is scored." in team
+        assert '"A grant needs "' in team  # still said when keywords decide
+        funnel = webapp.ADMIN_HTML.split("function funnel(stats, profile, health) {")[1].split("\n  }\n")[0]
+        assert 'if (!(health && health.scores_every_grant)) step("matched"' in funnel  # no matched count in that mode
+        assert "funnel(stats, data.profile, data.health)" in webapp.ADMIN_HTML
+
+    def test_the_emails_table_names_an_overview_without_a_cadence(self):
+        """Every overview row is written only when the email showed one (digest.overview_shown), and the
+        profile's day may have changed since, so the label claims nothing about "weekly"."""
+        emails = webapp.ADMIN_HTML.split("function renderEmails(data) {")[1].split("\n  }\n")[0]
+        assert 'if (r.overview) parts.push("overview");' in emails and "weekly" not in emails
 
     def test_the_page_clears_nodes_with_replaceChildren(self):
         assert "replaceChildren()" in webapp.ADMIN_HTML

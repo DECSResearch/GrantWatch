@@ -433,7 +433,7 @@
     return row;
   }
 
-  function funnel(stats, profile) {
+  function funnel(stats, profile, health) {
     const parts = [];
     const step = (key, text) => { if (isNum(stats[key])) parts.push(text(stats[key])); };
     const keepForecasts = profile && profile.include_forecasted;
@@ -446,9 +446,10 @@
       step("after_agency", (n) => num(n) + " after agency exclusions");
     }
     // A model scores every open grant (sent_to_model); without one, keywords decide (matched).
+    // Keywords filter nothing in the first case, so an older run's matched count is left out.
     step("ineligible", (n) => num(n) + " not open to your applicant type (scored 0)");
     step("sent_to_model", (n) => num(n) + " candidates for scoring");
-    step("matched", (n) => num(n) + " matched keywords");
+    if (!(health && health.scores_every_grant)) step("matched", (n) => num(n) + " matched keywords");
     return parts.join(", ");
   }
 
@@ -468,7 +469,7 @@
     if (source) {
       const stats = statsOf(source);
       lines.push((SOURCES[stats.source] || "Source not recorded") + (stats.source_file ? ", " + stats.source_file : ""));
-      lines.push(funnel(stats, data.profile));
+      lines.push(funnel(stats, data.profile, data.health));
       lines.push({ text: "From the run of " + when(source.started_at) + ".", className: "small" });
     } else {
       lines.push("No run has recorded its numbers yet.");
@@ -751,7 +752,9 @@
     else box.append(el("p", "The research profile has not been written yet, so scoring is off."));
     if (p.institution) box.append(el("p", "Institution: " + p.institution + "."));
     const threshold = p.keyword_threshold;
-    box.append(el("p", "Keywords: " + (p.keywords || []).join(", ") + ". A grant needs " + plural(threshold, "match", "matches") + "."));
+    const everyGrant = data.health && data.health.scores_every_grant;
+    const rule = everyGrant ? "Keywords do not filter; every open grant is scored." : "A grant needs " + plural(threshold, "match", "matches") + ".";
+    box.append(el("p", "Keywords: " + (p.keywords || []).join(", ") + ". " + rule));
     const rules = [
       "Emails grants scoring " + p.min_score + " or higher.",
       "Reminders " + words(p.reminder_days) + " days before.",
@@ -786,7 +789,7 @@
       if (r.reminder) parts.push(plural(r.reminder, "reminder"));
       if (r.changed) parts.push(plural(r.changed, "deadline change"));
       if (r.removed) parts.push(plural(r.removed, "tracked grant", "tracked grants") + " no longer open");
-      if (r.overview) parts.push("weekly overview");
+      if (r.overview) parts.push("overview");
       return [el("td", dayOnly(r.day), "nowrap num"), el("td", r.email, "email"), el("td", parts.join(", ") || "–")];
     }), "No email has been sent yet.");
   }

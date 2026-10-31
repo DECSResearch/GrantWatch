@@ -77,6 +77,27 @@ def _with_detail(message: str, run: Dict[str, Any]) -> str:
     return f"{message} {run['detail']}" if run.get("detail") else message
 
 
+def _count(value: Any) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0
+
+
+def _unscored_cause(stats: Dict[str, Any]) -> str:
+    """Why open grants have no score, from the numbers of the ingest that loaded them; "" when they say nothing.
+
+    ``failed`` also counts every batch skipped after the scorer stopped, so a stop is named in its place.
+    """
+    where = "in the last successful ingest"
+    abort, failed, deferred = stats.get("scoring_abort"), _count(stats.get("failed")), _count(stats.get("deferred"))
+    causes = []
+    if abort:
+        causes.append(f"the model server could not be reached {where}" if str(abort).startswith("cannot reach") else f"scoring stopped early {where}")
+    elif failed:
+        causes.append(f"{failed:,} could not be scored {where} and {'is' if failed == 1 else 'are'} retried next run")
+    if deferred:
+        causes.append(f"{deferred:,} waiting for the per-run cap")
+    return "; ".join(causes)
+
+
 def _unhappy(run: Optional[Dict[str, Any]], step: str) -> Optional[str]:
     if run is None or run.get("state") not in ("failed", "did not finish"):
         return None
@@ -109,10 +130,9 @@ def warnings_for(health: Dict[str, Any], runs: List[Dict[str, Any]], recipient_c
         found.append(f"Scoring stopped during the newest ingest: {abort}")
     unscored = int(health.get("open_unscored") or 0)
     if scoring_on and unscored > 0:
-        found.append(
-            f"{unscored:,} open {'grant has' if unscored == 1 else 'grants have'} no relevance score yet; "
-            "the model server may be unreachable, or the per-run cap left them for later."
-        )
+        # The ingest that finished is the one that loaded these scores; a newer one may still be running or have failed.
+        cause = _unscored_cause(_stats(good_ingest)) or "no ingest has recorded why"
+        found.append(f"{unscored:,} open {'grant has' if unscored == 1 else 'grants have'} no relevance score yet: {cause}.")
     if recipient_count == 0:
         found.append("Nobody gets email yet: there are no active recipients.")
     return found
@@ -373,6 +393,8 @@ def admin_status() -> Dict[str, Any]:
     feedback = {**{name: health_row.get(f"feedback_{name}") for name in _FEEDBACK_FIELDS}, "days": _FEEDBACK_DAYS}
     health["data_as_of"] = _iso(health["data_as_of"])
     health["scoring_on"] = profile.is_configured
+    # Then every open grant goes to the model and the keywords only label what they match (grants_data.pipeline).
+    health["scores_every_grant"] = profile.is_configured and LLMSettings.from_env().enabled
     for row in recipients:
         row["unsubscribed_at"], row["last_emailed"] = _iso(row["unsubscribed_at"]), _iso(row["last_emailed"])
     for row in emails:
