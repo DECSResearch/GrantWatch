@@ -26,6 +26,7 @@ from . import admin_auth, auth
 from .document_checker_routes import router as document_checker_router
 
 from grants.admin import admin_status, llm_check, run_log
+from grants.display import group_rows
 from grants.profile import Profile, load_profile
 from grants.queries import GrantQuery, data_status, get_grant, query_grants
 from grants.sql_utils import add_to_watchlist, list_watchlist, remove_from_watchlist
@@ -288,7 +289,7 @@ def get_grants(
         limit=limit,
     )
     try:
-        results = query_grants(query)
+        results = group_rows(query_grants(query))
     except Exception as exc:
         raise _db_error("fetching grants", exc) from exc
     return {"results": results, "count": len(results)}
