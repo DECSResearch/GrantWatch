@@ -343,14 +343,20 @@ break?". It is read-only and shows:
 
 - a verdict, a strip of the last 14 days of `ingest` and `notify` runs, and a
   sentence for anything that looks wrong;
-- how the daily run is doing: the Grants.gov file and its filter funnel, the
+- how the daily run is doing: the Grants.gov file and its filter funnel, with a
+  "Personal profiles" line under it (people, scored, failed and pending in the
+  newest personal step, and whether it stopped at its time limit), the
   database, a live check of the model server (with a "Check now" button), and
   email;
 - the last 15 days of runs, each with its numbers and the log lines it wrote;
 - the team (research profile, thresholds, recipients, how many votes there
   are and what share of the grants emailed in the last 30 days someone marked
   Not for us, counting a program posted by several services once), the emails
-  sent per day, and the settings that shape a run. No keys or passwords.
+  sent per day, and the settings that shape a run. Each person in the table
+  shows whether they use the team's profile or one of their own (with the day
+  they saved it, never its text) and how many open grants are scored for them.
+  A line says "Sign-in is off" when the server has no `GRANTS_SECRET_KEY`. No
+  keys or passwords.
 
 It asks for HTTP Basic credentials: each person has a named account in
 `GRANTS_ADMIN_USERS`, one `name:scrypt$...` entry per person (comma or newline
@@ -375,7 +381,7 @@ cluster it is at `http://<lab host>:30810/admin/`, and the lines go in
 `admin_users` in `ansible/secrets.yml`. That NodePort is plain HTTP, so the
 password crosses the lab network unencrypted: use a password you use nowhere
 else. Runs are recorded in the `job_runs` table; the
-first page load after an upgrade adds the columns it needs. A run killed by the
+first page load after an upgrade adds the tables and columns it needs. A run killed by the
 job's deadline cannot save its log, and shows as "did not finish". Emails are
 counted by day in `GRANTS_TIMEZONE` (default `America/Chicago`).
 
