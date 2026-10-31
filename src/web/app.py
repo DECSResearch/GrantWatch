@@ -1,6 +1,7 @@
 """FastAPI app serving the GrantWatch deadline dashboard."""
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import date
 from functools import lru_cache
 from pathlib import Path
@@ -40,7 +41,29 @@ from notifications.transport import build_message, get_transport, sender_address
 
 settings = get_settings()
 
-app = FastAPI(title="GrantWatch")
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("grantwatch.web")
+
+
+def apply_schema() -> None:
+    """Create the tables the web app reads (``member_profiles``, ``member_scores``) when it starts, once.
+
+    Best effort: the database may not be up yet, and the daily job applies the same schema, so a failure
+    is only logged. This replaces a guard on every route that reads one of the new tables.
+    """
+    try:
+        ensure_schema()
+    except Exception as exc:
+        logger.warning("Could not apply the database schema at startup: %s", exc)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    apply_schema()
+    yield
+
+
+app = FastAPI(title="GrantWatch", lifespan=lifespan)
 
 allow_origins = settings.allowed_origins or ["*"]
 app.add_middleware(
@@ -52,9 +75,6 @@ app.add_middleware(
 )
 
 app.include_router(document_checker_router)
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("grantwatch.web")
 
 
 def _with_vary(existing: Optional[str], token: str) -> str:
