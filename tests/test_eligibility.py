@@ -13,6 +13,7 @@ from grants.data.loader import LoadSummary
 from grants.profile import APPLICANT_CODES, Profile, load_profile
 from grants_data import pipeline
 from llm_utils.relevance import RULE_MODEL, score_by_rule, score_key
+from test_profile import _team_profile_installed
 from test_relevance import FakeClient, _echo_scores, _numbers_in
 
 CODES = sorted(APPLICANT_CODES)
@@ -103,8 +104,11 @@ class TestApplicantCodesInTheProfile:
         assert load_profile(path).applicant_codes == ["06"]
         assert sorted(message.split("'")[1] for level, message in warnings if level == "warning") == ["3", "6.5", "77", "public"]
 
-    def test_the_committed_template_leaves_the_pre_check_off(self):
-        assert load_profile().applicant_codes == []
+    def test_the_committed_template_leaves_the_pre_check_off(self, tmp_path, monkeypatch):
+        _team_profile_installed(tmp_path, monkeypatch)
+        template = load_profile(profile_module._DEFAULT_PATH)
+        assert template.source == profile_module._DEFAULT_PATH and template.applicant_codes == []
+        assert load_profile().applicant_codes == ["06"]  # the installed one is live: a bare call reads it, as the old test did
 
     def test_the_codes_do_not_rescore_anything(self):
         assert score_key(Profile(summary="A"), "m") == score_key(Profile(summary="A", applicant_codes=["06"]), "m")
