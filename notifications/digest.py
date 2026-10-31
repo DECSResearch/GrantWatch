@@ -90,7 +90,8 @@ def _deadline_text(g: GrantState, today: date) -> str:
 def _meta(notice_kind: str, g: GrantState, today: date, previous: Optional[date] = None) -> str:
     parts = [_clip(g.agency, _MAX_AGENCY) or "Unknown agency"]
     if notice_kind == CHANGED:
-        # A placeholder date is not a fact on either side of the move.
+        # A placeholder date is not a fact on either side of the move. A move between two
+        # placeholders is never planned, so at least one side is firm here.
         was_firm, is_firm = firm_deadline(previous, today), g.firm_deadline(today)
         if was_firm and is_firm:
             parts.append(f"deadline moved from {_fmt_date(previous)} to {_fmt_date(g.close_date)}")
@@ -98,8 +99,6 @@ def _meta(notice_kind: str, g: GrantState, today: date, previous: Optional[date]
             parts.append(f"now closes {_fmt_date(g.close_date)}")
         elif was_firm:
             parts.extend([f"deadline moved from {_fmt_date(previous)}", "no firm deadline now"])
-        else:
-            parts.append("still no firm deadline")
         days = g.days_left(today)
         if days is not None and 0 <= days <= COUNTDOWN_DAYS:
             parts.append(f"{_plural(days, 'day')} left")

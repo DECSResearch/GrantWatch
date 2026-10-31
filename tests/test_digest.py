@@ -215,12 +215,8 @@ class TestMovedDeadlines:
         assert "days left" not in email.text
         _no_year_2076(email)
 
-    def test_from_one_placeholder_to_another_says_neither_date(self):
-        email = _moved(PLACEHOLDER, date(2077, 1, 15))
-        assert "Deadlines that moved (1)" in email.text
-        assert "NSF; still no firm deadline" in email.text and "still no firm deadline" in email.html
-        assert "2076" not in email.text and "2077" not in email.text
-        assert "2076" not in email.html and "2077" not in email.html
+    def test_from_one_placeholder_to_another_there_is_nothing_to_say(self):
+        assert _moved(PLACEHOLDER, date(2077, 1, 15)) is None
 
     def test_the_day_count_is_left_out_past_a_year(self):
         email = _moved(date(2026, 12, 29), TODAY + timedelta(days=COUNTDOWN + 1))
@@ -233,6 +229,9 @@ class TestMovedDeadlines:
     def test_a_date_is_named_only_when_it_is_firm(self, new, old):
         assume(new != old)
         email = _moved(TODAY + timedelta(days=old), TODAY + timedelta(days=new))
+        if min(old, new) > FIVE_YEARS:
+            assert email is None  # two placeholders: no news
+            return
         assert "Deadlines that moved (1)" in email.text
         for offset in (old, new):
             stamp = _stamp(TODAY + timedelta(days=offset))

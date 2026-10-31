@@ -31,7 +31,8 @@ The rules:
   overview, unless it is tracked. One marked Relevant counts as meeting the
   threshold, whatever its score; a tie is no verdict.
 * A tracked grant gets one reminder each time its deadline passes one of the
-  reminder marks. A new deadline resets the reminders and is announced once.
+  reminder marks. A new deadline resets the reminders and is announced once,
+  unless the old and the new date are both placeholders (see grants.display).
 * A tracked grant that is archived early or drops out of the extract is
   announced once as withdrawn.
 * The overview of everything relevant by deadline goes out on the overview
@@ -241,7 +242,9 @@ def plan_email(
         if not g.watched or g.close_date is None:
             continue
         previous = last_known.get(g.opp_id)
-        if previous is not None and previous != g.close_date:
+        # A move from one placeholder date to another is no news. Nothing is recorded for it and
+        # none is needed: the next run skips it again, and the next real date is announced.
+        if previous is not None and previous != g.close_date and (firm_deadline(previous, today) or g.firm_deadline(today)):
             plan.changes.append(Notice(CHANGED, g, previous_date=previous))
         days = g.days_left(today)
         crossed = [m for m in marks if days is not None and days <= m]

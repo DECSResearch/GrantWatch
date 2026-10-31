@@ -209,7 +209,9 @@ The exact adopted wording is in A3's prompt text below (resolutions).
 - **Data hygiene (#37).**
   - Unescape HTML entities in the title, agency and description at ingest.
   - A close date more than 5 years out shows as "no firm deadline", and the
-    day count is left out past 365 days.
+    day count is left out past 365 days, in a moved-deadline notice too. A
+    tracked grant that moves from one placeholder date to another gets no
+    notice.
   - Hide ceilings of 999,999,999 or more.
   - Duplicates, handled by a function in `grants/display.py` (new):
     - **Same program from several services:** grants with the same close

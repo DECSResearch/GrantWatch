@@ -152,6 +152,18 @@ class TestTrackedDeadlines:
         _run(store, out, MONDAY + timedelta(days=16), settings)
         assert len(out.messages) == 3  # announced once
 
+    def test_a_move_between_placeholder_dates_is_not_announced_but_the_first_real_date_is(self):
+        told = replace(_grant("T", None, score=None, watched=True), close_date=date(2076, 12, 31))
+        store, out = MemoryStore([ME], [replace(told, close_date=date(2077, 1, 15))]), CaptureTransport()
+        store.rows.append(SentRecord(ME.id, "T", NEW, -1, told.close_date, None))  # told it closed in 2076 before the team tracked it
+        for offset in range(2):  # nothing is recorded for the move, and the second run skips it again
+            _run(store, out, MONDAY + timedelta(days=offset))
+        assert out.messages == [] and len(store.rows) == 1
+        store.grant_list = [replace(told, close_date=MONDAY + timedelta(days=90))]
+        _run(store, out, MONDAY + timedelta(days=2))
+        assert sections(out.messages[-1]) == {"Deadlines that moved": ["T"]}
+        assert "now closes Dec 13, 2026" in plain_text(out.messages[-1]) and "2076" not in plain_text(out.messages[-1])
+
     def test_withdrawn_tracked_grant_is_announced_once(self):
         store, out = MemoryStore([ME], [_grant("W", 50, score=None, watched=True, listed=False)]), CaptureTransport()
         _run(store, out, MONDAY)
