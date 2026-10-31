@@ -16,8 +16,12 @@ from grants.display import COUNTDOWN_DAYS, firm_deadline
 from notifications.planner import (
     CHANGED,
     OVERVIEW,
+    OWN,
+    PENDING,
     REMINDER,
     REMOVED,
+    TEAM,
+    UNREAD,
     URGENT_DAYS,
     GrantState,
     Notice,
@@ -301,26 +305,42 @@ def _compose(plan: Plan, settings: NotifySettings, today: date, caps: Dict[str, 
         more = f'<p style="font-size:13px;color:#5b6660;margin:6px 0 0">{html.escape(section.more)}</p>' if section.more else ""
         parts.append(heading + table + more)
 
-    footer: List[str] = []
+    footer: List[Tuple[str, str]] = []  # (text, html) of each line
+
+    def say(line: str, markup: Optional[str] = None) -> None:
+        footer.append((line, html.escape(line) if markup is None else markup))
+
     new_entries = next((s.entries for s in sections if s.key == "new"), [])
-    if plan.scoring_active:
-        footer.append(f"Scores are relative to the research profile. Grants below {plan.min_score}/5 are left out "
-                      "unless tracked or marked Relevant by the team.")
+    # A member whose profile has nothing scored yet sees the team's scores, but the marks are their own.
+    marked_by = "you" if plan.profile in (OWN, PENDING) else "the team"
+    if plan.profile == OWN:
+        say(f"Scores are for your own research profile. Grants below {plan.min_score}/5 are left out "
+            "unless tracked or you marked them Relevant.")
+    elif plan.scoring_active:
+        say(f"Scores are relative to the research profile. Grants below {plan.min_score}/5 are left out "
+            f"unless tracked or marked Relevant by {marked_by}.")
     elif new_entries:  # the keyword sentence describes the new grants, so it needs a section of them
         marked = any(sum(x.net_votes for x in (e.grant, *e.grant.also)) > 0 for e in new_entries)
-        footer.append("These grants match the research keywords in the profile"
-                      + (" or were marked Relevant by the team" if marked else "")
-                      + f", those closing within {URGENT_DAYS} days first, then most matches first. "
-                      "Set up relevance scoring to rank them by fit.")
+        say("These grants match the research keywords in the profile"
+            + (f" or were marked Relevant by {marked_by}" if marked else "")
+            + f", those closing within {URGENT_DAYS} days first, then most matches first. "
+            "Set up relevance scoring to rank them by fit.")
+    if plan.profile == PENDING:
+        say("Your own matches start after the next daily run. Until then the scores are the team's.")
+    elif plan.profile == UNREAD:
+        say("Your own matches could not be read this time, so new grants wait for the next email.")
     if plan.has_tracked:
-        footer.append("Tracked grants get a reminder at each of these marks before they close: "
-                      + ", ".join(f"{d} days" for d in sorted(settings.reminder_days, reverse=True)) + ".")
-    text.extend(footer)
+        say("Tracked grants get a reminder at each of these marks before they close: "
+            + ", ".join(f"{d} days" for d in sorted(settings.reminder_days, reverse=True)) + ".")
+    if plan.profile == TEAM and dashboard:
+        invite = "Want matches for your own research? Write your profile on the dashboard: "
+        say(f"{invite}{dashboard}.", f"{html.escape(invite)}{_link(dashboard, dashboard)}.")
+    text.extend(line for line, _ in footer)
     if unsubscribe:
         text.extend(["", f"Unsubscribe: {unsubscribe}"])
 
     header_links = f" &#183; {_link(dashboard, 'Open the dashboard')}" if dashboard else ""
-    footer_html = "".join(f'<p style="font-size:12px;color:#5b6660;margin:6px 0 0">{html.escape(line)}</p>' for line in footer)
+    footer_html = "".join(f'<p style="font-size:12px;color:#5b6660;margin:6px 0 0">{markup}</p>' for _, markup in footer)
     if unsubscribe:
         footer_html += f'<p style="font-size:12px;color:#5b6660;margin:10px 0 0">{_link(unsubscribe, "Unsubscribe")}</p>'
     # A document of its own, light only: a dark-mode client would otherwise invert the colors above.

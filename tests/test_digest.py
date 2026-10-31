@@ -9,7 +9,7 @@ from hypothesis import assume, given, strategies as st
 from grants.profile import Profile
 from notifications.digest import render_email
 from notifications.notify import settings_from_profile
-from notifications.planner import NEW, OVERVIEW, GrantState, NotifySettings, Recipient, SentRecord, plan_email
+from notifications.planner import NEW, OVERVIEW, GrantState, NotifySettings, OwnScore, Personal, Recipient, SentRecord, plan_email
 from notifications.transport import build_message
 
 TODAY = date(2026, 9, 14)  # a Monday
@@ -443,3 +443,64 @@ class TestLayout:
             assert "Tracked grants get a reminder at each of these marks" in with_tracked.html
             assert "Tracked grants get a reminder" not in without.text
             assert "Tracked grants get a reminder" not in without.html
+
+
+class TestFooter:
+    """Whose scores the footer speaks of: the team's sentences stay as they were, a member's own are separate."""
+
+    DASHBOARD = "https://gw.example.edu"
+    CONFIG = NotifySettings(overview_day="never", dashboard_url=DASHBOARD)
+    MEMBER = Recipient(id=2, email="member@und.edu", unsubscribe_token="tm", has_profile=True)
+    TEAM_SENTENCE = "Scores are relative to the research profile. Grants below 4/5 are left out unless tracked or marked Relevant by the team."
+    OWN_SENTENCE = "Scores are for your own research profile. Grants below 4/5 are left out unless tracked or you marked them Relevant."
+    INVITE = f"Want matches for your own research? Write your profile on the dashboard: {DASHBOARD}."
+
+    def render(self, recipient, grants, personal=None, config=None):
+        config = config or self.CONFIG
+        return render_email(plan_email(recipient, grants, [], TODAY, config, personal), config, TODAY)
+
+    def test_a_team_recipient_keeps_the_scoring_sentence_word_for_word_and_is_invited_to_write_a_profile(self):
+        email = self.render(ME, [_grant("FIT", 40, score=5)])
+        assert self.TEAM_SENTENCE in email.text and self.INVITE in email.text
+        assert email.text.index(self.TEAM_SENTENCE) < email.text.index(self.INVITE) < email.text.index("Unsubscribe:")
+        assert self.OWN_SENTENCE not in email.text
+
+    def test_the_invitation_is_a_link_in_the_html_and_says_the_same_thing(self):
+        email = self.render(ME, [_grant("FIT", 40, score=5)])
+        assert f'Want matches for your own research? Write your profile on the dashboard: <a href="{self.DASHBOARD}"' in email.html
+        assert f">{self.DASHBOARD}</a>.</p>" in email.html
+
+    def test_the_keyword_sentence_and_the_tracked_sentence_stay_and_the_invitation_comes_last(self):
+        email = self.render(ME, [_grant("KW", 40, score=None, matches=1, net_votes=1), _grant("TRACKED", 6, score=None, watched=True)])
+        assert "or were marked Relevant by the team, those closing within 30 days first" in email.text
+        lines = email.text.splitlines()
+        assert lines.index(self.INVITE) > max(i for i, line in enumerate(lines) if line.startswith("Tracked grants get a reminder"))
+
+    def test_without_a_dashboard_address_there_is_nowhere_to_write_a_profile_so_no_invitation(self):
+        email = self.render(ME, [_grant("FIT", 40, score=5)], config=NotifySettings(overview_day="never"))
+        assert "Want matches" not in email.text and "Want matches" not in email.html
+
+    def test_a_member_is_told_the_scores_are_for_their_own_profile_and_is_not_invited(self):
+        email = self.render(self.MEMBER, [_grant("FIT", 40, score=1)], Personal({"FIT": OwnScore(5, "fits")}))
+        assert self.OWN_SENTENCE in email.text and self.OWN_SENTENCE in email.html
+        assert "relative to the research profile" not in email.text and "Want matches" not in email.text
+
+    def test_their_sentence_follows_their_threshold(self):
+        picky = replace(self.MEMBER, min_score=5)
+        email = self.render(picky, [_grant("FIT", 40, score=1)], Personal({"FIT": OwnScore(5)}))
+        assert "Grants below 5/5 are left out unless tracked or you marked them Relevant." in email.text
+
+    def test_a_member_with_nothing_scored_yet_is_told_so_and_the_marks_in_the_sentence_are_theirs(self):
+        email = self.render(self.MEMBER, [_grant("FIT", 40, score=5)], Personal())
+        assert "unless tracked or marked Relevant by you." in email.text and "marked Relevant by the team" not in email.text
+        assert "Your own matches start after the next daily run. Until then the scores are the team's." in email.text
+        assert "Want matches" not in email.text and "Scores are for your own research profile" not in email.text
+
+    def test_the_keyword_sentence_of_a_member_with_nothing_scored_yet_names_their_own_mark(self):
+        email = self.render(self.MEMBER, [_grant("KW", 40, score=None, matches=1)], Personal(votes={"KW": 1}), NotifySettings(overview_day="never"))
+        assert "or were marked Relevant by you, those closing within" in email.text
+
+    def test_a_member_whose_data_could_not_be_read_is_told_what_is_missing(self):
+        email = self.render(self.MEMBER, [_grant("TRACKED", 6, score=5, watched=True)], None)
+        assert "Your own matches could not be read this time, so new grants wait for the next email." in email.text
+        assert "Scores are relative" not in email.text and "Scores are for your own" not in email.text and "Want matches" not in email.text
