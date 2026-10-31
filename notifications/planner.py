@@ -30,6 +30,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+from grants.display import days_until_deadline, firm_deadline
+
 NEW = "new"
 REMINDER = "reminder"
 CHANGED = "changed"
@@ -65,7 +67,11 @@ class GrantState:
     matches: int = 0  # how many profile keywords it mentions
 
     def days_left(self, today: date) -> Optional[int]:
-        return None if self.close_date is None else (self.close_date - today).days
+        """None without a firm deadline: no date, or a placeholder years away."""
+        return days_until_deadline(self.close_date, today)
+
+    def firm_deadline(self, today: date) -> bool:
+        return firm_deadline(self.close_date, today)
 
     def closed(self, today: date) -> bool:
         return self.close_date is not None and self.close_date < today
@@ -236,7 +242,7 @@ def plan_email(
     plan.overview_due = overview_due(last_overview, today, settings.overview_day)
     if plan.overview_due:
         horizons = sorted({int(h) for h in settings.horizons if int(h) > 0}) or [7, 30, 60, 90]
-        candidates = [g for g in open_grants if relevant(g) and g.close_date is not None]
+        candidates = [g for g in open_grants if relevant(g) and g.firm_deadline(today)]
         lower = -1
         for upper in horizons:
             members = [g for g in candidates if lower < (g.days_left(today) or 0) <= upper]

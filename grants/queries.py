@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from psycopg2.extras import RealDictCursor
 
+from grants.display import days_until_deadline, firm_deadline, real_ceiling
 from grants.sql_utils import db_connection, open_grant_sql
 
 _COLUMNS = """
@@ -101,11 +102,16 @@ def _number(value: Any) -> Optional[float]:
 
 
 def serialize_row(row: Dict[str, Any], today: Optional[date] = None) -> Dict[str, Any]:
-    """JSON-safe dict with a computed ``days_left``."""
+    """JSON-safe dict with a computed ``days_left``.
+
+    A placeholder close date (see grants.display) has no ``days_left`` and
+    ``firm_deadline`` false; a placeholder award ceiling is null.
+    """
     today = today or date.today()
     close = row.get("close_date")
     close_day = close.date() if isinstance(close, datetime) else close
-    days_left = (close_day - today).days if isinstance(close_day, date) else None
+    if not isinstance(close_day, date):
+        close_day = None
     status = str(row.get("opportunity_status") or "")
     out = {
         "opp_id": row.get("opp_id"),
@@ -121,10 +127,11 @@ def serialize_row(row: Dict[str, Any], today: Optional[date] = None) -> Dict[str
         "post_date": _iso(row.get("post_date")),
         "close_date": _iso(row.get("close_date")),
         "archive_date": _iso(row.get("archive_date")),
-        "days_left": days_left,
+        "days_left": days_until_deadline(close_day, today),
+        "firm_deadline": firm_deadline(close_day, today),
         "summary": row.get("summary"),
         "matched_keywords": row.get("matched_keywords"),
-        "award_ceiling": _number(row.get("award_ceiling")),
+        "award_ceiling": real_ceiling(_number(row.get("award_ceiling"))),
         "estimated_total_funding": _number(row.get("estimated_total_funding")),
         "relevance_score": row.get("relevance_score"),
         "relevance_reason": row.get("relevance_reason"),

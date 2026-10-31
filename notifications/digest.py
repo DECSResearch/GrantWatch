@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from grants.display import COUNTDOWN_DAYS
 from notifications.planner import (
     CHANGED,
     OVERVIEW,
@@ -74,9 +75,11 @@ def _score_text(score: Optional[int]) -> str:
 def _deadline_text(g: GrantState, today: date) -> str:
     if g.close_date is None:
         return "no deadline listed"
+    if not g.firm_deadline(today):
+        return "no firm deadline"
     days = g.days_left(today)
     when = f"closes {_fmt_date(g.close_date)}"
-    if days is not None and days >= 0:
+    if days is not None and 0 <= days <= COUNTDOWN_DAYS:
         when += f" ({_plural(days, 'day')} left{', estimated' if g.forecasted else ''})"
     elif g.forecasted:
         when += " (estimated)"

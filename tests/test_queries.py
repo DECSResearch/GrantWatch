@@ -60,3 +60,17 @@ class TestSerializeRow:
     def test_missing_close_date(self):
         out = serialize_row({"opp_id": "A", "close_date": None}, today=date(2026, 9, 11))
         assert out["days_left"] is None and out["forecasted"] is False
+        assert out["firm_deadline"] is False
+
+    def test_a_real_deadline_is_firm(self):
+        out = serialize_row({"opp_id": "A", "close_date": datetime(2026, 9, 21)}, today=date(2026, 9, 11))
+        assert out["firm_deadline"] is True and out["days_left"] == 10
+
+    def test_placeholder_close_date_has_no_day_count(self):
+        out = serialize_row({"opp_id": "A", "close_date": datetime(2076, 10, 5)}, today=date(2026, 9, 11))
+        assert out["days_left"] is None and out["firm_deadline"] is False
+        assert out["close_date"] == "2076-10-05T00:00:00"  # the raw date stays; only the claims are withdrawn
+
+    def test_placeholder_award_ceiling_is_null(self):
+        for ceiling, shown in [(Decimal("999999999.00"), None), (Decimal("1000000000"), None), (Decimal("999999998"), 999999998.0)]:
+            assert serialize_row({"opp_id": "A", "award_ceiling": ceiling})["award_ceiling"] == shown
