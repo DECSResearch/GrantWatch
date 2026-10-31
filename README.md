@@ -82,15 +82,45 @@ codes are known and leave that type out is scored 0 ("Not open to ...") with
 no model call, but is still loaded. Grants that list unrestricted (99) or
 "others" (25), or no codes, always go to the model.
 
+### A member's own profile
+
+A member who has written a research description of their own (40 to 2,000
+characters, one row in `member_profiles`) is scored against the team profile
+with that summary in place of the team's: the institution, applicant type,
+agency exclusions and horizons stay the team's. Their scores are in
+`member_scores`; the team's stay on `grants` and are never touched. Their
+description goes to the model in the user message as a fenced block of data,
+and their own votes are their scorer's examples. Removing the member, or just
+their profile, deletes their rows; unsubscribing keeps them.
+
+A recorded `personal` step does the scoring, between `ingest` and `notify`.
+Ingest leaves the grants it sent to the model, and the members with a profile
+take turns scoring them: up to 60 grants a turn, soonest close date first. The
+step starts no turn once `GRANTS_PERSONAL_STOP_MINUTES` (default 65) have
+passed since the process started, which leaves time for the email inside the
+cronjob's 90 minutes; what is left is scored on the next run. A model outage
+stops everyone, and any other trouble stops only the member it happened to. It
+is skipped when ingest failed, when there is no model or team profile, and when
+the team's own scoring stopped. It can never change ingest's exit code or stop
+`notify`. Its numbers (`people`, `scored`, `failed`, `pending`, `stopped`) are
+the run's stats under `personal`.
+
+Changing the text of a profile deletes that member's scores, and a change to
+the team's institution, applicant type or model, or a new `SCORER_VERSION`, makes
+them stale. Either way the next run rescores them, and a new profile is scored
+by `python main.py ingest` without waiting for the next daily run (nothing is
+rescored for the team: its scores are cached).
+
 ### Running it
 
 ```bash
 python main.py recipients add you@und.edu     # once per team member
 python main.py notify --dry-run               # print what would be sent
-python main.py                                # ingest, then email
+python main.py                                # ingest, score members' own profiles, then email
 ```
 
-`python main.py ingest` and `python main.py notify` run one step each.
+`python main.py ingest` (which also scores the members' own profiles) and
+`python main.py notify` run one step each.
 
 ## Email
 

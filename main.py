@@ -1,7 +1,7 @@
 """Entry point for GrantWatch.
 
-    python main.py                  ingest today's extract, then email the team
-    python main.py ingest           only download, filter, score and load
+    python main.py                  ingest today's extract, score each member's own profile, then email the team
+    python main.py ingest           download, filter, score and load, then score each member's own profile
     python main.py notify           only send email (reminders still go out when ingest fails)
     python main.py notify --dry-run print what would be sent; sends and records nothing
     python main.py recipients list | add EMAIL [--name N] [--min-score S] | remove EMAIL
@@ -12,16 +12,20 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import time
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
+from grants import personal
 from grants.profile import load_profile
 from grants.runs import recorded
 from grants.sql_utils import ensure_schema
 from grants_data.pipeline import onlyTheGoodStuff
+from llm_utils.relevance import LLMSettings
+from logs.status_logger import logger
 from notifications.notify import run_notify
 
 
@@ -84,6 +88,25 @@ def _ingest() -> int:
     if not profile.is_configured:
         print("Relevance scoring is off until config/research_profile.yml has a summary.")
     return 0
+
+
+def personal_step(started: float, ingested: bool) -> None:
+    """Score each member's own profile on what ingest sent to the model; ``started`` is ``time.monotonic()`` at process start.
+
+    A recorded step of its own, and never a cause of anything else failing: whatever goes wrong here
+    is logged and left, so it cannot change ingest's exit code or stop notify.
+    """
+    try:
+        with recorded("personal") as run:
+            profile = getattr(onlyTheGoodStuff, "last_profile", None) or load_profile()
+            settings = LLMSettings.from_env()
+            candidates = getattr(onlyTheGoodStuff, "last_candidates", None)
+            why = personal.why_skipped(ingested, settings, profile, onlyTheGoodStuff.last_stats, candidates)
+            totals = personal.Totals(stopped=f"skipped: {why}") if why else personal.run(candidates, profile, settings, started)
+            run.stats = {"personal": totals.as_dict()}
+            run.detail = f"Skipped: {why}." if why else personal.personal_detail(totals)
+    except Exception as exc:
+        logger("error", f"The personal step failed; the email goes out without it: {exc}")
 
 
 def notify_step(dry_run: bool = False) -> int:
@@ -169,6 +192,14 @@ def admin_user(name: str) -> int:
     return 0
 
 
+def ingest_then_personal(started: float) -> int:
+    """Ingest, then the personal step. Its exit code is ingest's."""
+    onlyTheGoodStuff.last_candidates = None  # type: ignore[attr-defined]  # an ingest that is stubbed or fails sends nothing
+    code = ingest()
+    personal_step(started, ingested=code == 0)
+    return code
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="GrantWatch: Grants.gov opportunities and deadlines for the team.")
     sub = parser.add_subparsers(dest="command")
@@ -189,9 +220,10 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[List[str]] = None) -> int:
     """Run the requested step; return a process exit code so schedulers see failures."""
+    started = time.monotonic()  # GRANTS_PERSONAL_STOP_MINUTES counts from here
     args = _parser().parse_args(argv)
     if args.command == "ingest":
-        return ingest()
+        return ingest_then_personal(started)
     if args.command == "notify":
         return notify_step(dry_run=args.dry_run)
     if args.command == "test-email":
@@ -202,9 +234,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.action != "list" and not args.email:
             _parser().error(f"recipients {args.action} needs an email address")
         return recipients(args)
-    # Both steps, and notify even when ingest failed: tracked deadlines do not
-    # depend on today's download.
-    ingested = ingest()
+    # Ingest, the personal step and notify, and notify even when ingest failed:
+    # tracked deadlines do not depend on today's download.
+    ingested = ingest_then_personal(started)
     notified = notify_step()
     return ingested or notified
 

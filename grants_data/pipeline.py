@@ -212,6 +212,7 @@ def _finish(
 
 def onlyTheGoodStuff() -> Tuple[bool, List[Dict[str, object]]]:
     onlyTheGoodStuff.last_new_ids = None  # type: ignore[attr-defined]
+    onlyTheGoodStuff.last_candidates = None  # type: ignore[attr-defined]
     stats: Dict[str, Any] = {}
     onlyTheGoodStuff.last_stats = stats  # type: ignore[attr-defined]
     profile = load_profile()
@@ -260,6 +261,7 @@ def onlyTheGoodStuff() -> Tuple[bool, List[Dict[str, object]]]:
         if profile.applicant_codes:
             stats["ineligible"] = len(not_open)
         stats["sent_to_model"] = len(candidates)
+        onlyTheGoodStuff.last_candidates = candidates  # type: ignore[attr-defined]
         why = f"Not open to {profile.applicant_type or 'your applicant type'} (Grants.gov eligibility codes)"
         scored_data = _score_relevance(candidates, profile, settings) + score_by_rule(not_open, profile, why)
     else:
@@ -302,5 +304,9 @@ def onlyTheGoodStuff() -> Tuple[bool, List[Dict[str, object]]]:
 
 onlyTheGoodStuff.last_csv_path = None  # type: ignore[attr-defined]
 onlyTheGoodStuff.last_new_ids = None  # type: ignore[attr-defined]
+# The records the team pass sent to the model (open, after the forecast and agency filters, not ruled out
+# by eligibility), for the personal step: the eligibility text its prompt sends is not stored. None when
+# no model scored this run.
+onlyTheGoodStuff.last_candidates = None  # type: ignore[attr-defined]
 onlyTheGoodStuff.last_profile = None  # type: ignore[attr-defined]
 onlyTheGoodStuff.last_stats = {}  # type: ignore[attr-defined]

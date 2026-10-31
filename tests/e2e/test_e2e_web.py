@@ -117,7 +117,8 @@ def story(world):
     s.admin_wrong = client.get("/admin/api", auth=(ADMIN_USER, "not the password"))
     s.admin = client.get("/admin/api", **ADMIN)
     s.llm = client.get("/admin/api/llm", **ADMIN)
-    s.log = client.get(f"/admin/api/runs/{s.admin.json()['runs'][0]['id']}/log", **ADMIN)
+    newest_ingest = next(run for run in s.admin.json()["runs"] if run["step"] == "ingest")  # each ingest is followed by a personal run
+    s.log = client.get(f"/admin/api/runs/{newest_ingest['id']}/log", **ADMIN)
     return s
 
 
@@ -278,7 +279,7 @@ class TestAdminApi:
         assert story.admin.status_code == 200
         body = story.admin.json()
         assert body["viewer"] == ADMIN_USER and body["warnings"] == []
-        newest, first = body["runs"]
+        newest, first = [run for run in body["runs"] if run["step"] == "ingest"]  # the personal step's runs sit between them
         assert (newest["step"], newest["state"], first["step"], first["state"]) == ("ingest", "ok", "ingest", "ok")
         assert (first["stats"]["sent_to_model"], first["stats"]["scored"], first["stats"]["ineligible"]) == (13, 13, 1)
         assert (newest["stats"]["extract"], newest["stats"]["scored"], newest["stats"]["cached"], newest["stats"]["inserted"]) == (16, 1, 13, 1)

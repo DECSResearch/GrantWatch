@@ -608,6 +608,35 @@ class TestPipelineStats:
             "extract": 0, "kept": 0, "reason": "Could not download or parse the Grants.gov extract.",
         }
 
+    def test_the_grants_sent_to_the_model_are_left_for_the_personal_step(self, stubbed, monkeypatch):
+        records = [{"id": n, "ELIGIBLE_APPLICANT_CODES": ["25" if n == 4 else "06"], "OPPORTUNITY_NUMBER": f"G{n}"} for n in range(1, 6)]
+        monkeypatch.setenv("GRANTS_LLM_MODEL", "model-one")
+        monkeypatch.setattr(pipeline, "process_extract_xml", lambda path: records)
+        monkeypatch.setattr(pipeline, "filter_grants_by_keywords", lambda rows, *args: rows)  # with a model the keywords only mark
+        monkeypatch.setattr(pipeline, "load_profile", lambda: Profile(summary="Grid resilience.", applicant_codes=["12"]))
+        assert pipeline.onlyTheGoodStuff()[0] is True
+        # Not G1-G3 or G5: Grants.gov's codes leave a public university out (rule scored 0, never sent). G4 lists "others".
+        assert [r["OPPORTUNITY_NUMBER"] for r in pipeline.onlyTheGoodStuff.last_candidates] == ["G4"]
+        assert pipeline.onlyTheGoodStuff.last_stats["sent_to_model"] == 1
+
+    def test_every_open_grant_is_a_candidate_when_nothing_is_ruled_out(self, stubbed, monkeypatch):
+        monkeypatch.setenv("GRANTS_LLM_MODEL", "model-one")
+        monkeypatch.setattr(pipeline, "filter_grants_by_keywords", lambda rows, *args: rows)
+        assert pipeline.onlyTheGoodStuff()[0] is True
+        assert pipeline.onlyTheGoodStuff.last_candidates == [{"id": 1}, {"id": 2}, {"id": 3}]
+
+    def test_without_a_model_there_are_no_candidates(self, stubbed):
+        assert pipeline.onlyTheGoodStuff()[0] is True
+        assert pipeline.onlyTheGoodStuff.last_candidates is None
+
+    def test_candidates_are_reset_on_every_call(self, stubbed, monkeypatch):
+        monkeypatch.setenv("GRANTS_LLM_MODEL", "model-one")
+        pipeline.onlyTheGoodStuff()
+        assert pipeline.onlyTheGoodStuff.last_candidates
+        monkeypatch.setattr(pipeline, "process_extract_xml", lambda path: [])
+        assert pipeline.onlyTheGoodStuff() == (False, [])
+        assert pipeline.onlyTheGoodStuff.last_candidates is None
+
     def test_a_failed_database_load_says_so(self, stubbed, monkeypatch):
         def refuse(records):
             raise RuntimeError("connection refused")
@@ -788,7 +817,7 @@ class TestSteps:
         assert main.main(["notify", "--dry-run"]) == 0
         assert order == ["notify"]
 
-    def test_the_default_command_logs_both_steps(self, log, monkeypatch):
+    def test_the_default_command_logs_all_three_steps_in_order(self, log, monkeypatch):
         monkeypatch.setattr(main, "_ingest", lambda: 0)
 
         def failing_notify(dry_run=False):
@@ -797,4 +826,5 @@ class TestSteps:
 
         monkeypatch.setattr(main, "run_notify", failing_notify)
         assert main.main([]) == 1
-        assert [(step, ok) for step, ok, *_ in log] == [("ingest", True), ("notify", False)]
+        # The personal step goes between them. Ingest here sent nothing to the model, so it has nothing to do.
+        assert [(step, ok) for step, ok, *_ in log] == [("ingest", True), ("personal", True), ("notify", False)]

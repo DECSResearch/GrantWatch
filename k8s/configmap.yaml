@@ -14,5 +14,8 @@ data:
   GRANTS_LLM_WORKERS: "2"
   # High enough that the first run scores every open keyword match (~15 min).
   GRANTS_RELEVANCE_MAX_PER_RUN: "1500"
+  # Members' own profiles are scored after the team's, and no turn starts after this many
+  # minutes from the start of the run. The cronjob's deadline is 90, which leaves time for the email.
+  GRANTS_PERSONAL_STOP_MINUTES: "65"
   GRANTS_EMAIL_MAX_NEW: "25"
   POSTGRES_CONNECT_TIMEOUT: "10"
