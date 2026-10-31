@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 
+from grants import profile as profile_module
 from mcp_server import server as mcp_server
 
 
@@ -20,6 +21,8 @@ def test_tools_are_registered():
 
 
 def test_research_profile_survives_missing_database(monkeypatch):
+    # The committed template, not a team's research_profile.local.yml, which load_profile() prefers.
+    monkeypatch.setenv("GRANTS_PROFILE_FILE", str(profile_module._DEFAULT_PATH))
     monkeypatch.setenv("POSTGRES_URL", "postgresql://nobody:nobody@127.0.0.1:1/nodb")
     monkeypatch.setenv("POSTGRES_CONNECT_TIMEOUT", "1")
     out = mcp_server.research_profile()
