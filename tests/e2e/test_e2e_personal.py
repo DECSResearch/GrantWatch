@@ -1,7 +1,10 @@
 """Flow 3: `ingest` also scores each member's own profile, between the team's load and the email.
 
-Real Postgres and the scripted model server. The fixtures run each step once, in order, and keep what
-it did, so a test reads a result and never depends on test order.
+Real Postgres and the scripted model server. One story, told in the order it is written: a first run,
+a run with nothing changed, an edit, a time stop, then changes made directly (unsubscribing, deleting a
+profile, a write for a profile that changed) and last a stopped team pass. The fixtures run each step
+once and keep what it did, so the tests that read a fixture do not depend on their own order; the
+classes after `limited` change the database as they go and must run in the order written.
 """
 from __future__ import annotations
 
