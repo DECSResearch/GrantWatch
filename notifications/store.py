@@ -7,9 +7,12 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from psycopg2.extras import RealDictCursor, execute_values
 
+from grants.members import ProfileError
+from grants.personal import member_from_stored
+from grants.profile import Profile, load_profile
 from grants.sql_utils import db_connection, ensure_schema, listed_sql, open_grant_sql, team_voter_sql
-from llm_utils.relevance import RULE_MODEL
-from notifications.planner import GrantState, Recipient, SentRecord
+from llm_utils.relevance import RULE_MODEL, LLMSettings
+from notifications.planner import GrantState, OwnScore, Personal, Recipient, SentRecord
 
 _RECIPIENT_COLUMNS = "id, email, name, min_score, unsubscribe_token, active"
 
@@ -28,6 +31,7 @@ def _recipient(row: Dict[str, Any]) -> Recipient:
         name=row.get("name") or "",
         min_score=row.get("min_score"),
         unsubscribe_token=row.get("unsubscribe_token") or "",
+        has_profile=bool(row.get("has_profile")),
     )
 
 
@@ -124,7 +128,15 @@ def claim_login_email(email: str, cooldown_seconds: int = 60) -> Optional[Recipi
 
 
 class PostgresStore:
-    """What the notify step needs from the database (tests use an in-memory twin)."""
+    """What the notify step needs from the database (tests use an in-memory twin).
+
+    ``team`` and ``model`` are what a member's score key is made from (see ``personal``). Left out,
+    they are read when first needed: the team profile as ``load_profile`` finds it, the model from
+    the environment, which is where the scoring pass gets them.
+    """
+
+    def __init__(self, team: Optional[Profile] = None, model: Optional[str] = None):
+        self._team, self._model = team, model
 
     def ensure_schema(self) -> None:
         ensure_schema()
@@ -143,7 +155,51 @@ class PostgresStore:
             return cur.rowcount
 
     def recipients(self) -> List[Recipient]:
-        return [_recipient(row) for row in list_recipients(active_only=True)]
+        query = f"""
+            SELECT {_RECIPIENT_COLUMNS},
+                   EXISTS (SELECT 1 FROM member_profiles p WHERE p.email = r.email) AS has_profile
+            FROM recipients r WHERE r.active ORDER BY r.email;
+        """
+        with db_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query)
+            return [_recipient(dict(row)) for row in cur.fetchall()]
+
+    def personal(self, emails: Sequence[str]) -> Dict[str, Personal]:
+        """The own scores and votes of these members, read together; an address with no profile is left out.
+
+        A score counts only when its ``score_key`` is the key of the profile the member has now,
+        made from their stored text as the scoring pass makes it (``Member.key``). Any other row was
+        made for text or a model they no longer have, so the grant is unscored for them until the
+        next personal run replaces it. A stored text that cannot be cleaned was never scored (the
+        scoring pass skips it), so such a member has votes and no scores.
+        """
+        if not emails:
+            return {}
+        team = load_profile() if self._team is None else self._team
+        model = LLMSettings.from_env().model if self._model is None else self._model
+        wanted = list(emails)
+        with db_connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT email, summary FROM member_profiles WHERE email = ANY(%s);", (wanted,))
+            stored = dict(cur.fetchall())
+            cur.execute("SELECT email, opp_id, score, reason, score_key FROM member_scores WHERE email = ANY(%s);", (wanted,))
+            scored = cur.fetchall()
+            cur.execute("SELECT email, opp_id, verdict FROM grant_feedback WHERE email = ANY(%s);", (wanted,))
+            voted = cur.fetchall()
+        keys: Dict[str, Optional[str]] = {}
+        for email, text in stored.items():
+            try:
+                keys[email] = member_from_stored(email, text).key(team, model)
+            except ProfileError:
+                keys[email] = None
+        scores: Dict[str, Dict[str, OwnScore]] = {email: {} for email in stored}
+        for email, opp_id, score, reason, key in scored:
+            if email in keys and key == keys[email]:
+                scores[email][opp_id] = OwnScore(int(score), reason or "")
+        votes: Dict[str, Dict[str, int]] = {email: {} for email in stored}
+        for email, opp_id, verdict in voted:
+            if email in votes:
+                votes[email][opp_id] = 1 if verdict > 0 else -1
+        return {email: Personal(scores[email], votes[email]) for email in stored}
 
     def grants(self) -> List[GrantState]:
         # Tracked grants are loaded even when closed off early, so the planner

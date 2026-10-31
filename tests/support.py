@@ -3,18 +3,27 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from dataclasses import replace
 from email.message import EmailMessage
-from typing import Dict, Iterable, List, Sequence
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence
 
-from notifications.planner import CHANGED, GrantState, Recipient, SentRecord
+from notifications.planner import CHANGED, GrantState, Personal, Recipient, SentRecord
 
 
 class MemoryStore:
-    """Behaves like PostgresStore, including the unique index on notifications."""
+    """Behaves like PostgresStore, including the unique index on notifications.
 
-    def __init__(self, recipients: Iterable[Recipient] = (), grants: Iterable[GrantState] = ()):
+    ``personal`` is each member's own scores and votes by address (what ``PostgresStore.personal``
+    reads, scores already narrowed to the profile they have now). A recipient listed there has a
+    profile of their own. ``personal_fails`` makes the read raise, as a database error would.
+    """
+
+    def __init__(self, recipients: Iterable[Recipient] = (), grants: Iterable[GrantState] = (), personal: Optional[Mapping[str, Personal]] = None):
         self.people: List[Recipient] = list(recipients)
         self.grant_list: List[GrantState] = list(grants)
+        self.personal_data: Dict[str, Personal] = dict(personal or {})
+        self.personal_fails = False
+        self.personal_reads: List[List[str]] = []  # the addresses asked for, one entry per read
         self.rows: List[SentRecord] = []
         self.locked = False
         self.synced: List[str] = []
@@ -27,7 +36,13 @@ class MemoryStore:
         return 0
 
     def recipients(self) -> List[Recipient]:
-        return list(self.people)
+        return [replace(p, has_profile=True) if p.email in self.personal_data else p for p in self.people]
+
+    def personal(self, emails: Sequence[str]) -> Dict[str, Personal]:
+        self.personal_reads.append(list(emails))
+        if self.personal_fails:
+            raise RuntimeError("member_scores cannot be read")
+        return {email: self.personal_data.get(email, Personal()) for email in emails}
 
     def grants(self) -> List[GrantState]:
         return list(self.grant_list)

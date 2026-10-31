@@ -44,7 +44,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from datetime import date
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from grants.display import Posting, days_until_deadline, firm_deadline, group_postings
 from grants.feedback import net_verdict
@@ -68,6 +68,7 @@ class Recipient:
     name: str = ""
     min_score: Optional[int] = None
     unsubscribe_token: str = ""
+    has_profile: bool = False  # a research profile of their own (a member_profiles row), not the team's
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,27 @@ class GrantState:
     def withdrawn(self, today: date) -> bool:
         """Still before its deadline, but no longer taking applications."""
         return not self.closed(today) and (self.archived(today) or not self.listed)
+
+
+@dataclass(frozen=True)
+class OwnScore:
+    """A grant's score for a member's own profile, with the reason the model gave."""
+
+    score: int
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class Personal:
+    """What a member's own profile changes in their email: the scores made for it and their own votes.
+
+    ``scores`` holds a grant only when it was scored for the profile the member has now (the store
+    sees to that), by opportunity number. ``votes`` is the member's own verdict on a grant: 1 for
+    Relevant, -1 for Not for us.
+    """
+
+    scores: Mapping[str, OwnScore] = field(default_factory=dict)
+    votes: Mapping[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
