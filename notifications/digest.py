@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from grants.display import COUNTDOWN_DAYS
+from grants.display import COUNTDOWN_DAYS, firm_deadline
 from notifications.planner import (
     CHANGED,
     OVERVIEW,
@@ -89,13 +89,23 @@ def _deadline_text(g: GrantState, today: date) -> str:
 def _meta(notice_kind: str, g: GrantState, today: date, previous: Optional[date] = None) -> str:
     parts = [_clip(g.agency, _MAX_AGENCY) or "Unknown agency"]
     if notice_kind == CHANGED:
-        parts.append(f"deadline moved from {_fmt_date(previous)} to {_fmt_date(g.close_date)}")
+        # A placeholder date is not a fact on either side of the move.
+        was_firm, is_firm = firm_deadline(previous, today), g.firm_deadline(today)
+        if was_firm and is_firm:
+            parts.append(f"deadline moved from {_fmt_date(previous)} to {_fmt_date(g.close_date)}")
+        elif is_firm:
+            parts.append(f"now closes {_fmt_date(g.close_date)}")
+        elif was_firm:
+            parts.extend([f"deadline moved from {_fmt_date(previous)}", "no firm deadline now"])
+        else:
+            parts.append("still no firm deadline")
         days = g.days_left(today)
         if days is not None:
             parts.append(f"{_plural(days, 'day')} left")
     elif notice_kind == REMOVED:
         if g.archived(today):
-            parts.append(f"archived on {_fmt_date(g.archive_date)}, before its {_fmt_date(g.close_date)} deadline")
+            before = f", before its {_fmt_date(g.close_date)} deadline" if g.firm_deadline(today) else ""
+            parts.append(f"archived on {_fmt_date(g.archive_date)}{before}")
         else:
             parts.append("no longer listed on Grants.gov")
     else:

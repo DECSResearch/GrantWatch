@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import date, timedelta
 
+from hypothesis import assume, given, strategies as st
+
 from grants.profile import Profile
 from notifications.digest import render_email
 from notifications.notify import settings_from_profile
@@ -12,6 +14,8 @@ from notifications.transport import build_message
 
 TODAY = date(2026, 9, 14)  # a Monday
 ME = Recipient(id=1, email="me@und.edu", unsubscribe_token="tok123")
+PLACEHOLDER = date(2076, 12, 31)  # what Grants.gov writes when it has no close date
+FIVE_YEARS = 5 * 365  # days; the rule is written out here, not read from the code under test
 
 
 def _grant(opp, days, score=4, **kw):
@@ -149,6 +153,99 @@ class TestMessage:
         assert message.get_body(("plain",)).get_content().startswith("GrantWatch for Monday")
         assert "Grant A" in message.get_body(("html",)).get_content()
         assert b"quoted-printable" in message.as_bytes()
+
+
+def _stamp(day):
+    return day.strftime("%b %d, %Y")
+
+
+def _moved(previous, now):
+    """A tracked grant last announced as closing ``previous``, which now closes ``now``."""
+    g = GrantState(opp_id="T", title="Grant T", agency="NSF", url="https://x/T", close_date=now, watched=True)
+    sent = [SentRecord(ME.id, "T", NEW, -1, previous, 4)]
+    return _email([g], NotifySettings(overview_day="never"), sent=sent)
+
+
+def _archived(close):
+    """A tracked grant that Grants.gov archived yesterday, before ``close``."""
+    g = GrantState(opp_id="T", title="Grant T", agency="NSF", url="https://x/T", close_date=close,
+                   archive_date=TODAY - timedelta(days=1), watched=True)
+    return _email([g], NotifySettings(overview_day="never"))
+
+
+def _no_year_2076(email):
+    assert "2076" not in email.text and "2076" not in email.html
+
+
+class TestMovedDeadlines:
+    def test_both_dates_firm_say_from_and_to(self):
+        email = _moved(date(2027, 2, 5), date(2026, 12, 29))
+        assert "Deadlines that moved (1)" in email.text
+        assert "NSF; deadline moved from Feb 05, 2027 to Dec 29, 2026; 106 days left" in email.text
+        assert "deadline moved from Feb 05, 2027 to Dec 29, 2026" in email.html
+        assert email.subject == "GrantWatch: 1 deadline change"
+
+    def test_from_a_placeholder_the_email_only_says_when_it_closes_now(self):
+        email = _moved(PLACEHOLDER, date(2026, 12, 29))
+        assert "Deadlines that moved (1)" in email.text
+        assert "NSF; now closes Dec 29, 2026; 106 days left" in email.text
+        assert "now closes Dec 29, 2026" in email.html
+        assert "deadline moved from" not in email.text and "deadline moved from" not in email.html
+        _no_year_2076(email)
+
+    def test_to_a_placeholder_the_email_says_there_is_no_firm_deadline_now(self):
+        email = _moved(date(2027, 2, 5), PLACEHOLDER)
+        assert "Deadlines that moved (1)" in email.text
+        assert "NSF; deadline moved from Feb 05, 2027; no firm deadline now" in email.text
+        assert "deadline moved from Feb 05, 2027; no firm deadline now" in email.html
+        assert "days left" not in email.text
+        _no_year_2076(email)
+
+    def test_from_one_placeholder_to_another_says_neither_date(self):
+        email = _moved(PLACEHOLDER, date(2077, 1, 15))
+        assert "Deadlines that moved (1)" in email.text
+        assert "NSF; still no firm deadline" in email.text and "still no firm deadline" in email.html
+        assert "2076" not in email.text and "2077" not in email.text
+        assert "2076" not in email.html and "2077" not in email.html
+
+    @given(new=st.integers(0, 40000), old=st.integers(-3000, 40000))
+    def test_a_date_is_named_only_when_it_is_firm(self, new, old):
+        assume(new != old)
+        email = _moved(TODAY + timedelta(days=old), TODAY + timedelta(days=new))
+        assert "Deadlines that moved (1)" in email.text
+        for offset in (old, new):
+            stamp = _stamp(TODAY + timedelta(days=offset))
+            assert (stamp in email.text) == (offset <= FIVE_YEARS), (offset, email.text)
+            assert (stamp in email.html) == (offset <= FIVE_YEARS), (offset, email.html)
+
+
+class TestArchivedGrants:
+    def test_a_firm_deadline_is_named(self):
+        email = _archived(date(2026, 12, 29))
+        assert "Tracked grants no longer open (1)" in email.text
+        assert "NSF; archived on Sep 13, 2026, before its Dec 29, 2026 deadline" in email.text
+        assert "archived on Sep 13, 2026, before its Dec 29, 2026 deadline" in email.html
+
+    def test_a_placeholder_deadline_is_left_out(self):
+        email = _archived(PLACEHOLDER)
+        assert "Tracked grants no longer open (1)" in email.text
+        assert "NSF; archived on Sep 13, 2026" in email.text and "before its" not in email.text
+        assert "archived on Sep 13, 2026" in email.html and "before its" not in email.html
+        _no_year_2076(email)
+
+    def test_no_close_date_is_left_out_too(self):
+        email = _archived(None)
+        assert "NSF; archived on Sep 13, 2026" in email.text
+        assert "before its" not in email.text and "no date" not in email.text
+
+    @given(st.integers(0, 40000))
+    def test_the_close_date_is_named_only_when_it_is_firm(self, offset):
+        email = _archived(TODAY + timedelta(days=offset))
+        assert "archived on Sep 13, 2026" in email.text
+        stamp = _stamp(TODAY + timedelta(days=offset))
+        firm = offset <= FIVE_YEARS
+        assert ("before its" in email.text) == firm and ("before its" in email.html) == firm
+        assert (stamp in email.text) == firm and (stamp in email.html) == firm
 
 
 def _new_ids(email):
