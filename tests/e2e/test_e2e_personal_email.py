@@ -12,7 +12,7 @@ import pytest
 import main
 from grants.members import personal_profile, save_member_profile
 from grants.sql_utils import ensure_schema
-from harness import MODEL
+from harness import DASHBOARD_URL, MODEL, new_section, plain_text, read_email
 from llm_utils.relevance import personal_key
 from notifications.planner import OwnScore, Personal
 from notifications.store import PostgresStore
@@ -37,7 +37,21 @@ def add_score(world, email, opp_id, score, reason, score_key):
 
 
 def vote(world, email, opp_id, verdict):
-    world.query("INSERT INTO grant_feedback (opp_id, email, verdict) VALUES (%s, %s, %s)", (opp_id, email, verdict))
+    world.query(
+        "INSERT INTO grant_feedback (opp_id, email, verdict, title, agency, summary) VALUES (%s, %s, %s, %s, 'NSF', 'Funds things.')",
+        (opp_id, email, verdict, f"{opp_id} as marked"),
+    )
+
+
+def emails_since(world, before):
+    """The mail the outbox has gained since it held ``before`` files, by the address it was sent to."""
+    return {message["To"]: message for message in (read_email(path) for path in world.emails()[before:])}
+
+
+def notified(world, email):
+    """The kinds of notice recorded for this address, oldest first."""
+    sql = "SELECT n.opp_id, n.kind FROM notifications n JOIN recipients r ON r.id = n.recipient_id WHERE r.email = %s ORDER BY n.id"
+    return [(row["opp_id"], row["kind"]) for row in world.query(sql, (email,))]
 
 
 @pytest.fixture(scope="module")
@@ -110,3 +124,182 @@ class TestTheStoreRead:
 
     def test_a_profile_changed_behind_the_apps_back_leaves_its_old_scores_unmatched(self, read):
         assert read.edited[ALICE] == Personal(scores={}, votes={"E2E-BROAD": -1})
+
+
+# What the model scripts for a member's profile (the rest keep the team's scores; see harness.FakeLLM):
+# Alice rates the grant the team calls too broad highly, two it likes not at all, and the DURIP posting of
+# the Army above the other two. Bob rates a grant the team finds middling highly.
+ALICE_SCORES = {"E2E-BROAD": 5, "E2E-NOKW": 0, "E2E-TRUSTED": 0, "DURIP-ARMY-26": 5}
+BOB_SCORES = {"E2E-NOCODES": 5}
+DURIP = "Defense University Research Instrumentation Program (DURIP)"
+FORECAST = "Next-Generation Secure Computing Initiative"
+TITLES = {
+    "E2E-TRUSTED": "Foundations of Trusted Systems", "E2E-NOKW": "Dependable Control Software for Critical Infrastructure",
+    "E2E-BULLETS": "Cybersecurity Innovation for Research Infrastructure", "E2E-ENTITY": "Cyber Research & Workforce Education",
+    "E2E-PLACEHOLDER": "Long-term Secure Infrastructure Partnership", "E2E-BROAD": "Young Faculty Awards (YFA)",
+    "E2E-NOCODES": "Rural Broadband Network Planning",
+}
+
+
+def listed(message):
+    """(score, title) of each new grant in the email, as the email lists them."""
+    return sorted(new_section(plain_text(message))[1])
+
+
+@pytest.fixture(scope="module")
+def emailed(world):
+    """Alice (her profile typed by hand), Bob and Carol (the team's); one ingest, one notify.
+
+    Alice marked a grant Not for us and Carol another, and a score is stored for Alice on the grant the eligibility
+    pre-check ruled out.
+    """
+    world.reset()
+    ensure_schema()
+    for email in (ALICE, BOB, CAROL):
+        assert main.main(["recipients", "add", email]) == 0
+    world.query("INSERT INTO member_profiles (email, summary) VALUES (%s, %s)", (ALICE, ALICE_HAND_TYPED))
+    save_member_profile(BOB, BOB_TEXT)
+    world.llm.profile_scores = {"battery": ALICE_SCORES, "wind-energy": BOB_SCORES}
+    vote(world, ALICE, "E2E-ENTITY", -1)
+    vote(world, CAROL, "E2E-BULLETS", -1)
+    code = world.ingest()
+    add_score(world, ALICE, "E2E-STATES", 5, "scored before the rule applied", key(ALICE_TEXT))
+    status = world.notify()
+    mails = emails_since(world, 0)
+    return SimpleNamespace(
+        code=code, status=status, mails=mails, texts={to: plain_text(m) for to, m in mails.items()},
+        htmls={to: m.get_body(("html",)).get_content() for to, m in mails.items()},
+        rows={email: notified(world, email) for email in (ALICE, BOB, CAROL)},
+    )
+
+
+class TestEachRecipientsEmail:
+    def test_everyone_is_emailed_and_the_run_succeeds(self, emailed):
+        assert (emailed.code, emailed.status) == (0, 0) and set(emailed.mails) == {ALICE, BOB, CAROL}
+
+    def test_a_team_recipient_gets_the_teams_list(self, emailed):
+        assert listed(emailed.mails[CAROL]) == sorted([
+            ("4/5", TITLES["E2E-TRUSTED"]), ("5/5", TITLES["E2E-NOKW"]), ("5/5", TITLES["E2E-ENTITY"]),
+            ("5/5", TITLES["E2E-PLACEHOLDER"]), ("4/5", DURIP), ("4/5", FORECAST),
+        ])
+
+    def test_alice_gets_her_own_scores_though_her_profile_was_typed_by_hand(self, emailed):
+        assert listed(emailed.mails[ALICE]) == sorted([
+            ("5/5", TITLES["E2E-BULLETS"]), ("5/5", TITLES["E2E-PLACEHOLDER"]), ("5/5", DURIP),
+            ("4/5", FORECAST), ("5/5", TITLES["E2E-BROAD"]),
+        ])
+
+    def test_bob_gets_his(self, emailed):
+        assert listed(emailed.mails[BOB]) == sorted([
+            ("4/5", TITLES["E2E-TRUSTED"]), ("5/5", TITLES["E2E-NOKW"]), ("5/5", TITLES["E2E-BULLETS"]), ("5/5", TITLES["E2E-ENTITY"]),
+            ("5/5", TITLES["E2E-PLACEHOLDER"]), ("4/5", DURIP), ("4/5", FORECAST), ("5/5", TITLES["E2E-NOCODES"]),
+        ])
+
+    def test_a_grant_the_rules_ruled_out_is_not_announced_to_a_member_with_a_score_stored_for_it(self, emailed):
+        assert "State and Local Cybersecurity Grant Program" not in emailed.texts[ALICE]
+
+    def test_a_members_mark_is_theirs_alone_and_the_teams_is_not_theirs(self, emailed):
+        entity, bullets = TITLES["E2E-ENTITY"], TITLES["E2E-BULLETS"]
+        titles = {to: [title for _, title in listed(m)] for to, m in emailed.mails.items()}
+        assert entity not in titles[ALICE] and entity in titles[BOB] and entity in titles[CAROL]  # Alice's Not for us hides it from her only
+        assert bullets not in titles[CAROL] and bullets in titles[ALICE] and bullets in titles[BOB]  # Carol's, from the team's list only
+
+    def test_a_program_is_led_by_the_posting_a_members_scores_prefer_and_every_posting_is_recorded(self, emailed):
+        def also(to):
+            (line,) = [line for line in emailed.texts[to].splitlines() if "Also posted by:" in line]
+            return line
+
+        assert "Army Research Office" not in also(ALICE) and "Air Force Office of Scientific Research" in also(ALICE)  # Alice's score leads with the Army's
+        assert "Air Force Office of Scientific Research" not in also(CAROL) and "Army Research Office" in also(CAROL)  # the team's leads with the Air Force's
+        for email in (ALICE, BOB, CAROL):
+            durip = sorted(opp for opp, kind in emailed.rows[email] if kind == "new" and opp.startswith("DURIP"))
+            assert durip == ["DURIP-AFOSR-26", "DURIP-ARMY-26", "DURIP-ONR-26"]
+
+    def test_the_footer_says_whose_scores_they_are(self, emailed):
+        own = "Scores are for your own research profile. Grants below 4/5 are left out unless tracked or you marked them Relevant."
+        team = "Scores are relative to the research profile. Grants below 4/5 are left out unless tracked or marked Relevant by the team."
+        invite = f"Want matches for your own research? Write your profile on the dashboard: {DASHBOARD_URL}."
+        for email in (ALICE, BOB):
+            assert own in emailed.texts[email] and own in emailed.htmls[email]
+            assert team not in emailed.texts[email] and "Want matches" not in emailed.texts[email]
+        assert team in emailed.texts[CAROL] and invite in emailed.texts[CAROL]
+        assert f'<a href="{DASHBOARD_URL}"' in emailed.htmls[CAROL] and own not in emailed.texts[CAROL]
+
+
+@pytest.fixture(scope="module")
+def pending(world):
+    """Carol and Dan; Dan writes a profile only after the ingest, so nothing is scored for it when the mail goes out."""
+    world.reset()
+    ensure_schema()
+    for email in (CAROL, DAN):
+        assert main.main(["recipients", "add", email]) == 0
+    code = world.ingest()
+    save_member_profile(DAN, BOB_TEXT)
+    vote(world, DAN, "E2E-NOKW", -1)
+    status = world.notify()
+    mails = emails_since(world, 0)
+    return SimpleNamespace(code=code, status=status, mails=mails, texts={to: plain_text(m) for to, m in mails.items()})
+
+
+class TestAMemberWhoseProfileIsNotScoredYet:
+    def test_they_get_the_teams_scores_with_their_own_vote_and_the_team_is_not_moved_by_it(self, pending):
+        assert (pending.code, pending.status) == (0, 0) and set(pending.mails) == {CAROL, DAN}
+        nokw = TITLES["E2E-NOKW"]
+        assert nokw in [title for _, title in listed(pending.mails[CAROL])] and nokw not in [title for _, title in listed(pending.mails[DAN])]
+        carol = [entry for entry in listed(pending.mails[CAROL]) if entry[1] != nokw]
+        assert listed(pending.mails[DAN]) == carol  # the same scores, less the grant Dan said Not for us to
+
+    def test_the_footer_says_their_own_matches_come_after_the_next_run(self, pending):
+        text = pending.texts[DAN]
+        assert "Your own matches start after the next daily run. Until then the scores are the team's." in text
+        assert "unless tracked or marked Relevant by you." in text and "Want matches" not in text
+        assert "start after the next daily run" not in pending.texts[CAROL] and "Want matches" in pending.texts[CAROL]
+
+
+@pytest.fixture(scope="module")
+def unread(world):
+    """Alice and Carol, a tracked grant due soon, and a notify run in which Alice's own data cannot be read; then one in which it can."""
+    world.reset()
+    ensure_schema()
+    for email in (ALICE, CAROL):
+        assert main.main(["recipients", "add", email]) == 0
+    save_member_profile(ALICE, ALICE_TEXT)
+    world.llm.profile_scores = {"battery": ALICE_SCORES}
+    assert world.ingest() == 0
+    world.query("INSERT INTO grant_watchlist (opp_id) VALUES ('E2E-TRUSTED')")
+
+    def failing(self, emails):
+        raise RuntimeError("could not read member_scores")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(PostgresStore, "personal", failing)
+        broken_status = world.notify()
+    broken = emails_since(world, 0)
+    broken_rows = {email: notified(world, email) for email in (ALICE, CAROL)}
+    files = len(world.emails())
+    fixed_status = world.notify()
+    fixed = emails_since(world, files)
+    return SimpleNamespace(
+        broken=broken, broken_status=broken_status, broken_rows=broken_rows, fixed=fixed, fixed_status=fixed_status,
+        rows={email: notified(world, email) for email in (ALICE, CAROL)},
+    )
+
+
+class TestWhenAMembersOwnDataCannotBeRead:
+    def test_the_run_still_succeeds_and_both_recipients_are_emailed(self, unread):
+        assert unread.broken_status == 0 and set(unread.broken) == {ALICE, CAROL}
+
+    def test_the_member_gets_only_the_reminder_and_the_team_gets_everything(self, unread):
+        alice, carol = plain_text(unread.broken[ALICE]), plain_text(unread.broken[CAROL])
+        assert "Deadline reminders (1)" in alice and "New grants that fit" not in alice and "[unscored] Foundations of Trusted Systems" in alice
+        assert "Your own matches could not be read this time" in alice
+        assert "Deadline reminders (1)" in carol and "New grants that fit" in carol
+
+    def test_nothing_is_recorded_for_the_members_new_grants_or_overview(self, unread):
+        assert {kind for _, kind in unread.broken_rows[ALICE]} == {"reminder"}
+        assert {"new", "overview"} <= {kind for _, kind in unread.broken_rows[CAROL]}
+
+    def test_the_next_run_with_the_read_working_sends_the_member_what_they_missed_and_the_team_nothing(self, unread):
+        assert unread.fixed_status == 0 and set(unread.fixed) == {ALICE}
+        assert [title for _, title in listed(unread.fixed[ALICE])] and TITLES["E2E-BROAD"] in [title for _, title in listed(unread.fixed[ALICE])]
+        assert {"new", "overview"} <= {kind for _, kind in unread.rows[ALICE]}
