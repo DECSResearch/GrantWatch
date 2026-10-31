@@ -15,6 +15,13 @@ The rules:
   threshold (at least one match) counts, ranked by how many keywords it
   mentions. The database can hold grants that matched nothing, because a
   model scores every open grant, so a model outage never announces those.
+* New grants are listed with those closing within URGENT_DAYS first, soonest
+  deadline first, then the rest by score (or keyword matches) and deadline.
+  The email's cap cuts that list from the end, so an urgent grant is never
+  held back while a less urgent one is shown.
+* A program posted by several services (see grants.display) is one row. It
+  counts as announced once any of its postings was, so every posting is
+  recorded when the row is shown, and its score is its best posting's.
 * A tracked grant gets one reminder each time its deadline passes one of the
   reminder marks. A new deadline resets the reminders and is announced once.
 * A tracked grant that is archived early or drops out of the extract is
@@ -26,17 +33,20 @@ The rules:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-from grants.display import days_until_deadline, firm_deadline
+from grants.display import Posting, days_until_deadline, firm_deadline, group_postings
 
 NEW = "new"
 REMINDER = "reminder"
 CHANGED = "changed"
 REMOVED = "removed"
 OVERVIEW = "overview"
+
+# New grants closing within this many days are listed first, whatever their score.
+URGENT_DAYS = 30
 
 _WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 
@@ -65,6 +75,8 @@ class GrantState:
     watched: bool = False
     listed: bool = True  # present in a recent extract
     matches: int = 0  # how many profile keywords it mentions
+    agency_code: str = ""
+    also: Tuple["GrantState", ...] = ()  # the same program's other postings; the planner fills this in
 
     def days_left(self, today: date) -> Optional[int]:
         """None without a firm deadline: no date, or a placeholder years away."""
@@ -72,6 +84,10 @@ class GrantState:
 
     def firm_deadline(self, today: date) -> bool:
         return firm_deadline(self.close_date, today)
+
+    def urgent(self, today: date) -> bool:
+        days = self.days_left(today)
+        return days is not None and 0 <= days <= URGENT_DAYS
 
     def closed(self, today: date) -> bool:
         return self.close_date is not None and self.close_date < today
@@ -109,9 +125,12 @@ class Notice:
     threshold: int = -1
     previous_date: Optional[date] = None  # the old deadline, for CHANGED
 
-    def record(self, recipient_id: int) -> SentRecord:
-        ref = None if self.kind == REMOVED else self.grant.close_date
-        return SentRecord(recipient_id, self.grant.opp_id, self.kind, self.threshold, ref, self.grant.score)
+    def records(self, recipient_id: int) -> List[SentRecord]:
+        """One row for the grant, and one for each other posting of the same program."""
+        return [
+            SentRecord(recipient_id, g.opp_id, self.kind, self.threshold, None if self.kind == REMOVED else g.close_date, g.score)
+            for g in (self.grant, *self.grant.also)
+        ]
 
 
 @dataclass
@@ -135,11 +154,12 @@ class Plan:
     reminders: List[Notice] = field(default_factory=list)
     changes: List[Notice] = field(default_factory=list)
     removed: List[Notice] = field(default_factory=list)
-    new: List[Notice] = field(default_factory=list)  # every unannounced grant, best first
+    new: List[Notice] = field(default_factory=list)  # every unannounced program, urgent first, then best first
     overview: List[Tuple[str, List[GrantState]]] = field(default_factory=list)
     overview_due: bool = False
     scoring_active: bool = False
     min_score: int = 4
+    has_tracked: bool = False
 
     @property
     def empty(self) -> bool:
@@ -193,7 +213,7 @@ def plan_email(
     pool = [g for g in grants if settings.include_forecasted or not g.forecasted or g.watched]
     open_grants = [g for g in pool if g.is_open(today)]
     scoring_active = any(g.score is not None for g in open_grants)
-    plan = Plan(recipient=recipient, scoring_active=scoring_active, min_score=min_score)
+    plan = Plan(recipient=recipient, scoring_active=scoring_active, min_score=min_score, has_tracked=any(g.watched for g in pool))
 
     # With nothing scored yet, only keyword matches count (see the fallback below).
     needed = max(1, settings.keyword_threshold)
@@ -221,19 +241,39 @@ def plan_email(
         if g.watched and g.withdrawn(today) and g.opp_id not in withdrawn_sent:
             plan.removed.append(Notice(REMOVED, g))
 
-    if scoring_active:
-        fresh = [
-            g for g in open_grants
-            if not g.watched and g.opp_id not in announced and g.score is not None and g.score >= min_score
-        ]
-        fresh.sort(key=lambda g: (-(g.score or 0), _date_key(g.close_date), g.title, g.opp_id))
-    else:
-        # Nothing is scored yet: announce the keyword matches, most hits first. A model
-        # that scores every open grant also loads ones that matched nothing, so the
-        # threshold is checked here (and at least one match is always needed).
-        fresh = [g for g in open_grants if not g.watched and g.opp_id not in announced and g.matches >= needed]
-        fresh.sort(key=lambda g: (-g.matches, _date_key(g.close_date), g.title, g.opp_id))
-    plan.new = [Notice(NEW, g) for g in fresh]
+    # One program per row: the postings of a joint call fold into the best scored one.
+    by_id = {g.opp_id: g for g in open_grants}
+    postings = [
+        Posting(opp_id=g.opp_id, title=g.title, agency_code=g.agency_code, close=g.close_date,
+                posted=not g.forecasted, score=g.score, watched=g.watched)
+        for g in open_grants
+    ]
+    programs = [[by_id[group.lead], *(by_id[o] for o in group.also)] for group in group_postings(postings)]
+
+    def row(members: List[GrantState]) -> GrantState:
+        return replace(members[0], also=tuple(members[1:])) if len(members) > 1 else members[0]
+
+    # A program is announced once any of its postings was, and a tracked posting means the
+    # team already has it. Its score is its best posting's.
+    fresh: List[Tuple[int, GrantState]] = []
+    for members in programs:
+        if any(g.watched or g.opp_id in announced for g in members):
+            continue
+        if scoring_active:
+            rank = max((g.score for g in members if g.score is not None), default=None)
+            qualifies = rank is not None and rank >= min_score
+        else:
+            # Nothing is scored yet: announce the keyword matches, most hits first. A model
+            # that scores every open grant also loads ones that matched nothing, so the
+            # threshold is checked here (and at least one match is always needed).
+            rank = max(g.matches for g in members)
+            qualifies = rank >= needed
+        if qualifies:
+            fresh.append((rank, row(members)))
+    # Those closing within URGENT_DAYS first, soonest first; then the rest, best first.
+    urgent = sorted((f for f in fresh if f[1].urgent(today)), key=lambda f: (_date_key(f[1].close_date), -f[0], f[1].title, f[1].opp_id))
+    later = sorted((f for f in fresh if not f[1].urgent(today)), key=lambda f: (-f[0], _date_key(f[1].close_date), f[1].title, f[1].opp_id))
+    plan.new = [Notice(NEW, g) for _, g in urgent + later]
 
     plan.reminders.sort(key=lambda n: (_date_key(n.grant.close_date), n.grant.title, n.grant.opp_id))
     plan.changes.sort(key=lambda n: (_date_key(n.grant.close_date), n.grant.title, n.grant.opp_id))
@@ -242,7 +282,7 @@ def plan_email(
     plan.overview_due = overview_due(last_overview, today, settings.overview_day)
     if plan.overview_due:
         horizons = sorted({int(h) for h in settings.horizons if int(h) > 0}) or [7, 30, 60, 90]
-        candidates = [g for g in open_grants if relevant(g) and g.firm_deadline(today)]
+        candidates = [row(m) for m in programs if any(relevant(g) for g in m) and m[0].firm_deadline(today)]
         lower = -1
         for upper in horizons:
             members = [g for g in candidates if lower < (g.days_left(today) or 0) <= upper]

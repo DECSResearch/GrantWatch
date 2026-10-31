@@ -148,7 +148,7 @@ class PostgresStore:
         # Tracked grants are loaded even when closed off early, so the planner
         # can say they were withdrawn.
         query = f"""
-            SELECT g.opp_id, g.title, g.agency, g.url, g.close_date, g.archive_date,
+            SELECT g.opp_id, g.title, g.agency, g.agency_code, g.url, g.close_date, g.archive_date,
                    g.opportunity_status, g.relevance_score, g.relevance_reason, g.summary,
                    g.matched_keywords,
                    (w.opp_id IS NOT NULL) AS watched, {listed_sql("g")} AS listed
@@ -164,6 +164,7 @@ class PostgresStore:
                 opp_id=row["opp_id"],
                 title=row["title"] or "Untitled",
                 agency=row["agency"] or "",
+                agency_code=row["agency_code"] or "",
                 url=row["url"] or "",
                 close_date=_as_date(row["close_date"]),
                 archive_date=_as_date(row["archive_date"]),

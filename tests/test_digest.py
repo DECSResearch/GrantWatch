@@ -1,12 +1,13 @@
 """Tests for rendering a plan as an email."""
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, timedelta
 
 from grants.profile import Profile
 from notifications.digest import render_email
 from notifications.notify import settings_from_profile
-from notifications.planner import GrantState, NotifySettings, Recipient, plan_email
+from notifications.planner import NEW, OVERVIEW, GrantState, NotifySettings, Recipient, SentRecord, plan_email
 from notifications.transport import build_message
 
 TODAY = date(2026, 9, 14)  # a Monday
@@ -63,12 +64,36 @@ class TestRender:
         email = _email([_grant("NEW", 10, score=5)], NotifySettings(horizons=[7, 30]))
         assert email.text.count("Grant NEW") == 1
         assert email.overview_shown is True  # delivered; recorded so it is not resent tomorrow
+        # ... and the email says so instead of leaving the overview out without a word.
+        assert "\nThis week's deadlines are all in the list above.\n" in email.text
+        assert "This week&#x27;s deadlines are all in the list above." in email.html
+        assert email.html.count("Grant NEW") == 1
+
+    def test_overview_with_something_new_to_say_has_no_such_line(self):
+        email = _email([_grant("NEW", 10, score=5), _grant("TRACKED", 40, score=None, watched=True)], NotifySettings(horizons=[7, 30, 60]))
+        assert "Closes in 31 to 60 days (1)" in email.text
+        assert "all in the list above" not in email.text
+
+    def test_overview_with_no_deadlines_is_not_recorded(self):
+        """An overview section was never rendered, so the admin page must not count it as sent."""
+        email = _email([_grant("OPEN", None, score=5)])
+        assert "Grant OPEN" in email.text and "deadlines" not in email.text
+        assert email.overview_shown is False
+        assert OVERVIEW not in [row.kind for row in email.records(ME.id, TODAY)]
+
+    def test_rendered_overview_is_recorded(self):
+        email = _email([_grant("NEW", 10, score=5)])
+        assert [row.kind for row in email.records(ME.id, TODAY)] == [NEW, OVERVIEW]
 
     def test_backlog_rolls_over(self):
         grants = [_grant(f"N{i:02d}", 100 + i, score=5) for i in range(30)]
         email = _email(grants, NotifySettings(max_new=25, overview_day="never"))
         assert email.text.count("- [5/5]") == 25
         assert "5 more grants qualify and will follow in the next emails." in email.text
+        # Subject, heading and footer count the same 25 grants.
+        assert email.subject == "GrantWatch: 25 new"
+        assert "New grants that fit (25 of 30)" in email.text
+        assert "(25 of 30)" in email.html
         assert len([n for n in email.shown if n.kind == "new"]) == 25
 
     def test_forecasted_marked_estimated(self):
@@ -76,7 +101,7 @@ class TestRender:
         assert "10 days left, estimated" in email.text
 
     def test_without_scores_keyword_matches_are_announced(self):
-        grants = [_grant("FEW", 3, score=None, matches=1), _grant("MANY", 20, score=None, matches=3)]
+        grants = [_grant("FEW", 40, score=None, matches=1), _grant("MANY", 50, score=None, matches=3)]
         email = _email(grants)
         assert "New grants that fit (2)" in email.text
         assert email.text.index("Grant MANY") < email.text.index("Grant FEW")  # most keyword hits first
@@ -124,3 +149,150 @@ class TestMessage:
         assert message.get_body(("plain",)).get_content().startswith("GrantWatch for Monday")
         assert "Grant A" in message.get_body(("html",)).get_content()
         assert b"quoted-printable" in message.as_bytes()
+
+
+def _new_ids(email):
+    return [n.grant.opp_id for n in email.shown if n.kind == NEW]
+
+
+class TestOrder:
+    def test_grants_closing_within_30_days_come_first_soonest_first_then_by_score(self):
+        grants = [
+            _grant("FAR5", 100, score=5),
+            _grant("D20", 20, score=4),
+            _grant("D7", 7, score=4),
+            _grant("D31", 31, score=5),
+            _grant("D30", 30, score=4),
+            _grant("NONE5", None, score=5),
+            _grant("FAR4", 200, score=4),
+        ]
+        email = _email(grants, NotifySettings(overview_day="never"))
+        # 30 days is urgent, 31 is not; the rest go by score, then deadline (no deadline last).
+        assert _new_ids(email) == ["D7", "D20", "D30", "D31", "FAR5", "NONE5", "FAR4"]
+        assert [m.split("Grant ")[1] for m in email.text.splitlines() if m.startswith("- [")] == _new_ids(email)
+
+    def test_a_placeholder_deadline_is_not_urgent(self):
+        far = GrantState(opp_id="P", title="Grant P", close_date=date(2076, 10, 5), score=5)
+        email = _email([far, _grant("SOON", 29, score=4)], NotifySettings(overview_day="never"))
+        assert _new_ids(email) == ["SOON", "P"]
+
+    def test_the_cap_keeps_the_urgent_grants_and_cuts_the_rest(self):
+        grants = [_grant(f"U{i}", 2 + i, score=4) for i in range(2)] + [_grant(f"L{i}", 100 + i, score=5) for i in range(5)]
+        email = _email(grants, NotifySettings(max_new=3, overview_day="never"))
+        assert _new_ids(email) == ["U0", "U1", "L0"]
+        assert "New grants that fit (3 of 7)" in email.text
+        assert "4 more grants qualify" in email.text
+
+    def test_more_urgent_grants_than_the_cap_never_show_a_later_one(self):
+        grants = [_grant(f"U{i}", 2 + i, score=1 + i % 5) for i in range(6)] + [_grant("L", 90, score=5)]
+        email = _email(grants, NotifySettings(max_new=4, overview_day="never", min_score=1))
+        assert _new_ids(email) == ["U0", "U1", "U2", "U3"]
+
+    def test_keyword_matches_use_the_same_split(self):
+        grants = [
+            _grant("MANY", 90, score=None, matches=5),
+            _grant("SOON", 10, score=None, matches=1),
+            _grant("SOONER", 3, score=None, matches=1),
+            _grant("FEW", 60, score=None, matches=2),
+        ]
+        email = _email(grants, NotifySettings(overview_day="never"))
+        assert _new_ids(email) == ["SOONER", "SOON", "MANY", "FEW"]
+
+
+def _triple(score=(4, 4, 4), close=14, announced=(), **kw):
+    """A joint call posted by three services, as Grants.gov lists DURIP."""
+    return [
+        GrantState(opp_id=f"DURIP-{i}", title="Defense University Research Instrumentation Program (DURIP)",
+                   agency=f"Service {i}", agency_code=f"DOD-{i}", url=f"https://x/durip/{i}",
+                   close_date=TODAY + timedelta(days=close), score=score[i], reason=f"fits {i}", **kw)
+        for i in range(3)
+    ]
+
+
+class TestPrograms:
+    def test_a_program_posted_by_three_services_is_one_row(self):
+        email = _email(_triple((3, 5, 4)) + [_grant("OTHER", 50, score=5)], NotifySettings(overview_day="never"))
+        assert email.subject == "GrantWatch: 2 new"
+        assert "New grants that fit (2)" in email.text
+        assert email.text.count("Defense University Research") == 1
+        assert "Also posted by: Service 0 (https://x/durip/0), Service 2 (https://x/durip/2)" in email.text
+        assert 'href="https://x/durip/0"' in email.html and "Also posted by:" in email.html
+        assert "[5/5] Defense" in email.text  # the program's score is its best posting's
+
+    def test_the_cap_counts_programs(self):
+        grants = _triple() + [_grant(f"N{i}", 40 + i, score=5) for i in range(3)]
+        email = _email(grants, NotifySettings(max_new=2, overview_day="never"))
+        assert len(_new_ids(email)) == 2 and "DURIP-0" in _new_ids(email)
+        assert "New grants that fit (2 of 4)" in email.text and "2 more grants qualify" in email.text
+
+    def test_every_posting_is_recorded_when_the_row_is_shown(self):
+        email = _email(_triple(), NotifySettings(overview_day="never"))
+        rows = email.records(ME.id, TODAY)
+        assert sorted(r.opp_id for r in rows if r.kind == NEW) == ["DURIP-0", "DURIP-1", "DURIP-2"]
+        assert {r.ref_date for r in rows} == {TODAY + timedelta(days=14)}
+
+    def test_one_posting_announced_earlier_announces_the_program(self):
+        sent = [SentRecord(ME.id, "DURIP-1", NEW, -1, TODAY, 4)]
+        assert _email(_triple(), NotifySettings(overview_day="never"), sent=sent) is None
+
+    def test_a_tracked_posting_means_the_team_has_the_program(self):
+        grants = _triple()
+        grants[2] = replace(grants[2], watched=True)
+        email = _email(grants, NotifySettings(overview_day="never"))
+        assert not [n for n in email.shown if n.kind == NEW]
+
+    def test_a_program_qualifies_on_its_best_score_and_is_ordered_by_it(self):
+        grants = _triple((1, 2, 5)) + [_grant("FOUR", 100, score=4), _grant("FIVE", 101, score=5)]
+        assert _new_ids(_email(grants, NotifySettings(overview_day="never"))) == ["DURIP-2", "FIVE", "FOUR"]
+        assert _email(_triple((1, 2, 3)), NotifySettings(overview_day="never")) is None
+
+    def test_a_program_shown_under_new_is_not_repeated_in_the_overview(self):
+        email = _email(_triple(), NotifySettings(horizons=[30]))
+        assert email.text.count("Defense University Research") == 1
+        assert "This week's deadlines are all in the list above." in email.text
+
+    def test_the_overview_lists_a_program_once(self):
+        sent = [SentRecord(ME.id, "DURIP-0", NEW, -1, TODAY, 4)]
+        email = _email(_triple(), NotifySettings(horizons=[30]), sent=sent)
+        assert "Closes within 30 days (1)" in email.text
+        assert email.text.count("Defense University Research") == 1
+        assert email.subject == "GrantWatch: the week ahead, 1 deadline in the next 30 days"
+
+
+class TestLayout:
+    def test_summary_is_a_muted_line_above_the_reason(self):
+        g = _grant("A", 40, score=4, summary="Open to public universities; up to $500k.")
+        email = _email([g], NotifySettings(overview_day="never"))
+        lines = [line.strip() for line in email.text.splitlines()]
+        assert lines.index("Open to public universities; up to $500k.") + 1 == lines.index("why A")
+        assert email.html.index("Open to public universities") < email.html.index("why A")
+        assert 'color:#5b6660">Open to public universities' in email.html
+
+    def test_without_a_summary_only_the_reason_shows(self):
+        email = _email([_grant("A", 40, score=4)], NotifySettings(overview_day="never"))
+        assert "why A" in email.text and "why A" in email.html
+
+    def test_without_a_reason_the_summary_still_shows(self):
+        g = GrantState(opp_id="K", title="Grant K", close_date=TODAY + timedelta(days=40), summary="A keyword match.", matches=2)
+        email = _email([g], NotifySettings(overview_day="never"))
+        assert "A keyword match." in email.text and "A keyword match." in email.html
+
+    def test_html_is_a_light_only_document(self):
+        html = _email([_grant("A", 9, score=5)]).html
+        assert html.startswith("<!doctype html><html")
+        assert html.endswith("</body></html>")
+        assert '<meta charset="utf-8">' in html
+        assert '<meta name="color-scheme" content="light">' in html
+        assert "color-scheme:light" in html and "<title>" in html
+        assert html.count("<body") == 1 and html.count("</html>") == 1
+
+    def test_reminder_marks_are_mentioned_only_when_the_recipient_tracks_grants(self, monkeypatch):
+        tracked = _grant("T", 6, score=None, watched=True)
+        for secret in ("", "s3cret"):
+            monkeypatch.setenv("GRANTS_SECRET_KEY", secret)
+            with_tracked = _email([_grant("A", 40, score=5), tracked])
+            without = _email([_grant("A", 40, score=5)])
+            assert "Tracked grants get a reminder at each of these marks" in with_tracked.text
+            assert "Tracked grants get a reminder at each of these marks" in with_tracked.html
+            assert "Tracked grants get a reminder" not in without.text
+            assert "Tracked grants get a reminder" not in without.html

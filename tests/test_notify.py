@@ -45,6 +45,16 @@ class TestAnnounceOnce:
         assert _run(store, out, MONDAY + timedelta(days=1)) == 0
         assert sections(out.messages[-1])["New grants that fit"] == ["A"]
 
+    def test_program_posted_by_several_services_is_announced_once(self):
+        postings = [replace(_grant(f"D{i}", 20, score=5), title=f"Grant D{i} (DURIP)", agency_code=f"DOD-{i}") for i in range(3)]
+        store, out = MemoryStore([ME], postings), CaptureTransport()
+        _run(store, out, MONDAY)
+        assert sections(out.messages[-1])["New grants that fit"] == ["D0 (DURIP)"]  # one row for the three postings
+        assert sorted(r.opp_id for r in store.rows if r.kind == "new") == ["D0", "D1", "D2"]
+        store.grant_list.append(replace(postings[0], opp_id="D3", agency_code="DOD-3"))  # a fourth service joins later
+        _run(store, out, MONDAY + timedelta(days=1))
+        assert len(out.messages) == 1
+
     def test_per_recipient_threshold(self):
         picky = Recipient(id=2, email="picky@und.edu", min_score=5)
         store, out = MemoryStore([ME, picky], [_grant("FOUR", 40, score=4), _grant("FIVE", 40, score=5)]), CaptureTransport()

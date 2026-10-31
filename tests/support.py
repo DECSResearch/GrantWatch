@@ -69,7 +69,7 @@ class CaptureTransport:
         self.messages.append(message)
 
 
-_SECTION = re.compile(r"^([A-Z][^-].*) \((\d+)\)$")
+_SECTION = re.compile(r"^([A-Z][^-].*) \((\d+)(?: of \d+)?\)$")
 
 
 def plain_text(message: EmailMessage) -> str:
