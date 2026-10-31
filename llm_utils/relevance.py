@@ -310,6 +310,11 @@ def _parse_close(value: Any) -> datetime:
     return datetime.max
 
 
+def close_order(record: Dict[str, Any]) -> Tuple[datetime, str]:
+    """Sort key for records: soonest close date first (none last), then opportunity number."""
+    return (_parse_close(record.get("CLOSE_DATE")), str(record.get("OPPORTUNITY_NUMBER")))
+
+
 def _truncate(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
@@ -547,7 +552,7 @@ def score_records(
         elif number:
             pending.append(record)
 
-    pending.sort(key=lambda record: (_parse_close(record.get("CLOSE_DATE")), str(record.get("OPPORTUNITY_NUMBER"))))
+    pending.sort(key=close_order)
     if len(pending) > settings.max_per_run:
         outcome.deferred = len(pending) - settings.max_per_run
         pending = pending[: settings.max_per_run]
