@@ -316,6 +316,18 @@ Configure these (see `.env.example`):
    npm run dev
    ```
    Visit `http://localhost:3000`. The UI will call the backend at `NEXT_PUBLIC_DOC_CHECKER_API` (defaults to `http://localhost:8000`).
+3. **Tests**
+   ```bash
+   pip install -r requirements-dev.txt
+   pytest tests/ -q
+   ```
+   `tests/e2e/` runs the real flow (ingest through a model over HTTP, the email,
+   the dashboard and admin APIs, a vote, and the failure paths) against a real
+   Postgres and a fake model server. It is skipped unless `GRANTS_TEST_POSTGRES_URL`
+   is set to a database you can create schemas in, for example
+   `GRANTS_TEST_POSTGRES_URL=postgresql://you@localhost:5432/grantwatch_e2e_tests pytest tests/e2e -q`.
+   Each test module makes its own schema and drops it afterwards. CI runs it
+   against a `postgres:16` service.
 
 ## AWS Deployment
 1. **Package the Lambda**

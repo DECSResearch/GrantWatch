@@ -1,0 +1,16 @@
+# The research profile for the end-to-end tests. Test data only.
+summary: >
+  We build security tools for cyber-physical systems: trusted embedded platforms,
+  secure authentication and resilient networks.
+institution: University of Testing
+applicant_type: public university
+applicant_codes: ["06"]
+keywords: [cyber, security, trusted]
+keyword_threshold: 1
+agencies_exclude: []
+min_score_to_notify: 4
+deadline_horizons: [7, 30, 60, 90]
+reminder_days: [30, 14, 7, 2]
+# Daily, so the overview is due whatever weekday the suite runs on.
+overview_day: daily
+include_forecasted: true
