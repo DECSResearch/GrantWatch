@@ -57,6 +57,24 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("grantwatch.web")
 
 
+def _with_vary(existing: Optional[str], token: str) -> str:
+    """A Vary header value that names ``token``, keeping whatever it already named."""
+    names = [name.strip() for name in (existing or "").split(",") if name.strip()]
+    if "*" in names or token.lower() in (name.lower() for name in names):
+        return ", ".join(names)
+    return ", ".join([*names, token])
+
+
+@app.middleware("http")
+async def private_api(request: Request, call_next):
+    """What /api answers depends on the cookie (public list or member's own view), so no cache may keep or share it."""
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Vary"] = _with_vary(response.headers.get("Vary"), "Cookie")
+    return response
+
+
 class LoginPayload(BaseModel):
     email: EmailStr
 
