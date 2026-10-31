@@ -16,6 +16,7 @@ TODAY = date(2026, 9, 14)  # a Monday
 ME = Recipient(id=1, email="me@und.edu", unsubscribe_token="tok123")
 PLACEHOLDER = date(2076, 12, 31)  # what Grants.gov writes when it has no close date
 FIVE_YEARS = 5 * 365  # days; the rule is written out here, not read from the code under test
+COUNTDOWN = 365  # days; the longest day count the email gives
 
 
 def _grant(opp, days, score=4, **kw):
@@ -220,6 +221,13 @@ class TestMovedDeadlines:
         assert "NSF; still no firm deadline" in email.text and "still no firm deadline" in email.html
         assert "2076" not in email.text and "2077" not in email.text
         assert "2076" not in email.html and "2077" not in email.html
+
+    def test_the_day_count_is_left_out_past_a_year(self):
+        email = _moved(date(2026, 12, 29), TODAY + timedelta(days=COUNTDOWN + 1))
+        assert "NSF; deadline moved from Dec 29, 2026 to " in email.text and "days left" not in email.text
+        assert "days left" not in email.html
+        email = _moved(date(2026, 12, 29), TODAY + timedelta(days=COUNTDOWN))
+        assert f"; {COUNTDOWN} days left" in email.text and f"; {COUNTDOWN} days left" in email.html
 
     @given(new=st.integers(0, 40000), old=st.integers(-3000, 40000))
     def test_a_date_is_named_only_when_it_is_firm(self, new, old):

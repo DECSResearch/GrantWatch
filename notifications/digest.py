@@ -101,7 +101,7 @@ def _meta(notice_kind: str, g: GrantState, today: date, previous: Optional[date]
         else:
             parts.append("still no firm deadline")
         days = g.days_left(today)
-        if days is not None:
+        if days is not None and 0 <= days <= COUNTDOWN_DAYS:
             parts.append(f"{_plural(days, 'day')} left")
     elif notice_kind == REMOVED:
         if g.archived(today):
