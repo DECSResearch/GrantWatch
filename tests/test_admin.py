@@ -1242,8 +1242,7 @@ class TestAdminPage:
         row = webapp.ADMIN_HTML.split("function grantsRow(data) {")[1].split("\n  }\n")[0]
         funnel, personal, small = (row.index(text) for text in ("lines.push(funnel(", "lines.push(personalLine(", 'text: "From the run of "'))
         assert funnel < personal < small
-        # the newest personal run that recorded totals, never an older run's beside a newer one's failure
-        assert 'data.runs.find((r) => r.step === "personal" && statsOf(r).personal)' in row
+        assert "personalLine(personalRun(data.runs, source))" in row  # chosen against the ingest whose funnel it sits under
 
     def test_a_personal_run_is_not_a_square_on_the_strip_or_a_warning(self):
         strip = webapp.ADMIN_HTML.split("function renderStrip(runs) {")[1].split("\n  }\n")[0]

@@ -363,6 +363,16 @@
   function signInNote(data) {
     return data && data.sign_in === false ? "Sign-in is off: visitors see only Grants.gov facts." : "";
   }
+
+  // The personal run whose totals sit under an ingest's funnel: the newest that recorded any, and not older than that ingest, so a
+  // newer personal run that failed never leaves yesterday's totals credited to today's funnel. ``runs`` are newest first.
+  function personalRun(runs, source) {
+    const since = source ? parse(source.started_at) : null;
+    return runs.find((run) => {
+      const started = parse(run.started_at);
+      return run.step === "personal" && statsOf(run).personal && (!since || (started && started >= since));
+    }) || null;
+  }
   // END rules
 
   /* ---------- verdict, strip, warnings ---------- */
@@ -508,8 +518,7 @@
       const stats = statsOf(source);
       lines.push((SOURCES[stats.source] || "Source not recorded") + (stats.source_file ? ", " + stats.source_file : ""));
       lines.push(funnel(stats, data.profile, data.health));
-      // The newest personal run that recorded totals, as the ingest above is the newest that recorded its numbers.
-      lines.push(personalLine(data.runs.find((r) => r.step === "personal" && statsOf(r).personal)));
+      lines.push(personalLine(personalRun(data.runs, source)));
       lines.push({ text: "From the run of " + when(source.started_at) + ".", className: "small" });
     } else {
       lines.push("No run has recorded its numbers yet.");

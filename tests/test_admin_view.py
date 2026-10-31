@@ -180,3 +180,52 @@ class TestSignInNote:
     @pytest.mark.parametrize("data", [None, {}, {"sign_in": None}, {"sign_in": 0}, {"sign_in": "false"}])
     def test_a_server_that_did_not_say_is_not_assumed_to_be_off(self, data):
         assert call(["signInNote", data]) == [""]
+
+
+def stamp(hour):
+    return f"2026-10-31T{hour:02d}:00:00+00:00"
+
+
+def personal_at(hour, totals=True):
+    return {"id": hour, "step": "personal", "started_at": stamp(hour), "stats": {"personal": {"people": 1, "scored": hour, "failed": 0, "pending": 0, "stopped": None}} if totals else None}
+
+
+INGEST = {"id": 1, "step": "ingest", "started_at": stamp(7), "stats": {"extract": 5}}
+
+
+def picked(runs, source=INGEST):
+    (run,) = call(["personalRun", runs, source])
+    return run and run["id"]
+
+
+class TestWhichPersonalRun:
+    def test_the_newest_that_recorded_totals(self):
+        assert picked([personal_at(9), personal_at(8)]) == 9
+
+    def test_a_newer_run_that_failed_is_skipped_for_one_that_recorded_totals_after_the_ingest(self):
+        assert picked([personal_at(10, totals=False), personal_at(8)]) == 8
+
+    def test_yesterdays_totals_are_never_put_under_todays_funnel(self):
+        # The newest personal run failed and the only one with totals began before the ingest the funnel is from.
+        assert picked([personal_at(10, totals=False), personal_at(6)]) is None
+        assert picked([personal_at(6)]) is None
+
+    def test_a_run_that_began_with_the_ingest_counts(self):
+        assert picked([personal_at(7)]) == 7
+
+    def test_other_steps_are_not_personal_runs(self):
+        assert picked([{"id": 5, "step": "notify", "started_at": stamp(9), "stats": {"personal": {"people": 1}}}]) is None
+
+    def test_with_no_ingest_to_sit_under_the_newest_with_totals_is_used(self):
+        assert picked([personal_at(10, totals=False), personal_at(6)], None) == 6
+
+    def test_a_run_with_no_readable_start_is_not_taken_for_a_later_one(self):
+        odd = {"id": 3, "step": "personal", "started_at": None, "stats": {"personal": {"people": 1}}}
+        assert picked([odd]) is None and picked([odd], None) == 3
+
+    @settings(max_examples=30, deadline=None)
+    @given(hours=st.lists(st.tuples(st.integers(0, 23), st.booleans()), max_size=6), since=st.integers(0, 23))
+    def test_what_is_picked_is_always_the_newest_run_with_totals_that_is_not_older_than_the_ingest(self, hours, since):
+        runs = [personal_at(h, totals=t) for h, t in sorted(hours, reverse=True)]
+        want = next((r["id"] for r in runs if r["stats"] and r["id"] >= since), None)
+        assert picked(runs, {**INGEST, "started_at": stamp(since)}) == want
