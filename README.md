@@ -183,8 +183,9 @@ rescoring anything:
   weekly overview, unless it is tracked; one marked Relevant counts as meeting
   the score threshold; a tie is no verdict. A program posted by several
   services is judged on all its postings' votes together. The dashboard's
-  score bar (`min_score`) lets such a program through too, like a tracked
-  grant, so every grant in the email is on the page it links to;
+  score bar (`min_score`) lets a grant or program the team marked Relevant
+  through, like a tracked grant, so new grants the email lists because of the
+  team's mark also show on the default dashboard;
 - up to 10 marked grants (5 of each, the most recent first) go to the model
   with every scoring request as examples, so grants scored from then on lean
   toward what the team wants. They are not part of the score cache key, so
