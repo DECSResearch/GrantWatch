@@ -33,30 +33,12 @@ for path in (ROOT, ROOT / "src", Path(__file__).resolve().parent):
 import main  # noqa: E402
 from grants.sql_utils import _DSN_ENV_VARS, db_connection  # noqa: E402
 from grants_data import pipeline  # noqa: E402
-from harness import ADMIN_PASSWORD, ADMIN_USER, DASHBOARD_URL, MODEL, PROFILE, SECRET_KEY, FakeLLM, render_extract  # noqa: E402
+from harness import ADMIN_PASSWORD, ADMIN_USER, CLEARED_ENV, FakeLLM, render_extract, suite_environment  # noqa: E402
 from llm_utils import relevance_cache  # noqa: E402
 from notifications import store  # noqa: E402
 from web import admin_auth, auth  # noqa: E402
 from web import app as webapp  # noqa: E402
 
-# Everything the code reads from the environment that a developer's shell or .env could set. Cleared
-# first, so what a test sees is only what this file sets.
-_CLEARED = _DSN_ENV_VARS + (
-    "PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE", "PGSSLMODE", "PGOPTIONS",
-    "POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB",
-    "POSTGRES_SSLMODE", "POSTGRES_SSL_DOMAIN", "POSTGRES_CONNECT_TIMEOUT",
-    "GRANTS_LLM_BASE_URL", "GRANTS_LLM_MODEL", "GRANTS_LLM_API_KEY", "GRANTS_LLM_BATCH_SIZE", "GRANTS_LLM_WORKERS",
-    "GRANTS_LLM_TIMEOUT", "GRANTS_LLM_MAX_CHARS", "GRANTS_LLM_MAX_TOKENS", "GRANTS_LLM_EXTRA_BODY",
-    "GRANTS_RELEVANCE_MAX_PER_RUN", "GRANTS_PERSONAL_STOP_MINUTES", "OPENAI_BASE_URL", "OPENAI_MODEL", "OPENAI_API_KEY",
-    "GRANTS_PROFILE_SUMMARY", "GRANTS_PROFILE_INSTITUTION", "GRANTS_KEYWORDS", "GRANTS_KEYWORD_THRESHOLD",
-    "GRANTS_INCLUDE_FORECAST", "GRANTS_MIN_SCORE", "GRANTS_OVERVIEW_DAY",
-    "GRANTS_DATA_SOURCE", "GRANTS_GOV_LOOKBACK_DAYS", "GRANTS_KEEP_ARTIFACTS",
-    "GRANTS_SMTP_HOST", "GRANTS_SMTP_PORT", "GRANTS_SMTP_SECURITY", "GRANTS_SMTP_USER", "GRANTS_SMTP_PASSWORD",
-    "GMAIL_TOKEN_FILE", "GMAIL_TOKEN_JSON", "GMAIL_SENDER_EMAIL", "GMAIL_NOTIFY_RECIPIENTS",
-    "GRANTS_NOTIFY_RECIPIENTS", "GRANTS_EMAIL_MAX_NEW", "GRANTS_TIMEZONE",
-    # A proxy would send the calls to the fake server somewhere else.
-    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy",
-)
 _LOCAL = {"127.0.0.1", "::1", "localhost"}
 
 
@@ -157,27 +139,15 @@ def world(postgres_url: str, fake_llm: FakeLLM, tmp_path_factory: pytest.TempPat
     try:
         with pytest.MonkeyPatch.context() as mp:
             _only_local_sockets(mp)
-            for name in _CLEARED:
+            for name in _DSN_ENV_VARS + CLEARED_ENV:
                 mp.delenv(name, raising=False)
-            for name, value in {
-                "POSTGRES_URL": with_schema(postgres_url, schema),
-                "GRANTS_PROFILE_FILE": str(PROFILE),
-                "GRANTS_EMAIL_TRANSPORT": "outbox",
-                "GRANTS_EMAIL_OUTBOX": str(tmp / "outbox"),
-                "GRANTS_EMAIL_FROM": "GrantWatch <grantwatch@example.test>",
-                "GRANTS_DASHBOARD_URL": DASHBOARD_URL,
-                "GRANTS_SECRET_KEY": SECRET_KEY,
-                "GRANTS_LLM_BASE_URL": fake_llm.base_url,
-                "GRANTS_LLM_MODEL": MODEL,
-                "GRANTS_LLM_API_KEY": "e2e-test-key",
-                "GRANTS_LLM_WORKERS": "1",  # one request at a time, so the order of requests is the order of batches
-                "GRANTS_LLM_TIMEOUT": "5",
-                "NO_PROXY": "127.0.0.1,localhost",
-                "no_proxy": "127.0.0.1,localhost",
-            }.items():
-                mp.setenv(name, value)
             mp.setattr(admin_auth, "SCRYPT_N", 2**4)  # the real cost is for the server, not the tests
-            mp.setenv("GRANTS_ADMIN_USERS", f"{ADMIN_USER}:{admin_auth.hash_password(ADMIN_PASSWORD)}")
+            environment = suite_environment(
+                postgres_url=with_schema(postgres_url, schema), outbox=tmp / "outbox", llm_url=fake_llm.base_url,
+                admin_users=f"{ADMIN_USER}:{admin_auth.hash_password(ADMIN_PASSWORD)}",
+            )
+            for name, value in environment.items():
+                mp.setenv(name, value)
 
             this = World(tmp, fake_llm, schema, mp)
 

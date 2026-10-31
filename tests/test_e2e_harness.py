@@ -5,6 +5,7 @@ tests/e2e/ and run only when GRANTS_TEST_POSTGRES_URL is set.
 """
 from __future__ import annotations
 
+import re
 import sys
 import tempfile
 from datetime import date, datetime, timedelta
@@ -18,10 +19,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "e2e"))
 
 from grants.members import personal_profile  # noqa: E402
 from grants.profile import Profile, load_profile  # noqa: E402
+from grants.sql_utils import _DSN_ENV_VARS  # noqa: E402
 from grants_data.parse_extract import process_extract_xml  # noqa: E402
-from harness import MODEL, NOT_SENT, PROFILE, SCORES, FakeLLM, closed_port, render_extract, synopsis  # noqa: E402
+from harness import CLEARED_ENV, MODEL, NOT_SENT, PROFILE, SCORES, FakeLLM, closed_port, render_extract, suite_environment, synopsis  # noqa: E402
 from llm_utils.relevance import LLMSettings, score_records  # noqa: E402
 
+ROOT = Path(__file__).resolve().parent.parent
+# Where the program reads its settings. The document checker and the MCP server are other programs, and not under test here.
+CODE = ("main.py", "grants", "grants_data", "llm_utils", "notifications", "src", "logs", "sql_utils")
+# A name the code reads, wherever it is read: through os.getenv, a helper that takes the name, or a tuple of names.
+_SETTING = re.compile(r"""["']((?:GRANTS|GMAIL|OPENAI|POSTGRES)_[A-Z0-9_]+|PG[A-Z]+|DATABASE_URL[A-Z_]*)["']""")
+_DIRECT = re.compile(r"""(?:getenv|environ\.get|environ)\(?\[?\s*["']([A-Z][A-Z0-9_]*)["']""")
+_EXAMPLE = re.compile(r"^#? ?((?:GRANTS|GMAIL|POSTGRES)_[A-Z0-9_]+)=", re.M)
 REFERENCE_DAY = date(2026, 10, 30)
 # Days from today that the code treats differently: closed or open, the week, the urgent window, the overview buckets.
 BOUNDARIES = (0, 7, 30, 60, 90)
@@ -218,3 +227,41 @@ class TestFakeLLM:
         for target in (url, f"http://127.0.0.1:{closed_port()}/v1"):
             with pytest.raises(requests.ConnectionError):
                 requests.get(target + "/models", timeout=5)
+
+
+def settings_read_by_the_code():
+    names = set()
+    for entry in CODE:
+        path = ROOT / entry
+        for source in [path] if path.is_file() else sorted(path.rglob("*.py")):
+            text = source.read_text(encoding="utf-8")
+            names.update(_SETTING.findall(text))
+            names.update(_DIRECT.findall(text))
+    return names
+
+
+def known_settings():
+    pinned = suite_environment(postgres_url="postgresql://x/y", outbox=Path("o"), llm_url="http://127.0.0.1:1/v1", admin_users="a:b")
+    return set(_DSN_ENV_VARS) | set(CLEARED_ENV) | set(pinned)
+
+
+class TestTheEnvironment:
+    """The suite starts from an environment it sets itself: a setting the code reads must be cleared or pinned, or a developer's shell leaks in."""
+
+    def test_every_setting_the_code_reads_is_cleared_or_pinned(self):
+        assert sorted(settings_read_by_the_code() - known_settings()) == []
+
+    def test_every_setting_in_the_example_env_file_is_cleared_or_pinned(self):
+        """A developer's .env is a copy of it, and main.py and the web app load it."""
+        listed = set(_EXAMPLE.findall((ROOT / ".env.example").read_text(encoding="utf-8")))
+        assert "GRANTS_PERSONAL_STOP_MINUTES" in listed
+        assert sorted(listed - known_settings()) == []
+
+    def test_the_search_finds_the_settings_it_is_there_to_find(self):
+        read = settings_read_by_the_code()
+        assert {"GRANTS_PERSONAL_STOP_MINUTES", "GRANTS_SECRET_KEY", "GRANTS_LLM_BASE_URL", "POSTGRES_URL", "PGSSLMODE", "GMAIL_TOKEN_JSON"} <= read
+
+    def test_the_settings_the_suite_pins_name_a_schema_a_folder_the_fake_server_and_an_admin(self):
+        pinned = suite_environment(postgres_url="postgresql://x/y", outbox=Path("o"), llm_url="http://127.0.0.1:1/v1", admin_users="a:b")
+        assert pinned["POSTGRES_URL"] == "postgresql://x/y" and pinned["GRANTS_LLM_BASE_URL"] == "http://127.0.0.1:1/v1"
+        assert pinned["GRANTS_EMAIL_OUTBOX"] == "o" and pinned["GRANTS_ADMIN_USERS"] == "a:b" and pinned["GRANTS_LLM_MODEL"] == MODEL

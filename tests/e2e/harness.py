@@ -53,6 +53,53 @@ ADMIN_PASSWORD = "e2e-admin-password"
 SECRET_KEY = "e2e-secret-key-0123456789abcdef"
 DASHBOARD_URL = "https://grants.example.test"
 
+# Everything the code reads from the environment that a developer's shell or .env could set, apart from
+# the database addresses (grants.sql_utils._DSN_ENV_VARS, which conftest adds). Cleared first, so what a
+# test sees is only what suite_environment sets. tests/test_e2e_harness.py checks that no setting the
+# code reads, and none in .env.example, is missing from here or from there.
+CLEARED_ENV = (
+    "PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE", "PGSSLMODE", "PGOPTIONS",
+    "POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB",
+    "POSTGRES_SSLMODE", "POSTGRES_SSL_DOMAIN", "POSTGRES_CONNECT_TIMEOUT",
+    "GRANTS_LLM_BASE_URL", "GRANTS_LLM_MODEL", "GRANTS_LLM_API_KEY", "GRANTS_LLM_BATCH_SIZE", "GRANTS_LLM_WORKERS",
+    "GRANTS_LLM_TIMEOUT", "GRANTS_LLM_MAX_CHARS", "GRANTS_LLM_MAX_TOKENS", "GRANTS_LLM_EXTRA_BODY",
+    "GRANTS_RELEVANCE_MAX_PER_RUN", "GRANTS_PERSONAL_STOP_MINUTES", "OPENAI_BASE_URL", "OPENAI_MODEL", "OPENAI_API_KEY",
+    "GRANTS_PROFILE_SUMMARY", "GRANTS_PROFILE_INSTITUTION", "GRANTS_KEYWORDS", "GRANTS_KEYWORD_THRESHOLD",
+    "GRANTS_INCLUDE_FORECAST", "GRANTS_MIN_SCORE", "GRANTS_OVERVIEW_DAY",
+    "GRANTS_DATA_SOURCE", "GRANTS_GOV_LOOKBACK_DAYS", "GRANTS_KEEP_ARTIFACTS",
+    # The Grants.gov download, which the suite replaces with the fixture extract.
+    "GRANTS_GOV_AGENCIES", "GRANTS_GOV_CFDA", "GRANTS_GOV_DATE_RANGE", "GRANTS_GOV_ELIGIBILITIES", "GRANTS_GOV_EXPORT_URL",
+    "GRANTS_GOV_EXTRACT_LOOKBACK_DAYS", "GRANTS_GOV_EXTRACT_URL_TEMPLATE", "GRANTS_GOV_FUNDING_CATEGORIES",
+    "GRANTS_GOV_FUNDING_INSTRUMENTS", "GRANTS_GOV_OPP_STATUSES", "GRANTS_GOV_QUERY", "GRANTS_GOV_RETRIES", "GRANTS_GOV_ROWS",
+    "GRANTS_GOV_SORT_BY", "GRANTS_GOV_TIMEOUT", "GRANTS_GOV_USER_AGENT",
+    "GRANTS_SMTP_HOST", "GRANTS_SMTP_PORT", "GRANTS_SMTP_SECURITY", "GRANTS_SMTP_USER", "GRANTS_SMTP_PASSWORD",
+    "GMAIL_TOKEN_FILE", "GMAIL_TOKEN_JSON", "GMAIL_SENDER_EMAIL", "GMAIL_NOTIFY_RECIPIENTS",
+    "GRANTS_NOTIFY_RECIPIENTS", "GRANTS_EMAIL_MAX_NEW", "GRANTS_TIMEZONE",
+    # A proxy would send the calls to the fake server somewhere else.
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy",
+)
+
+
+def suite_environment(*, postgres_url: str, outbox: Path, llm_url: str, admin_users: str) -> Dict[str, str]:
+    """The settings the suite runs with, set after CLEARED_ENV is cleared. ``postgres_url`` already names the module's schema."""
+    return {
+        "POSTGRES_URL": postgres_url,
+        "GRANTS_PROFILE_FILE": str(PROFILE),
+        "GRANTS_EMAIL_TRANSPORT": "outbox",
+        "GRANTS_EMAIL_OUTBOX": str(outbox),
+        "GRANTS_EMAIL_FROM": "GrantWatch <grantwatch@example.test>",
+        "GRANTS_DASHBOARD_URL": DASHBOARD_URL,
+        "GRANTS_SECRET_KEY": SECRET_KEY,
+        "GRANTS_ADMIN_USERS": admin_users,
+        "GRANTS_LLM_BASE_URL": llm_url,
+        "GRANTS_LLM_MODEL": MODEL,
+        "GRANTS_LLM_API_KEY": "e2e-test-key",
+        "GRANTS_LLM_WORKERS": "1",  # one request at a time, so the order of requests is the order of batches
+        "GRANTS_LLM_TIMEOUT": "5",
+        "NO_PROXY": "127.0.0.1,localhost",
+        "no_proxy": "127.0.0.1,localhost",
+    }
+
 # The numbers the pipeline must never send to the model: the pre-check scores them 0 itself,
 # and a closed grant is dropped before scoring.
 NOT_SENT = ("E2E-STATES", "E2E-CLOSED")
