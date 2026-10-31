@@ -79,6 +79,18 @@ class TestRender:
         assert "match the research keywords in the profile, those closing within 30 days first" in plain.text
         assert "Relevant" not in plain.text and "Relevant" not in plain.html
 
+    def test_the_keyword_footnote_names_the_teams_mark_when_it_is_on_a_posting_that_does_not_lead(self):
+        close = TODAY + timedelta(days=40)
+        lead = GrantState(opp_id="A1", title="Grant A (DURIP)", agency="Army", agency_code="DOD-A", url="https://x/A1",
+                          close_date=close, score=None, matches=0)
+        voted = replace(lead, opp_id="B1", title="Grant B (DURIP)", agency="Navy", agency_code="DOD-B", url="https://x/B1", net_votes=1)
+        email = _email([lead, voted], NotifySettings(overview_day="never"))
+        (row,) = [n.grant for n in email.shown if n.kind == NEW]
+        assert row.opp_id == "A1" and row.net_votes == 0  # the vote is on the other posting of the program
+        assert [g.opp_id for g in row.also] == ["B1"]
+        said = "or were marked Relevant by the team"
+        assert said in email.text and said in email.html
+
     def test_html_escapes_and_links(self):
         g = GrantState(opp_id="A", title="Cats & <Dogs>", url="https://x/A", close_date=TODAY + timedelta(days=9), score=5)
         email = _email([g], NotifySettings(dashboard_url="https://gw.example.edu"))
