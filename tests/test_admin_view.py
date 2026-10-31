@@ -166,3 +166,17 @@ class TestPersonalProfilesLine:
             assert f"{totals[key]:,} {key}" in text
         assert ("Stopped at the time limit." in text) == (stopped == "time limit")
         assert ("Stopped: " in text) == (stopped not in (None, "time limit"))
+
+
+class TestSignInNote:
+    NOTE = "Sign-in is off: visitors see only Grants.gov facts."
+
+    def test_without_a_key_it_is_a_plain_note(self):
+        assert call(["signInNote", {"sign_in": False}]) == [self.NOTE]
+
+    def test_with_a_key_there_is_nothing_to_say(self):
+        assert call(["signInNote", {"sign_in": True}]) == [""]
+
+    @pytest.mark.parametrize("data", [None, {}, {"sign_in": None}, {"sign_in": 0}, {"sign_in": "false"}])
+    def test_a_server_that_did_not_say_is_not_assumed_to_be_off(self, data):
+        assert call(["signInNote", data]) == [""]

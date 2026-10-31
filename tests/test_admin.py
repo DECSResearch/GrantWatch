@@ -1120,10 +1120,39 @@ class TestAdminRoutes:
             assert reply.status_code == 200 and "WWW-Authenticate" not in reply.headers
 
     def test_the_data_says_who_is_signed_in(self, client, monkeypatch):
-        assert client.get("/admin/api", auth=("me", PASSWORD)).json() == {**STATUS, "viewer": "me"}
+        assert client.get("/admin/api", auth=("me", PASSWORD)).json() == {**STATUS, "viewer": "me", "sign_in": False}
         monkeypatch.setenv("GRANTS_ADMIN_USERS", _users(**{"dr.who-2": "long-enough-password"}))
         assert client.get("/admin/api", auth=("DR.Who-2", "long-enough-password")).json()["viewer"] == "dr.who-2"
         assert "viewer" not in STATUS  # the shared status is not changed
+
+    def test_the_data_says_whether_this_server_can_sign_anyone_in_and_never_the_key(self, client, monkeypatch):
+        key = "0123456789abcdef-sign-in-key"
+        assert client.get("/admin/api", auth=("me", PASSWORD)).json()["sign_in"] is False  # the client fixture has no key
+        monkeypatch.setenv("GRANTS_SECRET_KEY", key)
+        reply = client.get("/admin/api", auth=("me", PASSWORD))
+        assert reply.json()["sign_in"] is True and key not in reply.text
+
+    def test_a_key_too_short_to_sign_with_is_no_key(self, client, monkeypatch):
+        monkeypatch.setenv("GRANTS_SECRET_KEY", "too-short")  # web.auth.secret_key wants 16 characters
+        assert client.get("/admin/api", auth=("me", PASSWORD)).json()["sign_in"] is False
+
+    @settings(**SLOW)
+    @given(st.text(string.ascii_letters + string.digits + "-_ ", max_size=40))
+    def test_it_says_what_the_dashboard_says_about_sign_in_for_any_key(self, key):
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setenv("GRANTS_ADMIN_USERS", _users(me=PASSWORD))
+            patch.setenv("GRANTS_SECRET_KEY", key)
+            patch.setattr(webapp, "admin_status", lambda: STATUS)
+            web = TestClient(webapp.app, base_url="http://localhost")
+            admin_says = web.get("/admin/api", auth=("me", PASSWORD)).json()["sign_in"]
+            dashboard_says = web.get("/api/session").json()["auth_configured"]
+        assert admin_says is dashboard_says
+
+    def test_no_sign_in_key_adds_no_warning_to_the_page(self, client, monkeypatch):
+        off = client.get("/admin/api", auth=("me", PASSWORD)).json()
+        monkeypatch.setenv("GRANTS_SECRET_KEY", "0123456789abcdef-sign-in-key")
+        on = client.get("/admin/api", auth=("me", PASSWORD)).json()
+        assert off["warnings"] == on["warnings"] == STATUS["warnings"]  # the verdict counts warnings, so it does not change either
 
     def test_each_visit_is_logged_with_the_name(self, client, caplog):
         with caplog.at_level(logging.INFO, logger="grantwatch"):
@@ -1221,6 +1250,12 @@ class TestAdminPage:
         assert 'const byDay = { ingest: {}, notify: {} };' in strip and '["ingest", "notify"].forEach' in strip
         # the step never changes the exit code of the others, so a failure of it is not one of the page's warnings (#55: no other new warnings)
         assert _warnings(runs=[_run("personal", "failed", "boom"), _run("notify"), _run()]) == []
+
+    def test_the_sign_in_note_is_a_plain_line_in_the_team_section_and_not_a_warning(self):
+        team = webapp.ADMIN_HTML.split("function renderTeam(data) {")[1].split("\n  }\n")[0]
+        assert "const signIn = signInNote(data);" in team and "if (signIn) box.append(el(\"p\", signIn));" in team
+        for part in ("function renderVerdict(data) {", "function renderWarnings(list) {"):
+            assert "sign_in" not in webapp.ADMIN_HTML.split(part)[1].split("\n  }\n")[0]  # the count of things needing attention ignores it
 
     def test_the_keyword_lines_say_so_when_keywords_do_not_filter(self):
         team = webapp.ADMIN_HTML.split("function renderTeam(data) {")[1].split("\n  }\n")[0]

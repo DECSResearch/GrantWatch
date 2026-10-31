@@ -357,6 +357,12 @@
     else if (stopped) text += " Stopped: " + stopped + ".";
     return text;
   }
+
+  // The plain note in the Team section when this server has no sign-in key; "" when it has one, or the server did not say.
+  // Not a warning: it is how the server is set up, and a public demo may want it so.
+  function signInNote(data) {
+    return data && data.sign_in === false ? "Sign-in is off: visitors see only Grants.gov facts." : "";
+  }
   // END rules
 
   /* ---------- verdict, strip, warnings ---------- */
@@ -803,6 +809,8 @@
       : num(fb.declined) + " of the " + plural(fb.emailed, "grant") + " emailed in the last " + plural(fb.days, "day")
         + " (" + Math.round(100 * (fb.declined || 0) / fb.emailed) + "%) " + (fb.declined === 1 ? "was" : "were") + " marked Not for us.";
     box.append(el("p", fb.votes ? "Feedback: " + plural(fb.votes, "vote") + ". " + marked : "Feedback: no votes yet."));
+    const signIn = signInNote(data);
+    if (signIn) box.append(el("p", signIn));
 
     fillTable($("people"), ["Person", "Status", "Profile", "Coverage", "Own threshold", "Last email"], data.recipients.map((r) => {
       const who = el("td", r.name || r.email, "email");

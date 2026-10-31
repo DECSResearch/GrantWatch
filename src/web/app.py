@@ -294,7 +294,8 @@ def admin_data(viewer: str = Depends(require_admin)) -> Dict[str, Any]:
     except Exception as exc:
         raise _db_error("loading the admin status", exc) from exc
     logger.info("Admin page opened by %s", viewer)
-    return {**status, "viewer": viewer}
+    # Only whether there is a sign-in key, never the key: without one visitors get the public list and nobody can sign in.
+    return {**status, "viewer": viewer, "sign_in": auth.secret_key() is not None}
 
 
 @app.get("/admin/api/llm")
