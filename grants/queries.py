@@ -8,8 +8,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from psycopg2.extras import RealDictCursor
 
-from grants.display import days_until_deadline, firm_deadline, group_rows, real_ceiling
+from grants.display import days_until_deadline, firm_deadline, group_rows, public_row, real_ceiling
 from grants.sql_utils import db_connection, open_grant_sql
+from llm_utils.gpt_summarizer import SUMMARY_CHARS, cut_summary
 
 _COLUMNS = """
     g.opp_id, g.title, g.stage, g.opportunity_status, g.opportunity_category,
@@ -234,3 +235,108 @@ def data_status(min_score: Optional[int] = None) -> Dict[str, Any]:
         "fit_count": fit_count,
         "data_as_of": _iso(row.get("last_seen_at")),
     }
+
+
+# --- the public list ---------------------------------------------------------------------------------
+#
+# What a visitor who is not signed in sees is built by its own query, from Grants.gov's facts alone: no
+# join with the watchlist, no relevance_* column, no model summary or matched keywords. The row that
+# comes out of it is cut down again by ``public_row``, but the first line of defence is that the
+# database is never asked for anything internal.
+
+_PUBLIC_COLUMNS = f"""
+    g.opp_id, g.title, g.stage, g.opportunity_status, g.opportunity_category, g.funding_categories,
+    g.agency, g.agency_code, g.url, g.post_date, g.close_date, g.archive_date,
+    g.award_ceiling, g.estimated_total_funding,
+    LEFT(g.description, {SUMMARY_CHARS + 1}) AS description_head
+"""
+# By the deadline, then how new the posting is: never by a score, so a visitor cannot read the team's
+# ranking from where a grant falls under ``limit`` or in a date window. ``opp_id`` makes it total.
+_PUBLIC_ORDER = "g.close_date NULLS LAST, g.post_date DESC, g.title, g.opp_id"
+
+
+def _public_where(query: GrantQuery) -> Tuple[str, List[Any]]:
+    """The open grants the visitor's filters leave. A score floor, the watchlist and closed grants are not theirs to ask for."""
+    conditions: List[str] = [open_grant_sql("g")]
+    params: List[Any] = []
+    if query.closing_within is not None:
+        conditions.append("g.close_date IS NOT NULL")
+        conditions.append("g.close_date <= %s")
+        params.append((query.today or date.today()) + timedelta(days=int(query.closing_within)))
+    if not query.include_forecasted:
+        conditions.append("g.opportunity_status <> 'Forecasted'")
+    if query.stage:
+        conditions.append("g.stage = %s")
+        params.append(query.stage)
+    if query.due_from:
+        conditions.append("g.close_date >= %s")
+        params.append(query.due_from)
+    if query.due_to:
+        conditions.append("g.close_date <= %s")
+        params.append(query.due_to)
+    text = (query.q or "").strip()
+    if text:
+        # The description, not the model's summary: that is written from the team's profile.
+        like = f"%{text}%"
+        conditions.append("(g.title ILIKE %s OR g.agency ILIKE %s OR g.opp_id ILIKE %s OR g.description ILIKE %s)")
+        params.extend([like, like, like, like])
+    return f"WHERE {' AND '.join(conditions)}", params
+
+
+def build_public_sql(query: GrantQuery) -> Tuple[str, List[Any]]:
+    where, params = _public_where(query)
+    sql = f"""
+        SELECT {_PUBLIC_COLUMNS}
+        FROM grants g
+        {where}
+        ORDER BY {_PUBLIC_ORDER}
+        LIMIT %s
+    """
+    params.append(max(1, min(int(query.limit), 1000)))
+    return sql, params
+
+
+def serialize_public_row(row: Dict[str, Any], today: Optional[date] = None, *, detail: bool = False) -> Dict[str, Any]:
+    """A visitor's JSON-safe row: ``serialize_row`` of Grants.gov's columns, the summary cut from the description, then ``public_row``."""
+    data = dict(row)
+    data["summary"] = cut_summary(data.pop("description_head", None) or "")
+    return public_row(serialize_row(data, today), detail=detail)
+
+
+def query_public_grants(query: GrantQuery) -> List[Dict[str, Any]]:
+    """The open grants a visitor may see, one row per posting, in the public order (``group_rows`` folds them)."""
+    sql, params = build_public_sql(query)
+    with db_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    today = query.today or date.today()
+    return [serialize_public_row(dict(row), today) for row in rows]
+
+
+def count_public_grants(query: GrantQuery) -> int:
+    """How many grants a visitor's filters match, whatever the limit."""
+    where, params = _public_where(query)
+    with db_connection() as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT COUNT(*) FROM grants g {where}", params)
+        return int(cur.fetchone()[0])
+
+
+def get_public_grant(opp_id: str) -> Optional[Dict[str, Any]]:
+    """One grant as a visitor sees it: the public fields and the full Grants.gov description."""
+    sql = f"SELECT {_PUBLIC_COLUMNS}, g.description FROM grants g WHERE g.opp_id = %s"
+    with db_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(sql, ((opp_id or "").strip(),))
+        row = cur.fetchone()
+    return serialize_public_row(dict(row), detail=True) if row else None
+
+
+def public_status() -> Dict[str, Any]:
+    """How many grants are open and when the list was last loaded: all a visitor is told about the data."""
+    sql = f"""
+        SELECT COUNT(*) FILTER (WHERE {open_grant_sql("g")}) AS open, MAX(g.last_seen_at) AS last_seen_at
+        FROM grants g
+    """
+    with db_connection() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(sql)
+        row = dict(cur.fetchone() or {})
+    return {"open": int(row.get("open") or 0), "data_as_of": _iso(row.get("last_seen_at"))}
