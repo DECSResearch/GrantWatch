@@ -48,10 +48,11 @@ def real_ceiling(value: Optional[float]) -> Optional[float]:
 
 
 # Postings of one program from several services share a close date and end
-# their title in the same one-word acronym, "... Program (DURIP)". Fiscal-year
-# tags and numerals are not acronyms.
+# their title in the same one-word acronym, "... Program (DURIP)". Numerals and
+# anything with a digit are not acronyms: a year, a fiscal-year tag, or an NIH
+# activity code such as R01, which two services use for two different grants.
 _ACRONYM_RE = re.compile(r"\(\s*([^\s()]+)\s*\)\s*$")
-_NOT_AN_ACRONYM_RE = re.compile(r"FY\d{2,4}|[IVX]+")
+_NOT_AN_ACRONYM_RE = re.compile(r"[IVX]+|.*\d.*")
 _TRAILING_PAREN_RE = re.compile(r"\s*\([^()]*\)\s*$")
 # A solicitation is superseded by a posting this much newer (2 years).
 SUPERSEDED_GAP_DAYS = 2 * 365
@@ -81,7 +82,10 @@ class Group:
 
 
 def trailing_acronym(title: Optional[str]) -> Optional[str]:
-    """The one-word all-caps acronym a title ends with, such as ``DURIP``, else None."""
+    """The one-word all-caps acronym a title ends with, such as ``DURIP`` or ``S-STEM``, else None.
+
+    A token with a digit (``R01``, ``FY27``) is a code or a year, not an acronym.
+    """
     match = _ACRONYM_RE.search(title or "")
     if not match:
         return None

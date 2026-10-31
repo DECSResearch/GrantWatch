@@ -135,16 +135,42 @@ class TestTitles:
         assert trailing_acronym("Instrumentation Program (DURIP)") == "DURIP"
         assert trailing_acronym("Instrumentation Program ( DURIP ) ") == "DURIP"
         assert trailing_acronym("Scholars (S-STEM)") == "S-STEM"
-        assert trailing_acronym("Award (U01)") == "U01"
+        assert trailing_acronym("Water Research (EFRI-WBC)") == "EFRI-WBC"
         for title in ["Librarian Program (2027)", "Program (FY27)", "Phase (II)", "Program (Pilot)", "Program (A)",
                       "Program (two words)", "Program (DURIP) and more", "(DURIP) Program", "Program", "", None]:
             assert trailing_acronym(title) is None, title
+
+    def test_an_activity_code_is_not_a_program_acronym(self):
+        for code in ["R01", "U01", "K01", "R21", "P30", "S-STEM2"]:
+            assert trailing_acronym(f"Research Project Grant ({code})") is None, code
 
     def test_base_title_drops_one_trailing_parenthetical(self):
         assert base_title("  Expeditions   in Computing (CISE) ") == "expeditions in computing"
         assert base_title("Expeditions in Computing") == "expeditions in computing"
         assert base_title("Foo (a) (b)") == "foo (a)"
         assert base_title("(DURIP)") == "" and base_title(None) == ""
+
+
+_WORDS = st.from_regex(r"[A-Z]{1,5}(-[A-Z]{1,5}){0,2}", fullmatch=True).filter(lambda t: len(t) > 1 and not set(t) <= set("IVX"))
+_NUMBERED = st.from_regex(r"[A-Z0-9-]{2,8}", fullmatch=True).filter(lambda t: any(c.isdigit() for c in t))
+
+
+class TestAcronymProperties:
+    @given(_WORDS)
+    def test_capitals_and_hyphens_make_an_acronym(self, token):
+        assert trailing_acronym(f"Award ({token})") == token
+
+    @given(_NUMBERED)
+    def test_a_token_with_a_digit_never_does(self, token):
+        assert trailing_acronym(f"Award ({token})") is None
+
+    @given(_WORDS, _NUMBERED)
+    def test_two_services_fold_on_an_acronym_and_never_on_a_numbered_code(self, acronym, code):
+        def pair(tag):
+            return group_rows([row("A", f"CDC Award ({tag})", "HHS-CDC", "2027-02-05"), row("B", f"FDA Award ({tag})", "HHS-FDA", "2027-02-05")])
+
+        assert [len(r["also_posted"]) for r in pair(acronym)] == [1]
+        assert [r["also_posted"] for r in pair(code)] == [[], []]
 
 
 class TestSamePrograms:
@@ -269,6 +295,9 @@ class TestGolden:
         row("N0001426SF002", MURI, "DOD-ONR", "2027-04-09", post="2026-08-02", score=3),
         row("W911NF26S1000", MURI, "DOD-AMC", "2027-04-09", post="2026-08-01", score=3),
         row("NOFOAFRLAFOSR20260002", MURI, "DOD-AFOSR", "2027-04-09", post="2026-08-03", score=2),
+        # Two services, one day, one NIH activity code: two research grants, not one program posted twice.
+        row("CDC-R01", "CDC Research Project Grant (R01)", "HHS-CDC", "2027-02-05", post="2026-09-01", score=2),
+        row("FDA-R01", "FDA Research Project Grant (R01)", "HHS-FDA", "2027-02-05", post="2026-09-01", score=2),
     ]
 
     def test_only_the_two_triples_fold(self):
@@ -285,6 +314,8 @@ class TestGolden:
             ("24-570", [], None),
             ("NEH-REU", [], None),
             ("N0001426SF002", ["NOFOAFRLAFOSR20260002", "W911NF26S1000"], None),
+            ("CDC-R01", [], None),
+            ("FDA-R01", [], None),
         ]
 
     def test_the_input_rows_are_not_changed(self):
@@ -333,7 +364,7 @@ def _postings(acronyms):
     return build()
 
 
-ANY = _postings(["", " (DURIP)", " (MURI)", " (CISE)", " (FY27)"])
+ANY = _postings(["", " (DURIP)", " (MURI)", " (CISE)", " (FY27)", " (R01)"])
 NO_ACRONYMS = _postings(["", " (Pilot)", " (a pilot)"])
 
 
@@ -371,6 +402,12 @@ class TestGroupingProperties:
             if len(members(r)) > 1:
                 assert len({trailing_acronym(by_id[i]["title"]) for i in members(r)}) == 1
                 assert trailing_acronym(r["title"])
+
+    @given(ANY)
+    def test_a_group_is_never_built_on_a_token_with_a_digit(self, rows):
+        for r in group_rows(rows):
+            if len(members(r)) > 1:
+                assert not any(c.isdigit() for c in trailing_acronym(r["title"]))
 
     @given(ANY, st.data())
     def test_the_result_does_not_depend_on_the_input_order(self, rows, data):

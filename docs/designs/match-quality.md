@@ -409,7 +409,9 @@ resolutions win over the text above.
   parenthetical, and the older one posted at least 2 years before.
 - **Same-program groups.** The rule: same close date, the same single-token
   all-caps trailing acronym, and every member from a different
-  `agency_code`.
+  `agency_code`. A token with a digit is not an acronym (an NIH activity
+  code such as R01 names a mechanism that two services use for different
+  grants); hyphens are fine, as in S-STEM.
   - Grouping runs once, in `grants/display.py`, and both the planner and
     `/api/grants` use it.
   - A group is announced if any member was. The cap counts groups, every
