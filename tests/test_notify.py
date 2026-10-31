@@ -92,7 +92,22 @@ class TestKeywordFallback:
         assert out.messages == []  # every posting is ruled out, whatever its matches
         store, out = MemoryStore([ME], program(True, False)), CaptureTransport()
         _run(store, out, MONDAY)
-        assert len(sections(out.messages[-1])["New grants that fit"]) == 1  # the posting that may apply makes it one program to announce
+        # The posting that may apply makes it one program to announce, and it is the row: the ruled-out one only follows it.
+        assert sections(out.messages[-1])["New grants that fit"] == ["D1 (DURIP)"]
+        text = plain_text(out.messages[-1])
+        assert "0/5" not in text and "why D0" not in text  # not its score or its ineligibility reason
+        assert "Also posted by: NSF (https://x/D0)" in text and text.rstrip().count("https://x/D1") == 1  # D1 is the main link, D0 a mention
+
+    def test_the_overview_row_of_a_program_is_a_posting_that_may_apply(self):
+        postings = [
+            replace(_grant(f"D{i}", 40, score=0 if rule else None, by_rule=rule, matches=3), title=f"Grant D{i} (DURIP)", agency_code=f"DOD-{i}")
+            for i, rule in enumerate((True, False))
+        ]
+        store, out = MemoryStore([ME], postings), CaptureTransport()
+        store.rows += [SentRecord(ME.id, g.opp_id, NEW, -1, g.close_date, None) for g in postings]  # told already, so only the overview lists it
+        _run(store, out, MONDAY, NotifySettings(overview_day="daily"))
+        assert sections(out.messages[-1]) == {"Closes in 31 to 60 days": ["D1 (DURIP)"]}
+        assert "0/5" not in plain_text(out.messages[-1]) and "why D0" not in plain_text(out.messages[-1])
 
     def test_the_overview_leaves_out_a_ruled_out_grant(self):
         grants = [_grant("RULED", 20, score=0, by_rule=True, matches=2), _grant("HIT", 21, score=None, matches=1)]

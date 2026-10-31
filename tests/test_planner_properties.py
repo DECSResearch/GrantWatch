@@ -339,6 +339,34 @@ def test_only_the_models_scores_decide_whether_scoring_is_active_and_a_rules_zer
 
 
 @st.composite
+def rule_programs(draw):
+    """One program posted by one to four services: model-scored, scored 0 by the eligibility rules, or not scored; some tracked."""
+    close = DAY0 + timedelta(days=draw(st.integers(1, 80)))
+    kinds = draw(st.lists(st.tuples(st.sampled_from(["model", "rule", "none"]), st.integers(0, 5), st.integers(0, 3), st.booleans()), min_size=1, max_size=4))
+    return [
+        GrantState(
+            opp_id=f"P{j}", title="Program (PRG)", agency=f"Service {j}", agency_code=f"AG-{j}", url=f"https://example.org/{j}", close_date=close,
+            score={"model": score, "rule": 0, "none": None}[kind], by_rule=kind == "rule", matches=matches, watched=watched and draw(st.booleans()),
+        )
+        for j, (kind, score, matches, watched) in enumerate(kinds)
+    ]
+
+
+@given(members=rule_programs(), min_score=st.integers(0, 5), threshold=st.integers(0, 3))
+def test_a_posting_the_rules_ruled_out_never_stands_for_a_program_that_has_another_unless_it_is_tracked(members, min_score, threshold):
+    """Whether or not the model has scored anything, in the announcement and in the overview alike."""
+    config = NotifySettings(min_score=min_score, keyword_threshold=threshold, overview_day="daily")
+    plan = plan_email(Recipient(id=1, email="a@und.edu", unsubscribe_token="t"), members, [], DAY0, config)
+    rows = [n.grant for n in plan.new] + [g for _, listed in plan.overview for g in listed]
+
+    for row in rows:
+        assert {row.opp_id, *(a.opp_id for a in row.also)} == {g.opp_id for g in members}  # the whole program, once
+        assert row.watched or not row.by_rule or all(g.by_rule for g in members)
+    if all(g.by_rule for g in members):
+        assert plan.new == []  # nothing that may apply: the program is not announced
+
+
+@st.composite
 def programs(draw):
     """Several programs, each posted by one to three services (distinct agency codes, same close date)."""
     grants, announced = [], set()

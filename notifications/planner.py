@@ -260,7 +260,10 @@ def plan_email(
     programs = [[by_id[group.lead], *(by_id[o] for o in group.also)] for group in group_postings(postings)]
 
     def row(members: List[GrantState]) -> GrantState:
-        return replace(members[0], also=tuple(members[1:])) if len(members) > 1 else members[0]
+        # A posting the eligibility codes ruled out (score 0 by rule) ranks above an unscored one
+        # but must not stand for the program: lead with one that may apply, unless it is tracked.
+        lead = next((g for g in members if g.watched or not g.by_rule), members[0])
+        return replace(lead, also=tuple(g for g in members if g is not lead)) if len(members) > 1 else lead
 
     def verdict(members: List[GrantState]) -> int:
         """What the team thinks of the program: 1 Relevant, -1 Not for us, 0 no verdict (or a tie)."""
