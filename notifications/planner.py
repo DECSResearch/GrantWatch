@@ -11,10 +11,12 @@ The rules:
   the recipient's threshold. Whether it was inserted today or a month ago
   does not matter, so a grant scored late (model down, per-run cap) is still
   announced. Tracked grants are not announced; the team already has them.
-  Until any grant has a score, every grant that meets the profile's keyword
-  threshold (at least one match) counts, ranked by how many keywords it
-  mentions. The database can hold grants that matched nothing, because a
+  Until the model has scored any grant, every grant that meets the profile's
+  keyword threshold (at least one match) counts, ranked by how many keywords
+  it mentions. The database can hold grants that matched nothing, because a
   model scores every open grant, so a model outage never announces those.
+  A rule's 0 for a grant that Grants.gov's eligibility codes rule out is not
+  a model score: it neither ends that fallback nor lets the grant in.
 * New grants are listed with those closing within URGENT_DAYS first, soonest
   deadline first, then the rest by score (or keyword matches) and deadline.
   The email's cap cuts that list from the end, so an urgent grant is never
@@ -75,6 +77,7 @@ class GrantState:
     archive_date: Optional[date] = None
     forecasted: bool = False
     score: Optional[int] = None
+    by_rule: bool = False  # the score is a rule's 0 (the eligibility pre-check), not the model's
     reason: str = ""
     summary: str = ""
     watched: bool = False
@@ -218,17 +221,17 @@ def plan_email(
     min_score = settings.min_score if recipient.min_score is None else recipient.min_score
     pool = [g for g in grants if settings.include_forecasted or not g.forecasted or g.watched]
     open_grants = [g for g in pool if g.is_open(today)]
-    scoring_active = any(g.score is not None for g in open_grants)
+    scoring_active = any(g.score is not None and not g.by_rule for g in open_grants)
     plan = Plan(recipient=recipient, scoring_active=scoring_active, min_score=min_score, has_tracked=any(g.watched for g in pool))
 
-    # With nothing scored yet, only keyword matches count (see the fallback below).
+    # With nothing scored by the model yet, only keyword matches count (see the fallback below).
     needed = max(1, settings.keyword_threshold)
 
     def relevant(g: GrantState) -> bool:
         if g.watched:
             return True
         if not scoring_active:
-            return g.matches >= needed
+            return not g.by_rule and g.matches >= needed
         return g.score is not None and g.score >= min_score
 
     marks = sorted({int(m) for m in settings.reminder_days if int(m) >= 0})
@@ -276,10 +279,11 @@ def plan_email(
             rank = max((g.score for g in members if g.score is not None), default=None)
             qualifies = rank is not None and rank >= min_score
         else:
-            # Nothing is scored yet: announce the keyword matches, most hits first. A model
-            # that scores every open grant also loads ones that matched nothing, so the
-            # threshold is checked here (and at least one match is always needed).
-            rank = max(g.matches for g in members)
+            # The model has scored nothing yet: announce the keyword matches, most hits first. A
+            # model that scores every open grant also loads ones that matched nothing, so the
+            # threshold is checked here (and at least one match is always needed). A grant the
+            # eligibility codes rule out has matches too, but is never announced.
+            rank = max((g.matches for g in members if not g.by_rule), default=0)
             qualifies = rank >= needed
         if verdict(members) > 0:  # the team said yes: as good as the threshold
             rank, qualifies = max(rank or 0, min_score if scoring_active else needed), True

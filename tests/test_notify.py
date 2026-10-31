@@ -5,8 +5,8 @@ from dataclasses import replace
 from datetime import date, timedelta
 
 from notifications.notify import run_notify
-from notifications.planner import NotifySettings, Recipient, overview_due
-from support import CaptureTransport, MemoryStore, sections
+from notifications.planner import NEW, NotifySettings, Recipient, SentRecord, overview_due
+from support import CaptureTransport, MemoryStore, plain_text, sections
 from test_digest import _grant
 
 MONDAY = date(2026, 9, 14)
@@ -61,6 +61,45 @@ class TestAnnounceOnce:
         _run(store, out, MONDAY)
         got = {m["To"]: sections(m)["New grants that fit"] for m in out.messages}
         assert got == {"me@und.edu": ["FIVE", "FOUR"], "picky@und.edu": ["FIVE"]}
+
+
+class TestKeywordFallback:
+    """Until the model has scored a grant, keyword matches are announced. The pre-check's 0s are not model scores (#47)."""
+
+    def test_rule_scores_alone_do_not_switch_it_off(self):
+        # The model was unreachable on a fresh database: the only scores are the pre-check's 0s.
+        ruled_out = _grant("RULED", 40, score=0, by_rule=True, matches=2)
+        store, out = MemoryStore([ME], [ruled_out, _grant("HIT", 40, score=None, matches=1)]), CaptureTransport()
+        assert _run(store, out, MONDAY) == 0
+        assert sections(out.messages[-1])["New grants that fit"] == ["HIT"]  # not the ruled-out grant, though it matched
+        assert "match the research keywords" in plain_text(out.messages[-1])
+        assert [r.opp_id for r in store.rows if r.kind == "new"] == ["HIT"]
+        # Once the model scores a grant, scores decide and keyword matches no longer do.
+        store.grant_list += [_grant("FIVE", 40, score=5), _grant("KEYWORDS", 40, score=None, matches=4)]
+        assert _run(store, out, MONDAY + timedelta(days=1)) == 0
+        assert sections(out.messages[-1])["New grants that fit"] == ["FIVE"]
+        assert "Scores are relative to the research profile" in plain_text(out.messages[-1])
+
+    def test_a_program_counts_through_a_posting_that_may_apply_and_never_through_a_ruled_out_one(self):
+        def program(*postings):
+            return [
+                replace(_grant(f"D{i}", 40, score=0 if rule else None, by_rule=rule, matches=3), title=f"Grant D{i} (DURIP)", agency_code=f"DOD-{i}")
+                for i, rule in enumerate(postings)
+            ]
+
+        store, out = MemoryStore([ME], program(True, True)), CaptureTransport()
+        _run(store, out, MONDAY)
+        assert out.messages == []  # every posting is ruled out, whatever its matches
+        store, out = MemoryStore([ME], program(True, False)), CaptureTransport()
+        _run(store, out, MONDAY)
+        assert len(sections(out.messages[-1])["New grants that fit"]) == 1  # the posting that may apply makes it one program to announce
+
+    def test_the_overview_leaves_out_a_ruled_out_grant(self):
+        grants = [_grant("RULED", 20, score=0, by_rule=True, matches=2), _grant("HIT", 21, score=None, matches=1)]
+        store, out = MemoryStore([ME], grants), CaptureTransport()
+        store.rows.append(SentRecord(ME.id, "HIT", NEW, -1, grants[1].close_date, None))  # told already, so only the overview lists it
+        _run(store, out, MONDAY, NotifySettings(overview_day="daily"))
+        assert sections(out.messages[-1]) == {"Closes in 8 to 30 days": ["HIT"]}
 
 
 class TestTrackedDeadlines:

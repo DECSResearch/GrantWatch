@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 from psycopg2.extras import RealDictCursor, execute_values
 
 from grants.sql_utils import db_connection, ensure_schema, listed_sql, open_grant_sql
+from llm_utils.relevance import RULE_MODEL
 from notifications.planner import GrantState, Recipient, SentRecord
 
 _RECIPIENT_COLUMNS = "id, email, name, min_score, unsubscribe_token, active"
@@ -149,7 +150,7 @@ class PostgresStore:
         # can say they were withdrawn.
         query = f"""
             SELECT g.opp_id, g.title, g.agency, g.agency_code, g.url, g.close_date, g.archive_date,
-                   g.opportunity_status, g.relevance_score, g.relevance_reason, g.summary,
+                   g.opportunity_status, g.relevance_score, g.relevance_model, g.relevance_reason, g.summary,
                    g.matched_keywords, COALESCE(f.net, 0) AS net_votes,
                    (w.opp_id IS NOT NULL) AS watched, {listed_sql("g")} AS listed
             FROM grants g
@@ -171,6 +172,7 @@ class PostgresStore:
                 archive_date=_as_date(row["archive_date"]),
                 forecasted=str(row["opportunity_status"] or "").lower() == "forecasted",
                 score=row["relevance_score"],
+                by_rule=row["relevance_model"] == RULE_MODEL,
                 reason=row["relevance_reason"] or "",
                 summary=row["summary"] or "",
                 watched=bool(row["watched"]),

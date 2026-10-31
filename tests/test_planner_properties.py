@@ -8,9 +8,10 @@ read back as text. The properties are the spec:
 
 1. A grant is announced to a recipient at most once.
 2. Each run announces min(backlog, max_new) of the unannounced qualifying
-   grants (by score, or by keyword matches before anything is scored, and
-   only grants with at least max(1, keyword_threshold) of them), so nothing
-   qualifying is lost; repeated runs drain the backlog and then go quiet.
+   grants (by score, or by keyword matches before the model has scored
+   anything, and only grants with at least max(1, keyword_threshold) of them,
+   never one the eligibility rules scored 0), so nothing qualifying is lost;
+   repeated runs drain the backlog and then go quiet.
    They are listed urgent first: the ones closing within 30 days, soonest
    first, then the rest best first. The cap cuts from the end of that list,
    so an urgent grant is held back only if no other kind is shown.
@@ -54,11 +55,14 @@ class SimGrant:
     move_by: int
     drop_day: Optional[int]
     matches: int
+    by_rule: bool = False  # the eligibility rules score it 0, not the model
 
     def on(self, day: int) -> GrantState:
         close = self.close
         if close is not None and self.move_day is not None and day >= self.move_day:
             close += self.move_by
+        scored = self.score if day >= self.score_day else None
+        by_rule = self.by_rule and scored is not None
         return GrantState(
             opp_id=self.opp_id,
             title=f"Grant {self.opp_id}",
@@ -66,7 +70,8 @@ class SimGrant:
             url=f"https://example.org/{self.opp_id}",
             close_date=DAY0 + timedelta(days=close) if close is not None else None,
             archive_date=DAY0 + timedelta(days=self.archive) if self.archive is not None else None,
-            score=self.score if day >= self.score_day else None,
+            score=0 if by_rule else scored,
+            by_rule=by_rule,
             reason="fits",
             watched=self.watched_from is not None and day >= self.watched_from,
             listed=self.drop_day is None or day < self.drop_day,
@@ -88,6 +93,7 @@ def sim_grant(index: int):
         move_by=st.integers(-20, 40),
         drop_day=st.one_of(st.none(), st.integers(1, 25)),
         matches=st.integers(0, 5),
+        by_rule=st.sampled_from([False, False, False, True]),
     )
 
 
@@ -112,13 +118,18 @@ def scenarios(draw):
     return grants, people, days, failures, reruns, config
 
 
+def _model_scored(g: GrantState) -> bool:
+    """The model judged it: a score that is not the eligibility rules' 0."""
+    return g.score is not None and not g.by_rule
+
+
 def _eligible(grants: List[GrantState], person: Recipient, config: NotifySettings, today: date, announced: set) -> List[GrantState]:
     """Independent statement of rule 2's backlog (not the planner's code)."""
     threshold = config.min_score if person.min_score is None else person.min_score
     open_now = [g for g in grants if g.is_open(today)]
-    if not any(g.score is not None for g in open_now):
+    if not any(_model_scored(g) for g in open_now):
         needed = max(1, config.keyword_threshold)
-        return [g for g in open_now if not g.watched and g.opp_id not in announced and g.matches >= needed]  # keyword matches
+        return [g for g in open_now if not g.watched and g.opp_id not in announced and not g.by_rule and g.matches >= needed]  # keyword matches
     return [g for g in open_now if not g.watched and g.score is not None and g.score >= threshold and g.opp_id not in announced]
 
 
@@ -160,7 +171,7 @@ def test_email_service_properties(scenario):
                 by_id = {g.opp_id: g for g in backlog[person.id]}
                 shown = [by_id[i] for i in new_ids]  # in the order the email lists them
                 left = [g for g in backlog[person.id] if g.opp_id not in new_ids]
-                scored = any(g.score is not None for g in grants if g.is_open(today))
+                scored = any(_model_scored(g) for g in grants if g.is_open(today))
                 rank = (lambda g: g.score) if scored else (lambda g: g.matches)  # noqa: E731
                 urgent = lambda g: g.close_date is not None and 0 <= (g.close_date - today).days <= 30  # noqa: E731
                 flags = [urgent(g) for g in shown]
@@ -295,6 +306,36 @@ def test_new_grants_list_urgent_first_and_the_cap_never_holds_one_back_for_a_lat
     assert shown == listed[: len(shown)] and len(shown) == min(max_new, len(listed))
     if any(not _urgent(g) for g in shown):
         assert all(g in shown for g in urgent)  # the cap never drops an urgent grant while a later one is shown
+
+
+@st.composite
+def mixed_pools(draw):
+    """Grants scored by the model, scored 0 by the eligibility rules, or not scored; each with keyword matches."""
+    kinds = draw(st.lists(st.tuples(st.sampled_from(["model", "rule", "none"]), st.integers(0, 5), st.integers(0, 5), st.integers(1, 80)), max_size=16))
+    return [
+        GrantState(
+            opp_id=f"G{i:02d}", title=f"Grant {i:02d}", agency_code=f"AG-{i}", close_date=DAY0 + timedelta(days=days),
+            score={"model": score, "rule": 0, "none": None}[kind], by_rule=kind == "rule", matches=matches,
+        )
+        for i, (kind, score, matches, days) in enumerate(kinds)
+    ]
+
+
+@given(grants=mixed_pools(), min_score=st.integers(1, 5), threshold=st.integers(0, 3))
+def test_only_the_models_scores_decide_whether_scoring_is_active_and_a_rules_zero_is_never_announced(grants, min_score, threshold):
+    """With any model score, grants are judged by score; with none, by keyword matches. A rule's 0 does neither."""
+    config = NotifySettings(min_score=min_score, keyword_threshold=threshold, overview_day="daily")
+    plan = plan_email(Recipient(id=1, email="a@und.edu", unsubscribe_token="t"), grants, [], DAY0, config)
+    modelled = [g for g in grants if g.by_rule is False and g.score is not None]
+
+    assert plan.scoring_active is bool(modelled)
+    if modelled:
+        expected = {g.opp_id for g in modelled if g.score >= min_score}
+    else:
+        expected = {g.opp_id for g in grants if g.score is None and g.matches >= max(1, threshold)}
+    assert {n.grant.opp_id for n in plan.new} == expected
+    # Every deadline here is within 90 days, so the overview lists the same grants.
+    assert {g.opp_id for _, members in plan.overview for g in members} == expected
 
 
 @st.composite

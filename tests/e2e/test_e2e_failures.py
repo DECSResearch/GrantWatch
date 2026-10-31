@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from harness import ADMIN_PASSWORD, ADMIN_USER, closed_port
+from harness import ADMIN_PASSWORD, ADMIN_USER, closed_port, new_section, plain_text, read_email
 from web import app as webapp
 
 AUTH = (ADMIN_USER, ADMIN_PASSWORD)
@@ -81,3 +81,28 @@ class TestModelUnreachable:
         assert "13 open grants have no relevance score yet: the model server could not be reached in the last successful ingest." in status["warnings"]
         check = client.get("/admin/api/llm", auth=AUTH).json()
         assert check["configured"] is True and check["reachable"] is False and check["error"]
+
+    def test_notify_announces_keyword_matches_and_not_the_grant_the_precheck_ruled_out(self, fresh, monkeypatch):
+        """The only score in the database is the pre-check's 0 (#47): that is not a model score, so the
+        keyword fallback runs, and a grant that leaves this applicant out is not announced by it."""
+        monkeypatch.setenv("GRANTS_LLM_BASE_URL", f"http://127.0.0.1:{closed_port()}/v1")
+        monkeypatch.setenv("GRANTS_NOTIFY_RECIPIENTS", "lead@und.edu")
+        monkeypatch.setenv("GRANTS_EMAIL_MAX_NEW", "50")
+        assert fresh.ingest() == 0
+        loaded_but_unscored(fresh)
+        rows = fresh.query("SELECT opp_id, title, matched_keywords FROM grants WHERE relevance_score IS NULL OR opp_id = 'E2E-STATES'")
+        by_id = {row["opp_id"]: row for row in rows}
+        assert by_id["E2E-STATES"]["matched_keywords"]  # its text matches, so only the rule keeps it out
+
+        assert fresh.notify() == 0
+        (mail,) = fresh.emails()
+        text = plain_text(read_email(mail))
+        _, entries = new_section(text)
+        assert all(score == "unscored" for score, _ in entries)
+        # Every unscored grant with a keyword match, one row for the three DURIP postings; none that matched nothing.
+        wanted = {row["title"] for opp_id, row in by_id.items() if opp_id != "E2E-STATES" and row["matched_keywords"]}
+        assert {title for _, title in entries} == wanted and len(entries) == len(wanted)
+        assert "Foundations of Trusted Systems" in wanted and "State and Local Cybersecurity Grant Program" not in text
+        assert "match the research keywords in the profile" in text
+        recorded = {row["opp_id"] for row in fresh.query("SELECT opp_id FROM notifications WHERE kind = 'new'")}
+        assert "E2E-STATES" not in recorded and "E2E-NOKW" not in recorded
