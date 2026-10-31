@@ -207,12 +207,13 @@ class TestFilters:
         assert ">Reset filters</button>" in INDEX and "Clear filters" not in INDEX
         assert 'els.clear.addEventListener("click", () => { setupFilters(); loadGrants(); });' in script()
         setup = script().split("function setupFilters() {")[1].split("\n  }\n")[0]
-        assert "p.min_score ?? 4" in setup and "[0, 3, 4, 5, threshold]" in setup and "fillSelect(els.minScore, scoreOptions, threshold);" in setup
+        assert "const threshold = state.view.floor;" in setup and "[0, 3, 4, 5, threshold]" in setup and "fillSelect(els.minScore, scoreOptions, threshold);" in setup
         assert "els.showHidden.checked = false" in setup and "els.watchedOnly.checked = false" in setup
 
-    def test_the_status_line_says_how_many_score_at_the_team_threshold(self):
+    def test_the_status_line_says_how_many_score_at_the_floor(self):
+        # The floor is the one the server counted fit_count at (the member's own, else the team's), not the team threshold.
         js = script()
-        assert "d.fit_count" in js and "score ${p.min_score} or higher." in js
+        assert "d.fit_count" in js and "score ${floor} or higher." in js and "score ${p.min_score}" not in js
 
     def test_a_full_list_says_how_many_rows_are_drawn_not_how_many_were_fetched(self):
         js = script()
@@ -336,28 +337,41 @@ class TestSignOut:
         assert out.rstrip().endswith("location.reload();") and "loadGrants(" not in out and "renderAccount(" not in out
 
 
-class TestSignInOff:
-    def test_the_first_list_waits_for_the_session(self):
+class TestVisitorsPage:
+    def test_the_first_list_waits_for_the_session_and_the_profile(self):
         js = script()
-        assert "Promise.all([loadSession(), loadProfile()]).then(() => { renderControls(); return loadGrants(); });" in js
+        assert "Promise.all([loadSession(), loadProfile()]).then(() => { renderPage(); setupFilters(); return loadGrants(); });" in js
         assert js.index("Promise.all([loadSession()") > js.index("els.logout.addEventListener")
         assert "loadSession();\n  loadProfile().then(loadGrants);" not in js
 
-    def test_track_and_the_marks_are_not_drawn(self):
-        actions = script().split("function actionsHtml(g) {")[1].split("\n  }\n")[0]
-        guard = actions.index('if (!signInOn()) return "";')
-        assert guard < actions.index("data-track") and guard < actions.index("data-vote")
+    def test_the_markup_is_the_visitors_page_and_a_members_controls_start_hidden(self):
+        page = INDEX.split("<script>")[0]
+        for member_only in ('id="minScoreLabel" hidden', 'id="watchedLabel" hidden', 'id="hiddenLabel" hidden', '<footer class="foot" id="foot" hidden>'):
+            assert member_only in page
+        assert "Each bar is a grant's deadline. Hollow bars are estimated dates." in page and "taller means a better fit" not in page
+        assert "trackingOff" not in INDEX and "Sign-in is off" not in INDEX
 
-    def test_a_tracked_grant_shows_a_label_not_a_button(self):
-        cell = script().split("function scoreCell(g) {")[1].split("\n  }\n")[0]
-        assert '!signInOn() && g.watched ? `<span class="tracked-note">Tracked</span>`' in cell
+    def test_the_page_is_drawn_for_who_is_looking_once_both_answers_are_in(self):
+        draw = script().split("function renderPage() {")[1].split("\n  }\n")[0]
+        assert "viewOf(state.session, state.profile)" in draw
+        assert "els.minScoreLabel.hidden = els.watchedLabel.hidden = els.foot.hidden = !v.member;" in draw  # the Admin link too
+        assert "els.horizon.hidden = els.filters.hidden = !v.list;" in draw
+        for fetcher in ("async function loadProfile() {", "async function loadSession() {"):
+            assert "els." not in script().split(fetcher)[1].split("\n  }\n")[0]  # a fetch only keeps its answer: what to draw waits for both
 
-    def test_only_tracked_shows_when_signing_in_works_or_something_is_tracked(self):
-        controls = script().split("function renderControls() {")[1].split("\n  }\n")[0]
-        assert "els.watchedLabel.hidden = !(signInOn() || tracked > 0);" in controls
-        assert "state.profile.data.watched" in controls
-        assert "els.trackingOff.hidden = signInOn();" in controls
-        assert re.search(r'<p class="meta" id="trackingOff" hidden>[^<]*off on this server', INDEX)
+    def test_a_visitor_to_a_server_with_no_list_asks_for_none(self):
+        assert "if (!state.view.list) return;" in script().split("async function loadGrants() {")[1].split("els.count")[0]
+
+    def test_visitors_rows_are_two_columns_and_the_old_read_only_look_is_gone(self):
+        assert rule(STYLE, ".public .row") == " grid-template-columns: 76px 1fr; "
+        assert ".row, .public .row { grid-template-columns: 64px 1fr; }" in STYLE
+        assert 'els.results.classList.toggle("public", !state.view.member);' in script()
+        assert "readonly" not in INDEX and "tracked-note" not in INDEX and "signInOn" not in INDEX  # nobody is a member without sign-in
+
+    def test_a_member_row_adds_the_score_and_buttons_to_the_visitors_and_no_other_way_round(self):
+        row = script().split("function rowHtml(g, view) {")[1].split("\n  }\n")[0]
+        assert "${view.member ? scoreCell(g) + actionsHtml(g) : \"\"}" in row
+        assert "view.member && g.relevance_reason" in row
 
     def test_the_hidden_attribute_wins_over_the_label_styles(self):
         assert "[hidden] { display: none !important; }" in STYLE
@@ -383,7 +397,7 @@ class TestAccessibility:
 
     def test_every_repeated_button_and_link_names_its_grants_title(self):
         js = script()
-        row = js.split("function rowHtml(g) {")[1].split("function render()")[0]
+        row = js.split("function rowHtml(g, view) {")[1].split("function detailRows")[0]
         assert row.count('aria-describedby="title-${i}"') == 1 and "${describe}" in row
         assert row.count("${describe}") == 2  # Details and Grants.gov
         actions = js.split("function actionsHtml(g) {")[1].split("\n  }\n")[0]

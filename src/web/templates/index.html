@@ -55,6 +55,8 @@
   .status { margin: 4px 0 0; color: var(--mist); font-size: 15px; }
   .profile-line { margin: 14px 0 0; max-width: 72ch; }
   .notice { margin: 14px 0 0; padding: 12px 14px; border-left: 3px solid var(--ochre); background: var(--well); font-size: 15px; }
+  .notice p { margin: 0; }
+  .notice p + p { margin-top: 6px; }
   .notice code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px; }
 
   /* Horizon strip */
@@ -133,8 +135,7 @@
   .vote[aria-pressed="true"] { font-weight: 600; background: var(--spruce-soft); border-color: var(--spruce); color: var(--spruce); }
   .vote.no[aria-pressed="true"] { border-color: var(--signal); color: var(--signal); }
   .track:disabled { opacity: 0.6; cursor: wait; }
-  .tracked-note { color: var(--spruce); font-weight: 600; }
-  .readonly .row { grid-template-columns: 76px 1fr 120px; }
+  .public .row { grid-template-columns: 76px 1fr; }
   .empty, .error { margin-top: 30px; padding: 26px 0; border-top: 1px solid var(--fog); border-bottom: 1px solid var(--fog); color: var(--mist); }
   .error { color: var(--signal); }
 
@@ -146,6 +147,7 @@
   .account button { font: inherit; font-size: 14px; font-weight: 600; padding: 7px 14px; border: 0; border-radius: 4px; background: var(--spruce); color: var(--paper); cursor: pointer; }
   .account button.link { background: none; color: var(--spruce); padding: 0; font-weight: 400; text-decoration: underline; }
   .account button:disabled { opacity: 0.6; cursor: wait; }
+  .account .hint { flex-basis: 100%; margin: 0; font-size: 13px; }
   .feedback { min-height: 22px; margin: 0; font-size: 14px; color: var(--mist); flex-basis: 100%; }
   .feedback.ok { color: var(--spruce); }
   .feedback.bad { color: var(--signal); }
@@ -155,7 +157,7 @@
 
   @media (max-width: 640px) {
     .page { padding: 24px 16px 56px; }
-    .row, .readonly .row { grid-template-columns: 64px 1fr; }
+    .row, .public .row { grid-template-columns: 64px 1fr; }
     .score { grid-column: 2; flex-direction: row; align-items: center; gap: 8px; padding-top: 0; }
     .actions { grid-column: 2; flex-direction: row; flex-wrap: wrap; justify-self: start; }
     .actions button { width: auto; padding: 6px 14px; }
@@ -180,25 +182,25 @@
         <label>Team email <input type="email" id="loginEmail" required placeholder="you@und.edu" autocomplete="email"></label>
         <button type="submit" id="loginSubmit">Email me a sign-in link</button>
       </form>
+      <p class="hint" id="signInHelp" hidden></p>
       <p class="feedback" id="loginFeedback" role="status" aria-live="polite"></p>
     </div>
-    <p class="meta" id="trackingOff" hidden>Sign-in is off on this server, so grants can't be tracked or marked here.</p>
   </header>
 
-  <section class="horizon" aria-labelledby="horizonTitle">
+  <section class="horizon" id="horizon" aria-labelledby="horizonTitle">
     <div class="horizon-head">
       <h2 id="horizonTitle">Deadlines ahead</h2>
-      <span id="horizonHint">Each bar is a grant; taller means a better fit. Hollow bars are estimated dates.</span>
+      <span id="horizonHint">Each bar is a grant's deadline. Hollow bars are estimated dates.</span>
     </div>
     <div class="strip" id="strip" role="group" aria-label="Timeline of upcoming deadlines"></div>
     <div class="strip-axis"></div>
   </section>
 
-  <section class="filters" aria-label="Filters">
+  <section class="filters" id="filters" aria-label="Filters">
     <label class="search">Search
       <input type="search" id="q" placeholder="Title, agency, or number" autocomplete="off">
     </label>
-    <label>Relevance at least
+    <label id="minScoreLabel" hidden>Relevance at least
       <select id="minScore"></select>
     </label>
     <label>Closing within
@@ -212,7 +214,7 @@
       </select>
     </label>
     <label class="check"><input type="checkbox" id="forecasted" checked> Show forecasted</label>
-    <label class="check" id="watchedLabel"><input type="checkbox" id="watchedOnly"> Only tracked</label>
+    <label class="check" id="watchedLabel" hidden><input type="checkbox" id="watchedOnly"> Only tracked</label>
     <label class="check" id="hiddenLabel" hidden><input type="checkbox" id="showHidden"> <span id="hiddenText">Show hidden</span></label>
     <button type="button" class="clear" id="clear">Reset filters</button>
     <span class="count" id="count" role="status" aria-live="polite"></span>
@@ -220,43 +222,200 @@
 
   <div id="results"></div>
 
-  <footer class="foot"><a href="/admin/">Admin</a></footer>
+  <footer class="foot" id="foot" hidden><a href="/admin/">Admin</a></footer>
 </div>
 
 <script>
 (function () {
   const $ = (id) => document.getElementById(id);
   const els = {
-    status: $("status"), profileLine: $("profileLine"), notice: $("notice"), trackingOff: $("trackingOff"), strip: $("strip"),
-    horizonHint: $("horizonHint"), q: $("q"), minScore: $("minScore"), closingWithin: $("closingWithin"),
-    forecasted: $("forecasted"), watchedOnly: $("watchedOnly"), watchedLabel: $("watchedLabel"),
+    status: $("status"), profileLine: $("profileLine"), notice: $("notice"), strip: $("strip"), horizon: $("horizon"),
+    horizonHint: $("horizonHint"), filters: $("filters"), q: $("q"), minScore: $("minScore"), minScoreLabel: $("minScoreLabel"),
+    closingWithin: $("closingWithin"), forecasted: $("forecasted"), watchedOnly: $("watchedOnly"), watchedLabel: $("watchedLabel"),
     showHidden: $("showHidden"), hiddenLabel: $("hiddenLabel"), hiddenText: $("hiddenText"),
-    stage: $("stage"), clear: $("clear"), count: $("count"), results: $("results"),
+    stage: $("stage"), clear: $("clear"), count: $("count"), results: $("results"), foot: $("foot"),
     account: $("account"), accountText: $("accountText"), logout: $("logout"),
-    loginForm: $("loginForm"), loginEmail: $("loginEmail"), loginSubmit: $("loginSubmit"), loginFeedback: $("loginFeedback"),
+    loginForm: $("loginForm"), loginEmail: $("loginEmail"), loginSubmit: $("loginSubmit"), loginFeedback: $("loginFeedback"), signInHelp: $("signInHelp"),
   };
 
+  // BEGIN view rules
+  // What the page shows follows from two answers: /api/session (who is looking) and /api/profile (what there is to
+  // show them). This block holds those rules and the HTML of a row. It reads neither the page nor `state`, only its
+  // arguments, so tests/test_dashboard_view.py runs it under node.
+  // The markup is the public page. A member's parts are added to it, and only when `viewOf` says the viewer is one.
+
   const LIMIT = 500;
-  const state = { profile: null, horizons: [7, 30, 60, 90], grants: [], total: 0, busy: false, session: { auth_configured: false, email: null } };
 
   const fmtDate = (iso) => {
     if (!iso) return "no date";
     const d = new Date(iso);
     return isNaN(d) ? iso : d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
   };
+  const fmtNum = (n) => Number(n).toLocaleString();
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
   const link = (label, url) => (url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(label)}</a>` : esc(label));
-  const signInOn = () => Boolean(state.session.auth_configured);
   // Grants.gov fills a missing close date with one far in the future; the API marks it not firm.
   const placeholderDate = (g) => Boolean(g.close_date) && g.firm_deadline === false;
-  // Grants the team marked Not for us stay out of the list unless asked for.
-  const visible = () => (els.showHidden.checked ? state.grants : state.grants.filter((g) => !g.hidden));
   // The line over the list. `total` counts postings, but the list folds one program's postings into a row and
   // leaves out the ones marked Not for us, so when the limit cuts it short this says how many rows are drawn.
   const countLine = (drawn, total) => total > LIMIT
     ? `Showing ${plural(drawn, "grant")} from the first ${LIMIT} of ${total} postings. Narrow the filters to see the rest.`
     : plural(drawn, "grant");
+
+  const TEXT = {
+    publicAccount: "A public list of open Grants.gov grants. Team members sign in for fit scores, tracking and email.",
+    signInHelp: "Link not arriving? Ask the GrantWatch admin for one.",
+    publicStrip: "Each bar is a grant's deadline. Hollow bars are estimated dates.",
+    memberStrip: "Each bar is a grant; taller means a better fit. Hollow bars are estimated dates.",
+    publicEmpty: "Nothing matches. Widen the closing window or clear the search.",
+    memberEmpty: "Nothing matches. Widen the closing window, lower the relevance bar, or clear the search.",
+    scoringOff: "Relevance scoring is off. Fill in the summary in <code>config/research_profile.yml</code> and set a model to see fit scores and reasons.",
+  };
+
+  // The score bar a list opens on. It means something once there is a profile or there are scores; a visitor has none.
+  function defaultFloor(p, member) {
+    if (!member) return 0;
+    const scored = (p.data && p.data.scored) || 0;
+    return (p.configured || scored > 0) ? (p.min_score ?? 4) : 0;
+  }
+
+  function publicStatus(p) {
+    const d = p.data;
+    if (!d) return "Database unavailable.";
+    if (!p.configured) return "";  // no list to describe
+    return d.data_as_of ? `Open Grants.gov opportunities as of ${fmtDate(d.data_as_of)}: ${fmtNum(d.open)}.` : "No pipeline run recorded yet.";
+  }
+
+  function memberStatus(p, floor) {
+    const d = p.data;
+    if (!d) return "Database unavailable.";
+    if (!d.data_as_of) return "No pipeline run recorded yet.";
+    const fit = d.scored > 0 && floor > 0 && d.fit_count != null ? ` ${d.fit_count} score ${floor} or higher.` : "";
+    return `Data as of ${fmtDate(d.data_as_of)}. ${plural(d.open, "open grant")}, ${d.scored} scored, ${d.watched} tracked.${fit}`;
+  }
+
+  // Everything that depends on who is looking, from the session and the profile answers (either may be missing).
+  // For a visitor `profile.configured` says there is a list to show (a model is on and the team profile is set);
+  // for a member it says only that the team profile is set.
+  function viewOf(session, profile) {
+    const s = session || {};
+    const p = profile || {};
+    const member = Boolean(s.email);
+    const signIn = Boolean(s.auth_configured);
+    const floor = defaultFloor(p, member);
+    const scored = (p.data && p.data.scored) || 0;
+    return {
+      member,
+      signIn,
+      list: member || p.configured === true,
+      floor,
+      status: member ? memberStatus(p, floor) : publicStatus(p),
+      profileLine: member && p.configured && p.summary ? `Scored for: ${p.summary}${p.summary.endsWith(".") ? "" : "."}` : "",
+      notices: member && !p.configured && scored === 0 ? [TEXT.scoringOff] : [],
+      accountText: member ? `Signed in as ${s.email}.` : signIn ? TEXT.publicAccount : "",
+      signInHelp: !member && signIn ? TEXT.signInHelp : "",
+      stripHint: member ? TEXT.memberStrip : TEXT.publicStrip,
+      emptyText: member ? TEXT.memberEmpty : TEXT.publicEmpty,
+    };
+  }
+
+  // The query a list asks for. A visitor's has no score bar and no tracked-only: the server ignores both for them,
+  // so the page does not send them.
+  function paramsFor(v, view) {
+    const q = new URLSearchParams();
+    if (v.q.trim()) q.set("q", v.q.trim());
+    if (view.member && Number(v.minScore) > 0) q.set("min_score", v.minScore);
+    if (v.closingWithin) q.set("closing_within", v.closingWithin);
+    if (v.stage) q.set("stage", v.stage);
+    q.set("include_forecasted", v.forecasted ? "true" : "false");
+    if (view.member && v.watchedOnly) q.set("watched_only", "true");
+    q.set("limit", String(LIMIT));
+    return q;
+  }
+
+  // How tall a deadline's bar is: a better fit is taller, and a visitor's bars are all one height.
+  function barHeight(g, view) {
+    const s = view.member ? g.relevance_score : null;
+    return s === null || s === undefined ? 12 : 12 + s * 10;
+  }
+
+  function daysCell(g) {
+    if (g.days_left === null || g.days_left === undefined) return `<div class="days none"><b>none</b></div>`;
+    if (g.days_left === 0) return `<div class="days urgent today"><b>today</b><small>closes${g.forecasted ? ", est." : ""}</small></div>`;
+    const cls = g.days_left <= 7 ? "urgent" : g.days_left <= 30 ? "soon" : "";
+    const word = g.days_left === 1 ? "day" : "days";
+    return `<div class="days ${cls}"><b>${g.days_left}</b><small>${g.days_left < 0 ? "days ago" : word}${g.forecasted ? ", est." : ""}</small></div>`;
+  }
+
+  function scoreCell(g) {
+    const s = g.relevance_score;
+    const squares = [0, 1, 2, 3, 4].map((i) => `<i class="${s !== null && s !== undefined && i < s ? "on" : ""}"></i>`).join("");
+    return `<div class="score"><div class="squares" aria-hidden="true">${squares}</div><span>${s === null || s === undefined ? "unscored" : `${s} of 5`}</span></div>`;
+  }
+
+  const voteLabel = (g, verdict) => {
+    const n = verdict > 0 ? g.votes_up : g.votes_down;
+    return `${verdict > 0 ? "Relevant" : "Not for us"}${n ? ` ${n}` : ""}`;
+  };
+
+  function actionsHtml(g) {
+    const describe = `aria-describedby="title-${g.idx}"`;
+    const vote = (verdict) => `<button type="button" class="vote ${verdict > 0 ? "yes" : "no"}" data-vote="${verdict}" aria-pressed="${g.my_verdict === verdict}" ${describe}>${esc(voteLabel(g, verdict))}</button>`;
+    return `<div class="actions">
+        <button type="button" class="track ${g.watched ? "on" : ""}" data-track="${esc(g.opp_id)}" aria-pressed="${g.watched ? "true" : "false"}" ${describe}>${g.watched ? "Tracked" : "Track"}</button>
+        ${vote(1)}${vote(-1)}
+      </div>`;
+  }
+
+  // A visitor's row is two columns: when it closes, and the grant with Grants.gov's description. A member's adds the
+  // score and the buttons. Which it is comes from `view` alone, so a row that holds more than a visitor may see
+  // still draws no reason, score or mark.
+  function rowHtml(g, view) {
+    const i = g.idx;
+    const describe = `aria-describedby="title-${i}"`;
+    const meta = [g.agency || "Unknown agency"];
+    if (g.close_date) meta.push(placeholderDate(g) ? "no firm deadline" : `closes ${fmtDate(g.close_date)}${g.forecasted ? " (estimated)" : ""}`);
+    if (g.award_ceiling) meta.push(`up to $${Number(g.award_ceiling).toLocaleString()}`);
+    const also = g.also_posted && g.also_posted.length
+      ? `<p class="meta">Also posted by: ${g.also_posted.map((a) => link(a.agency || a.opp_id, a.url)).join(", ")}</p>` : "";
+    const newer = g.superseded_by ? `<p class="meta">A newer solicitation exists: ${link(g.superseded_by.opp_id, g.superseded_by.url)}</p>` : "";
+    const why = view.member && g.relevance_reason ? `<p class="why">${esc(g.relevance_reason)}</p>` : g.summary ? `<p class="why summary">${esc(g.summary)}</p>` : "";
+    const title = g.url ? `<a href="${esc(g.url)}" target="_blank" rel="noopener">${esc(g.title)}</a>` : esc(g.title);
+    const grantsGov = g.url ? `<a class="more" href="${esc(g.url)}" target="_blank" rel="noopener" ${describe}>Grants.gov</a>` : "";
+    return `<article class="row" id="row-${i}" data-idx="${i}" data-id="${esc(g.opp_id)}" tabindex="-1">
+      ${daysCell(g)}
+      <div class="main">
+        <h3 class="title" id="title-${i}">${title}</h3>
+        <p class="meta">${esc(meta.join(", "))}</p>
+        ${also}${newer}${why}
+        <div class="links">
+          <button type="button" class="more" data-more="${esc(g.opp_id)}" aria-expanded="false" ${describe}>Details</button>
+          ${grantsGov}
+        </div>
+        <div class="detail" data-detail="${esc(g.opp_id)}" hidden></div>
+      </div>
+      ${view.member ? scoreCell(g) + actionsHtml(g) : ""}
+    </article>`;
+  }
+
+  // The label and value pairs of a grant's details, those with a value. A visitor's leave out the keywords and the scorer.
+  function detailRows(g, view) {
+    const rows = [
+      ["Opportunity", g.opp_id], ["Status", g.opportunity_status], ["Posted", fmtDate(g.post_date)],
+      ["Closes", g.close_date ? (placeholderDate(g) ? "no firm deadline" : fmtDate(g.close_date)) : "no date"], ["Categories", g.funding_categories],
+      ["Award ceiling", g.award_ceiling ? `$${Number(g.award_ceiling).toLocaleString()}` : ""],
+      ["Program funding", g.estimated_total_funding ? `$${Number(g.estimated_total_funding).toLocaleString()}` : ""],
+    ];
+    if (view.member) rows.push(["Matched keywords", g.matched_keywords], ["Scored by", g.relevance_model]);
+    return rows.filter(([, v]) => v);
+  }
+  // END view rules
+
+  const state = { profile: null, horizons: [7, 30, 60, 90], grants: [], total: 0, busy: false, session: { auth_configured: false, email: null }, view: viewOf(null, null) };
+
+  // Grants the team marked Not for us stay out of the list unless asked for.
+  const visible = () => (els.showHidden.checked ? state.grants : state.grants.filter((g) => !g.hidden));
 
   function fillSelect(select, options, value) {
     select.innerHTML = options.map((o) => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join("");
@@ -265,8 +424,7 @@
 
   function setupFilters() {
     const p = state.profile || {};
-    const scored = (p.data && p.data.scored) || 0;
-    const threshold = (p.configured || scored > 0) ? (p.min_score ?? 4) : 0;
+    const threshold = state.view.floor;
     // The team threshold can be any of 0 to 5; it must be a choice, or Reset filters could not restore it.
     const scoreOptions = [...new Set([0, 3, 4, 5, threshold])].sort((a, b) => a - b).map((v) => ({ value: v, label: v === 0 ? "Any" : `${v} of 5` }));
     fillSelect(els.minScore, scoreOptions, threshold);
@@ -288,51 +446,37 @@
     } catch (err) {
       state.profile = { configured: false };
     }
-    const p = state.profile;
-    if (Array.isArray(p.horizons) && p.horizons.length) state.horizons = p.horizons.map(Number);
-    const d = p.data;
-    if (d && d.data_as_of) {
-      const fit = d.scored > 0 && p.min_score > 0 && d.fit_count != null ? ` ${d.fit_count} score ${p.min_score} or higher.` : "";
-      els.status.textContent = `Data as of ${fmtDate(d.data_as_of)}. ${plural(d.open, "open grant")}, ${d.scored} scored, ${d.watched} tracked.${fit}`;
-    } else if (d) {
-      els.status.textContent = "No pipeline run recorded yet.";
-    } else {
-      els.status.textContent = "Database unavailable.";
-    }
-    const scoredCount = (d && d.scored) || 0;
-    if (p.configured && p.summary) {
-      els.profileLine.textContent = `Scored for: ${p.summary}${p.summary.endsWith(".") ? "" : "."}`;
-      els.profileLine.hidden = false;
-    } else if (scoredCount === 0) {
-      els.notice.innerHTML = "Relevance scoring is off. Fill in the summary in <code>config/research_profile.yml</code> and set a model to see fit scores and reasons.";
-      els.notice.hidden = false;
-    }
-    setupFilters();
+    if (Array.isArray(state.profile.horizons) && state.profile.horizons.length) state.horizons = state.profile.horizons.map(Number);
   }
 
-  // What can be done here depends on the session, so this runs once both it and the profile are in.
-  function renderControls() {
-    const tracked = (state.profile && state.profile.data && state.profile.data.watched) || 0;
-    els.watchedLabel.hidden = !(signInOn() || tracked > 0);
-    els.trackingOff.hidden = signInOn();
+  // What is on the page that depends on who is looking, once the session and the profile are both in. The markup
+  // is the visitor's page (a member's controls start hidden); this adds a member's parts and leaves out the rest.
+  function renderPage() {
+    const v = state.view = viewOf(state.session, state.profile);
+    els.status.textContent = v.status;
+    els.status.hidden = !v.status;
+    els.profileLine.textContent = v.profileLine;
+    els.profileLine.hidden = !v.profileLine;
+    els.notice.innerHTML = v.notices.map((html) => `<p>${html}</p>`).join("");
+    els.notice.hidden = v.notices.length === 0;
+    els.horizonHint.textContent = v.stripHint;
+    els.horizon.hidden = els.filters.hidden = !v.list;
+    els.minScoreLabel.hidden = els.watchedLabel.hidden = els.foot.hidden = !v.member;
+    renderAccount();
   }
 
-  function params() {
-    const q = new URLSearchParams();
-    if (els.q.value.trim()) q.set("q", els.q.value.trim());
-    if (els.minScore.value && Number(els.minScore.value) > 0) q.set("min_score", els.minScore.value);
-    if (els.closingWithin.value) q.set("closing_within", els.closingWithin.value);
-    if (els.stage.value) q.set("stage", els.stage.value);
-    q.set("include_forecasted", els.forecasted.checked ? "true" : "false");
-    if (els.watchedOnly.checked) q.set("watched_only", "true");
-    q.set("limit", String(LIMIT));
-    return q;
+  function loadParams() {
+    return paramsFor({
+      q: els.q.value, minScore: els.minScore.value, closingWithin: els.closingWithin.value, stage: els.stage.value,
+      forecasted: els.forecasted.checked, watchedOnly: els.watchedOnly.checked,
+    }, state.view);
   }
 
   async function loadGrants() {
+    if (!state.view.list) return;  // a visitor to a server with no list sees the sign-in prompt only
     els.count.textContent = "Loading…";
     try {
-      const res = await fetch(`/api/grants?${params()}`, { headers: { Accept: "application/json" } });
+      const res = await fetch(`/api/grants?${loadParams()}`, { headers: { Accept: "application/json" } });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`);
       state.grants = body.results || [];
@@ -377,77 +521,17 @@
     });
   }
 
-  function daysCell(g) {
-    if (g.days_left === null || g.days_left === undefined) return `<div class="days none"><b>none</b></div>`;
-    if (g.days_left === 0) return `<div class="days urgent today"><b>today</b><small>closes${g.forecasted ? ", est." : ""}</small></div>`;
-    const cls = g.days_left <= 7 ? "urgent" : g.days_left <= 30 ? "soon" : "";
-    const word = g.days_left === 1 ? "day" : "days";
-    return `<div class="days ${cls}"><b>${g.days_left}</b><small>${g.days_left < 0 ? "days ago" : word}${g.forecasted ? ", est." : ""}</small></div>`;
-  }
-
-  function scoreCell(g) {
-    const s = g.relevance_score;
-    const squares = [0, 1, 2, 3, 4].map((i) => `<i class="${s !== null && s !== undefined && i < s ? "on" : ""}"></i>`).join("");
-    // With sign-in off nobody can track here, but the MCP server can; show its marks without a button.
-    const tracked = !signInOn() && g.watched ? `<span class="tracked-note">Tracked</span>` : "";
-    return `<div class="score"><div class="squares" aria-hidden="true">${squares}</div><span>${s === null || s === undefined ? "unscored" : `${s} of 5`}</span>${tracked}</div>`;
-  }
-
-  const voteLabel = (g, verdict) => {
-    const n = verdict > 0 ? g.votes_up : g.votes_down;
-    return `${verdict > 0 ? "Relevant" : "Not for us"}${n ? ` ${n}` : ""}`;
-  };
-
-  function actionsHtml(g) {
-    if (!signInOn()) return "";
-    const describe = `aria-describedby="title-${g.idx}"`;
-    const vote = (verdict) => `<button type="button" class="vote ${verdict > 0 ? "yes" : "no"}" data-vote="${verdict}" aria-pressed="${g.my_verdict === verdict}" ${describe}>${esc(voteLabel(g, verdict))}</button>`;
-    return `<div class="actions">
-        <button type="button" class="track ${g.watched ? "on" : ""}" data-track="${esc(g.opp_id)}" aria-pressed="${g.watched ? "true" : "false"}" ${describe}>${g.watched ? "Tracked" : "Track"}</button>
-        ${vote(1)}${vote(-1)}
-      </div>`;
-  }
-
-  function rowHtml(g) {
-    const i = g.idx;
-    const describe = `aria-describedby="title-${i}"`;
-    const meta = [g.agency || "Unknown agency"];
-    if (g.close_date) meta.push(placeholderDate(g) ? "no firm deadline" : `closes ${fmtDate(g.close_date)}${g.forecasted ? " (estimated)" : ""}`);
-    if (g.award_ceiling) meta.push(`up to $${Number(g.award_ceiling).toLocaleString()}`);
-    const also = g.also_posted && g.also_posted.length
-      ? `<p class="meta">Also posted by: ${g.also_posted.map((a) => link(a.agency || a.opp_id, a.url)).join(", ")}</p>` : "";
-    const newer = g.superseded_by ? `<p class="meta">A newer solicitation exists: ${link(g.superseded_by.opp_id, g.superseded_by.url)}</p>` : "";
-    const why = g.relevance_reason ? `<p class="why">${esc(g.relevance_reason)}</p>` : g.summary ? `<p class="why summary">${esc(g.summary)}</p>` : "";
-    const title = g.url ? `<a href="${esc(g.url)}" target="_blank" rel="noopener">${esc(g.title)}</a>` : esc(g.title);
-    const grantsGov = g.url ? `<a class="more" href="${esc(g.url)}" target="_blank" rel="noopener" ${describe}>Grants.gov</a>` : "";
-    return `<article class="row" id="row-${i}" data-idx="${i}" data-id="${esc(g.opp_id)}" tabindex="-1">
-      ${daysCell(g)}
-      <div class="main">
-        <h3 class="title" id="title-${i}">${title}</h3>
-        <p class="meta">${esc(meta.join(", "))}</p>
-        ${also}${newer}${why}
-        <div class="links">
-          <button type="button" class="more" data-more="${esc(g.opp_id)}" aria-expanded="false" ${describe}>Details</button>
-          ${grantsGov}
-        </div>
-        <div class="detail" data-detail="${esc(g.opp_id)}" hidden></div>
-      </div>
-      ${scoreCell(g)}
-      ${actionsHtml(g)}
-    </article>`;
-  }
-
   function render() {
     const shown = visible();
     const gs = groups();
-    els.results.classList.toggle("readonly", !signInOn());
+    els.results.classList.toggle("public", !state.view.member);
     els.count.textContent = countLine(shown.length, state.total);
     if (!shown.length) {
       els.results.innerHTML = state.grants.length
         ? `<p class="empty">Everything here was marked Not for us. Turn on Show hidden to see it.</p>`
-        : `<p class="empty">Nothing matches. Widen the closing window, lower the relevance bar, or clear the search.</p>`;
+        : `<p class="empty">${esc(state.view.emptyText)}</p>`;
     } else {
-      els.results.innerHTML = gs.map((grp) => `<section class="group"><h2>${esc(grp.label)} <span>(${grp.items.length})</span></h2>${grp.items.map(rowHtml).join("")}</section>`).join("");
+      els.results.innerHTML = gs.map((grp) => `<section class="group"><h2>${esc(grp.label)} <span>(${grp.items.length})</span></h2>${grp.items.map((g) => rowHtml(g, state.view)).join("")}</section>`).join("");
     }
     renderHiddenToggle();
     renderStrip();
@@ -489,8 +573,7 @@
     const gap = (a, b) => `calc(${b.pct - a.pct}% + ${b.off - a.off}px)`;
     const markers = placed.map((m, i) => {
       const g = m.g;
-      const s = g.relevance_score;
-      const h = s === null || s === undefined ? 12 : 12 + s * 10;
+      const h = barHeight(g, state.view);
       const reach = [`${HIT}px`];
       if (i > 0) reach.push(gap(placed[i - 1], m));
       if (i < placed.length - 1) reach.push(gap(m, placed[i + 1]));
@@ -587,13 +670,7 @@
       const res = await fetch(`/api/grants/${encodeURIComponent(id)}`, { headers: { Accept: "application/json" } });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const g = await res.json();
-      const rows = [
-        ["Opportunity", g.opp_id], ["Status", g.opportunity_status], ["Posted", fmtDate(g.post_date)],
-        ["Closes", g.close_date ? (placeholderDate(g) ? "no firm deadline" : fmtDate(g.close_date)) : "no date"], ["Categories", g.funding_categories],
-        ["Award ceiling", g.award_ceiling ? `$${Number(g.award_ceiling).toLocaleString()}` : ""],
-        ["Program funding", g.estimated_total_funding ? `$${Number(g.estimated_total_funding).toLocaleString()}` : ""],
-        ["Matched keywords", g.matched_keywords], ["Scored by", g.relevance_model],
-      ].filter(([, v]) => v);
+      const rows = detailRows(g, state.view);
       box.innerHTML = `<dl>${rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl><p>${esc(g.description || "No description in the extract.")}</p>`;
       box.hidden = false;
       button.setAttribute("aria-expanded", "true");
@@ -615,21 +692,16 @@
   }
 
   function renderAccount() {
-    const sess = state.session;
-    els.account.hidden = !sess.auth_configured;
-    els.logout.hidden = !sess.email;
-    els.loginForm.hidden = Boolean(sess.email);
-    els.accountText.textContent = sess.email ? `Signed in as ${sess.email}.` : "Team members sign in to track grants and get reminders.";
+    const v = state.view;
+    els.account.hidden = !v.signIn;
+    els.logout.hidden = !v.member;
+    els.loginForm.hidden = v.member;
+    els.accountText.textContent = v.accountText;
+    els.signInHelp.textContent = v.signInHelp;
+    els.signInHelp.hidden = !v.signInHelp;
   }
 
   function askToSignIn(message) {
-    if (!state.session.auth_configured) {
-      // No sign-in on this server: say so where it can be seen.
-      els.notice.textContent = message;
-      els.notice.hidden = false;
-      els.notice.scrollIntoView({ block: "center", behavior: "smooth" });
-      return;
-    }
     els.loginFeedback.className = "feedback bad";
     els.loginFeedback.textContent = message;
     if (!els.loginForm.hidden) els.loginEmail.focus();
@@ -640,8 +712,7 @@
     try {
       const res = await fetch("/api/session", { headers: { Accept: "application/json" } });
       if (res.ok) state.session = await res.json();
-    } catch (err) { /* read-only without a session */ }
-    renderAccount();
+    } catch (err) { /* a visitor without a session */ }
   }
 
   async function requestLink(event) {
@@ -695,8 +766,8 @@
   els.loginForm.addEventListener("submit", requestLink);
   els.logout.addEventListener("click", signOut);
 
-  // The first list waits for the session, so the buttons are right the first time.
-  Promise.all([loadSession(), loadProfile()]).then(() => { renderControls(); return loadGrants(); });
+  // The page is drawn once it knows who is looking, so a visitor never sees a member's controls and the buttons are right the first time.
+  Promise.all([loadSession(), loadProfile()]).then(() => { renderPage(); setupFilters(); return loadGrants(); });
 })();
 </script>
 </body>
