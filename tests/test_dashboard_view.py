@@ -21,6 +21,7 @@ from hypothesis import example, given, settings, strategies as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from grants.feedback import Votes, with_feedback  # noqa: E402
 from web import app as webapp  # noqa: E402
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -55,6 +56,14 @@ def call(*calls: List[Any]) -> List[Any]:
         + f"\nconst calls = {json.dumps(list(calls))};"
         + "\nconsole.log(JSON.stringify(calls.map(([name, ...args]) => { const r = eval(name)(...args); return r instanceof URLSearchParams ? r.toString() : r; })));"
     )
+    done = subprocess.run(["node", "-e", program], capture_output=True, text=True, env=ENV)
+    assert done.returncode == 0, done.stderr
+    return json.loads(done.stdout)
+
+
+def evaluate(*expressions: str) -> List[Any]:
+    """The value of each JavaScript expression, run in the view rules in one node process."""
+    program = RULES + f"\nconsole.log(JSON.stringify([{', '.join(expressions)}]));"
     done = subprocess.run(["node", "-e", program], capture_output=True, text=True, env=ENV)
     assert done.returncode == 0, done.stderr
     return json.loads(done.stdout)
@@ -241,6 +250,50 @@ class TestMembersOwnScores:
     def test_a_grant_not_scored_for_them_reads_as_such(self):
         html = call(["rowHtml", row(relevance_score=None, relevance_reason="Not scored for your profile yet"), {"member": True}])[0]
         assert "Not scored for your profile yet" in html and "unscored" in html
+
+
+class TestMarks:
+    """What a member's Not for us hides, and what a mark on the page changes, against what the server says for the same votes."""
+
+    @staticmethod
+    def server_row(others_up, others_down, mine, watched, personal):
+        votes = Votes(up=others_up + (mine == 1), down=others_down + (mine == -1), mine=mine)
+        return with_feedback([{"opp_id": "G-1", "also_posted": [], "watched": watched}], {"G-1": votes}, personal=personal)[0]
+
+    marks = dict(others_up=st.integers(0, 3), others_down=st.integers(0, 3), mine=st.sampled_from([None, 1, -1]), watched=st.booleans(), personal=st.booleans())
+
+    @settings(max_examples=60, deadline=None)
+    @given(**marks)
+    def test_a_row_is_hidden_when_the_server_says_it_is(self, others_up, others_down, mine, watched, personal):
+        sent = self.server_row(others_up, others_down, mine, watched, personal)
+        assert evaluate(f"hiddenFor({json.dumps(sent)}, {json.dumps(personal)})") == [sent["hidden"]]
+
+    @settings(max_examples=60, deadline=None)
+    @given(after=st.sampled_from([None, 1, -1]), **marks)
+    def test_after_a_vote_the_row_is_the_one_the_server_would_send(self, after, others_up, others_down, mine, watched, personal):
+        sent = self.server_row(others_up, others_down, mine, watched, personal)
+        expected = self.server_row(others_up, others_down, after, watched, personal)
+        got = evaluate(f"(() => {{ const g = {json.dumps(sent)}; applyVote(g, {json.dumps(after)}, {json.dumps(personal)}); return g; }})()")[0]
+        for key in ("my_verdict", "votes_up", "votes_down", "team_verdict", "hidden"):
+            assert got[key] == expected[key], key
+
+    @settings(max_examples=60, deadline=None)
+    @given(**marks)
+    def test_tracking_a_grant_or_taking_that_back_shows_what_the_server_would(self, others_up, others_down, mine, watched, personal):
+        sent = self.server_row(others_up, others_down, mine, watched, personal)
+        expected = self.server_row(others_up, others_down, mine, not watched, personal)
+        got = evaluate(f"(() => {{ const g = {json.dumps(sent)}; g.watched = !g.watched; return hiddenFor(g, {json.dumps(personal)}); }})()")
+        assert got == [expected["hidden"]]
+
+    def test_a_members_own_not_for_us_hides_a_grant_the_team_likes(self):
+        # The team's two Relevant marks would show it; their own Not for us decides for them.
+        sent = self.server_row(2, 0, -1, False, True)
+        assert sent["hidden"] is True and sent["votes_up"] is None
+        assert evaluate(f"hiddenFor({json.dumps(sent)}, true)", f"hiddenFor({json.dumps(sent)}, false)") == [True, False]
+
+    def test_the_page_uses_the_view_to_say_whose_rule_applies(self):
+        assert "g.hidden = hiddenFor(g, state.view.personal);" in SCRIPT
+        assert "applyVote(g, clearing ? null : verdict, state.view.personal);" in SCRIPT
 
 
 class TestRows:

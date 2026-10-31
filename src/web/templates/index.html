@@ -416,6 +416,23 @@
     </article>`;
   }
 
+  // Whether a row is left out of the list until asked for: the team's Not for us for a member on the team profile, and
+  // their own for one with a profile of their own (their vote decides for them alone), unless the grant is tracked.
+  // `with_feedback` in grants/feedback.py says the same on the server, and the tests hold the two together.
+  const hiddenFor = (g, personal) => (personal ? g.my_verdict === -1 : (g.team_verdict || 0) < 0) && !g.watched;
+
+  // The row after the member's vote (null takes it back), as the server would send it. The team's counts and verdict move
+  // only when they are sent: a member with a profile of their own is sent none.
+  function applyVote(g, verdict, personal) {
+    if (g.votes_up != null && g.votes_down != null) {
+      g.votes_up += (verdict === 1) - (g.my_verdict === 1);
+      g.votes_down += (verdict === -1) - (g.my_verdict === -1);
+      g.team_verdict = Math.sign(g.votes_up - g.votes_down);
+    }
+    g.my_verdict = verdict;
+    g.hidden = hiddenFor(g, personal);
+  }
+
   // The label and value pairs of a grant's details, those with a value. A visitor's leave out the keywords and the scorer.
   function detailRows(g, view) {
     const rows = [
@@ -618,7 +635,7 @@
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const g = state.grants.find((x) => x.opp_id === id);
-      if (g) { g.watched = !on; g.hidden = (g.team_verdict || 0) < 0 && !g.watched; }
+      if (g) { g.watched = !on; g.hidden = hiddenFor(g, state.view.personal); }
       button.classList.toggle("on", !on);
       button.setAttribute("aria-pressed", String(!on));
       button.textContent = on ? "Track" : "Tracked";
@@ -651,7 +668,7 @@
         return;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      applyVote(g, clearing ? null : verdict);
+      applyVote(g, clearing ? null : verdict, state.view.personal);
       g.my_vote_opp_id = clearing ? g.opp_id : target;
       row.querySelectorAll(".vote").forEach((b) => {
         const v = Number(b.dataset.vote);
@@ -664,16 +681,6 @@
     } finally {
       delete row.dataset.busy;
     }
-  }
-
-  function applyVote(g, verdict) {
-    if (g.votes_up != null && g.votes_down != null) {
-      g.votes_up += (verdict === 1) - (g.my_verdict === 1);
-      g.votes_down += (verdict === -1) - (g.my_verdict === -1);
-      g.team_verdict = Math.sign(g.votes_up - g.votes_down);
-      g.hidden = g.team_verdict < 0 && !g.watched;
-    }
-    g.my_verdict = verdict;
   }
 
   async function toggleDetail(button) {
