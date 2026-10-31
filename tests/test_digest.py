@@ -46,7 +46,20 @@ class TestRender:
         assert "Deadline reminders (1)" in email.text and "Grant TRACKED" in email.text
         assert "Grant LOW" not in email.text and "Grant PAST" not in email.text
         assert "(3 days left)" in email.text
-        assert "Grants below 4/5 are left out unless tracked" in email.text
+        assert "Grants below 4/5 are left out unless tracked or marked Relevant by the team." in email.text
+
+    def test_the_scored_footnote_names_each_way_a_low_score_gets_listed(self):
+        marked = _grant("MARKED", 40, score=1, net_votes=1)
+        email = _email([marked, _grant("LOW", 41, score=1)], NotifySettings(overview_day="never"))
+        assert "Grant MARKED" in email.text and "Grant LOW" not in email.text  # the team's Relevant mark gets it in
+        footnote = "Grants below 4/5 are left out unless tracked or marked Relevant by the team."
+        assert footnote in email.text and footnote in email.html
+
+    def test_the_keyword_footnote_gives_the_order_the_list_is_in(self):
+        email = _email([_grant("FEW", 40, score=None, matches=1)], NotifySettings(overview_day="never"))
+        order = "those closing within 30 days first, then most matches first"
+        assert order in email.text and order in email.html
+        assert "Set up relevance scoring to rank them by fit." in email.text
 
     def test_html_escapes_and_links(self):
         g = GrantState(opp_id="A", title="Cats & <Dogs>", url="https://x/A", close_date=TODAY + timedelta(days=9), score=5)

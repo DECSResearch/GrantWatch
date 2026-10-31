@@ -171,6 +171,10 @@ class TestNotify:
             assert "2076" not in text and "999,999,999" not in text and "999999999" not in text
         assert "no firm deadline" in first_email.text
 
+    def test_the_footnote_says_what_gets_a_low_score_listed(self, first_email):
+        footnote = "Grants below 4/5 are left out unless tracked or marked Relevant by the team."
+        assert footnote in first_email.text and footnote in first_email.html
+
     def test_entities_are_decoded_in_the_text_and_escaped_in_the_html(self, first_email):
         assert "Cyber Research & Workforce Education" in first_email.text
         assert "Cyber Research &amp; Workforce Education" in first_email.html

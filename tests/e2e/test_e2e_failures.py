@@ -103,6 +103,6 @@ class TestModelUnreachable:
         wanted = {row["title"] for opp_id, row in by_id.items() if opp_id != "E2E-STATES" and row["matched_keywords"]}
         assert {title for _, title in entries} == wanted and len(entries) == len(wanted)
         assert "Foundations of Trusted Systems" in wanted and "State and Local Cybersecurity Grant Program" not in text
-        assert "match the research keywords in the profile" in text
+        assert "match the research keywords in the profile, those closing within 30 days first, then most matches first." in text
         recorded = {row["opp_id"] for row in fresh.query("SELECT opp_id FROM notifications WHERE kind = 'new'")}
         assert "E2E-STATES" not in recorded and "E2E-NOKW" not in recorded

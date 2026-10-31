@@ -18,6 +18,7 @@ from notifications.planner import (
     OVERVIEW,
     REMINDER,
     REMOVED,
+    URGENT_DAYS,
     GrantState,
     Notice,
     NotifySettings,
@@ -302,10 +303,11 @@ def _compose(plan: Plan, settings: NotifySettings, today: date, caps: Dict[str, 
         parts.append(heading + table + more)
 
     if plan.scoring_active:
-        footnote = f"Scores are relative to the research profile. Grants below {plan.min_score}/5 are left out unless tracked."
+        footnote = (f"Scores are relative to the research profile. Grants below {plan.min_score}/5 are left out "
+                    "unless tracked or marked Relevant by the team.")
     else:
-        footnote = ("These grants match the research keywords in the profile, most matches first. Set up "
-                    "relevance scoring to rank them by fit.")
+        footnote = (f"These grants match the research keywords in the profile, those closing within {URGENT_DAYS} days "
+                    "first, then most matches first. Set up relevance scoring to rank them by fit.")
     footer = [footnote]
     if plan.has_tracked:
         footer.append("Tracked grants get a reminder at each of these marks before they close: "
