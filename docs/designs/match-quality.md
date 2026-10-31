@@ -341,6 +341,13 @@ resolutions win over the text above.
   (`scoring_active` false), a grant is announced only if
   `matches >= max(1, keyword_threshold)`. A model outage on a
   score-everything database therefore never announces arbitrary grants.
+  - Only model scores make `scoring_active` true. The pre-check's rule 0s
+    (`relevance_model = 'rule'`, carried as `GrantState.by_rule`) do not, or
+    a fresh database with the model down would send nothing.
+  - The fallback never announces a rule-scored grant, though its keywords
+    match: Grants.gov says this applicant cannot apply.
+  - The loader keeps a stored summary when the incoming score is a rule's,
+    because that row carries only the truncated fallback.
 - **A2 wording.** The stat is renamed to "sent to the model"; the admin
   funnel shows "candidates for scoring".
 
