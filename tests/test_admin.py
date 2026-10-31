@@ -12,7 +12,7 @@ import string
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlsplit
@@ -307,6 +307,10 @@ class FakeDb:
 STARTED = datetime(2026, 9, 14, 12, 30, tzinfo=timezone.utc)
 
 
+def _emailed(opp_id, title, agency_code, declined=False, close=date(2026, 11, 6)):
+    return {"opp_id": opp_id, "title": title, "agency_code": agency_code, "close_date": close, "declined": declined}
+
+
 def _answers(token="tok-1"):
     return {
         admin._RUNS_SQL: [
@@ -321,8 +325,14 @@ def _answers(token="tok-1"):
         admin._HEALTH_SQL: [{
             "data_as_of": STARTED, "data_age_seconds": 2 * HOUR, "open": 10, "open_scored": 8, "open_unscored": 2, "watched": 1,
             "last_ok_ingest_age_seconds": 2 * HOUR, "last_ok_notify_age_seconds": 600.0, "last_sent": STARTED,
-            "feedback_votes": 7, "feedback_emailed": 4, "feedback_declined": 1,
+            "feedback_votes": 7,
         }],
+        # Three postings of one program and three plain grants went out as new: four programs, one marked Not for us.
+        admin._FEEDBACK_SQL: [
+            _emailed("D-AFOSR", "Instrumentation Program (DURIP)", "AFOSR"), _emailed("D-ARMY", "Instrumentation Program (DURIP)", "ARMY", declined=True),
+            _emailed("D-ONR", "Instrumentation Program (DURIP)", "ONR"), _emailed("P-1", "One", "NSF"), _emailed("P-2", "Two", "NIH"),
+            _emailed("P-3", "Three", "DOE"),
+        ],
         admin._RECIPIENTS_SQL: [
             {"email": "a@und.edu", "name": None, "min_score": None, "active": True, "unsubscribed_at": None,
              "last_emailed": STARTED, "unsubscribe_token": token},
@@ -442,12 +452,42 @@ class TestAdminStatus:
         assert status["feedback"] == {"votes": 7, "emailed": 4, "declined": 1, "days": 30}
         assert not any(name.startswith("feedback") for name in status["health"])
 
-    def test_feedback_counts_distinct_grants_emailed_as_new_in_the_last_30_days_that_someone_marked_not_for_us(self):
-        sql = " ".join(admin._HEALTH_SQL.split())
-        assert "(SELECT COUNT(*) FROM grant_feedback) AS feedback_votes" in sql
-        assert "COUNT(DISTINCT opp_id) FROM notifications WHERE kind = 'new' AND sent_at > NOW() - INTERVAL '30 days') AS feedback_emailed" in sql
-        assert "JOIN grant_feedback f ON f.opp_id = n.opp_id AND f.verdict = -1 WHERE n.kind = 'new'" in sql
-        assert "COUNT(DISTINCT n.opp_id)" in sql and sql.endswith("AS feedback_declined FROM grants g;")
+    def test_feedback_reads_the_postings_emailed_as_new_in_the_last_30_days_and_whether_someone_marked_each_not_for_us(self):
+        assert "(SELECT COUNT(*) FROM grant_feedback) AS feedback_votes" in " ".join(admin._HEALTH_SQL.split())
+        assert "feedback_emailed" not in admin._HEALTH_SQL and "feedback_declined" not in admin._HEALTH_SQL  # counted per program below
+        sql = " ".join(admin._FEEDBACK_SQL.split())
+        assert "SELECT DISTINCT opp_id FROM notifications WHERE kind = 'new' AND sent_at > NOW() - INTERVAL '30 days'" in sql
+        assert "LEFT JOIN grants g ON g.opp_id = n.opp_id" in sql  # a posting that left the table is still counted
+        assert "EXISTS (SELECT 1 FROM grant_feedback f WHERE f.opp_id = n.opp_id AND f.verdict = -1) AS declined" in sql
+
+    def test_a_program_emailed_as_three_postings_counts_once_and_is_declined_when_any_posting_is(self):
+        rows = [_emailed(f"D-{a}", "Instrumentation Program (DURIP)", a, declined=a == "ONR") for a in ("AFOSR", "ARMY", "ONR")]
+        assert admin.feedback_programs(rows) == (1, 1)  # one row the team saw and rejected, not "1 of the 3 grants emailed"
+        assert admin.feedback_programs([dict(r, declined=False) for r in rows]) == (1, 0)
+
+    def test_plain_grants_programs_of_other_days_and_grants_that_left_the_table_each_count_once(self):
+        rows = [
+            _emailed("A", "One", "NSF", declined=True), _emailed("B", "Two", "NIH"),
+            _emailed("D1", "Program (DURIP)", "AFOSR"), _emailed("D2", "Program (DURIP)", "ONR", close=date(2026, 12, 1)),  # another day
+            {"opp_id": "GONE", "title": None, "agency_code": None, "close_date": None, "declined": True},
+        ]
+        assert admin.feedback_programs(rows) == (5, 2)
+        assert admin.feedback_programs([]) == (0, 0)
+
+    @given(st.integers(1, 5), st.booleans())
+    def test_more_postings_of_one_program_never_make_it_more_programs(self, postings, marked):
+        rows = [_emailed(f"D{i}", "Call (DURIP)", f"AG{i}", declined=marked and i == postings - 1) for i in range(postings)]
+        assert admin.feedback_programs(rows) == (1, int(marked))
+
+    @given(st.lists(st.tuples(st.sampled_from(["A", "B", "C"]), st.sampled_from(["", " (DURIP)", " (MURI)"]), st.sampled_from([date(2026, 11, 6), date(2026, 11, 13), None]),
+                              st.booleans()), max_size=15, unique_by=lambda t: t[:3]), st.data())
+    def test_the_share_counts_programs_never_more_than_postings_and_does_not_depend_on_order(self, picks, data):
+        rows = [_emailed(f"G{i}", f"Call{tag}", agency, declined=declined, close=close) for i, (agency, tag, close, declined) in enumerate(picks)]
+        emailed, declined = admin.feedback_programs(rows)
+        assert declined <= emailed <= len(rows)
+        assert declined <= sum(1 for r in rows if r["declined"])  # a program is declined by a posting, never on its own
+        assert (emailed == 0) == (not rows) and (declined == 0) == (not any(r["declined"] for r in rows))
+        assert admin.feedback_programs(data.draw(st.permutations(rows))) == (emailed, declined)
 
     def test_the_profile_and_settings_come_with_it(self, fake_db):
         status = admin.admin_status()
@@ -455,14 +495,14 @@ class TestAdminStatus:
         assert status["settings"]["data_source"] == "extract"
 
     def test_a_fresh_database_reports_an_empty_page(self, monkeypatch):
-        answers = {admin._RUNS_SQL: [], admin._HEALTH_SQL: [{}], admin._RECIPIENTS_SQL: [], admin._EMAILS_SQL: []}
+        answers = {admin._RUNS_SQL: [], admin._HEALTH_SQL: [{}], admin._FEEDBACK_SQL: [], admin._RECIPIENTS_SQL: [], admin._EMAILS_SQL: []}
         monkeypatch.setattr(admin, "db_connection", FakeDb(answers).connection)
         monkeypatch.setattr(admin, "_ensure_runs_table", lambda: None)
         monkeypatch.setattr(admin, "load_profile", lambda: Profile())
         status = admin.admin_status()
         assert status["runs"] == [] and status["emails"] == []
         assert status["health"]["open"] is None and status["health"]["scoring_on"] is False
-        assert status["feedback"] == {"votes": None, "emailed": None, "declined": None, "days": 30}
+        assert status["feedback"] == {"votes": None, "emailed": 0, "declined": 0, "days": 30}
         assert status["warnings"] == ["No daily run has been recorded yet.", "Nobody gets email yet: there are no active recipients."]
         json.dumps(status)
 

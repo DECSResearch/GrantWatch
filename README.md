@@ -199,8 +199,8 @@ break?". It is read-only and shows:
 - the last 15 days of runs, each with its numbers and the log lines it wrote;
 - the team (research profile, thresholds, recipients, how many votes there
   are and what share of the grants emailed in the last 30 days someone marked
-  Not for us), the emails sent per day, and the settings that shape a run. No
-  keys or passwords.
+  Not for us, counting a program posted by several services once), the emails
+  sent per day, and the settings that shape a run. No keys or passwords.
 
 It asks for HTTP Basic credentials: each person has a named account in
 `GRANTS_ADMIN_USERS`, one `name:scrypt$...` entry per person (comma or newline

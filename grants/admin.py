@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import requests
 from psycopg2.extras import RealDictCursor
 
+from grants.display import Posting, group_postings
 from grants.profile import Profile, load_profile
 from grants.runs import redact
 from grants.sql_utils import db_connection, ensure_schema, open_grant_sql
@@ -39,9 +40,6 @@ _HEALTH_FIELDS = (
     "data_as_of", "data_age_seconds", "open", "open_scored", "open_unscored", "watched",
     "last_ok_ingest_age_seconds", "last_ok_notify_age_seconds",
 )
-# Total votes, then of the grants emailed in the last _FEEDBACK_DAYS days, how many there were and
-# how many someone marked Not for us. Read with the health numbers, reported as a block of their own.
-_FEEDBACK_FIELDS = ("votes", "emailed", "declined")
 _RECIPIENT_FIELDS = ("email", "name", "min_score", "active", "unsubscribed_at", "last_emailed")
 _EMAIL_FIELDS = ("email", "day", "new", "reminder", "changed", "removed", "overview")
 
@@ -55,6 +53,22 @@ def run_state(finished_at: Any, ok: Optional[bool], age_seconds: Optional[float]
         gone = superseded or (age_seconds is not None and age_seconds > RUNNING_SECONDS)
         return "did not finish" if gone else "running"
     return "ok" if ok else "failed"
+
+
+def feedback_programs(rows: List[Dict[str, Any]]) -> Tuple[int, int]:
+    """(emailed, declined): how many programs the rows stand for, and how many someone marked Not for us.
+
+    ``rows`` are the emailed postings (see _FEEDBACK_SQL). Postings of one program count once,
+    as the team sees them in one row, and the program is declined when any of them has a
+    Not for us vote.
+    """
+    postings = [
+        Posting(opp_id=row["opp_id"], title=row.get("title") or "", agency_code=row.get("agency_code") or "", close=row.get("close_date"))
+        for row in rows
+    ]
+    marked = {row["opp_id"] for row in rows if row.get("declined")}
+    groups = group_postings(postings)
+    return len(groups), sum(1 for group in groups if marked & {group.lead, *group.also})
 
 
 def _ago(seconds: float) -> str:
@@ -194,13 +208,20 @@ _HEALTH_SQL = f"""
            (SELECT EXTRACT(EPOCH FROM NOW() - MAX(started_at))::float FROM job_runs
              WHERE step = 'notify' AND finished_at IS NOT NULL AND ok) AS last_ok_notify_age_seconds,
            (SELECT MAX(sent_at)::timestamptz FROM notifications) AS last_sent,
-           (SELECT COUNT(*) FROM grant_feedback) AS feedback_votes,
-           (SELECT COUNT(DISTINCT opp_id) FROM notifications
-             WHERE kind = 'new' AND sent_at > NOW() - INTERVAL '{_FEEDBACK_DAYS} days') AS feedback_emailed,
-           (SELECT COUNT(DISTINCT n.opp_id) FROM notifications n
-             JOIN grant_feedback f ON f.opp_id = n.opp_id AND f.verdict = -1
-             WHERE n.kind = 'new' AND n.sent_at > NOW() - INTERVAL '{_FEEDBACK_DAYS} days') AS feedback_declined
+           (SELECT COUNT(*) FROM grant_feedback) AS feedback_votes
     FROM grants g;
+"""
+
+# The postings emailed as new in the last _FEEDBACK_DAYS days, one row each, with what the grouping
+# rules read and whether anyone marked it Not for us. A program posted by several services is
+# emailed as one row but recorded once per posting, so these rows are folded (feedback_programs).
+# A posting that has left the grants table has no title or date and stands alone.
+_FEEDBACK_SQL = f"""
+    SELECT n.opp_id, g.title, g.agency_code, g.close_date::date AS close_date,
+           EXISTS (SELECT 1 FROM grant_feedback f WHERE f.opp_id = n.opp_id AND f.verdict = -1) AS declined
+    FROM (SELECT DISTINCT opp_id FROM notifications
+          WHERE kind = 'new' AND sent_at > NOW() - INTERVAL '{_FEEDBACK_DAYS} days') n
+    LEFT JOIN grants g ON g.opp_id = n.opp_id;
 """
 
 # The unsubscribe token is deliberately not selected.
@@ -377,6 +398,8 @@ def admin_status() -> Dict[str, Any]:
         run_rows = [dict(row) for row in cur.fetchall()]
         cur.execute(_HEALTH_SQL)
         health_row = dict(cur.fetchone() or {})
+        cur.execute(_FEEDBACK_SQL)
+        emailed_postings = [dict(row) for row in cur.fetchall()]
         cur.execute(_RECIPIENTS_SQL)
         recipients = [_pick(row, _RECIPIENT_FIELDS) for row in cur.fetchall()]
         cur.execute(_EMAILS_SQL, {"tz": zone})
@@ -390,7 +413,8 @@ def admin_status() -> Dict[str, Any]:
         run["has_log"] = bool(run["has_log"])
         runs.append(run)
     health = _pick(health_row, _HEALTH_FIELDS)
-    feedback = {**{name: health_row.get(f"feedback_{name}") for name in _FEEDBACK_FIELDS}, "days": _FEEDBACK_DAYS}
+    emailed, declined = feedback_programs(emailed_postings)
+    feedback = {"votes": health_row.get("feedback_votes"), "emailed": emailed, "declined": declined, "days": _FEEDBACK_DAYS}
     health["data_as_of"] = _iso(health["data_as_of"])
     health["scoring_on"] = profile.is_configured
     # Then every open grant goes to the model and the keywords only label what they match (grants_data.pipeline).

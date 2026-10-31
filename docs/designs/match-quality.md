@@ -410,6 +410,10 @@ resolutions win over the text above.
     `[lead, *also_posted]` that holds the viewer's vote and returns
     `my_vote_opp_id`: that posting, or the lead when there is none. The
     dashboard sends its votes to that posting.
+  - The admin share counts programs, as everywhere else. `Notice.records`
+    writes one `new` notification per posting, so the emailed postings are
+    folded with `group_postings` (`feedback_programs`), and a program is
+    declined when any posting of it has a Not for us vote.
 
 ### UX
 

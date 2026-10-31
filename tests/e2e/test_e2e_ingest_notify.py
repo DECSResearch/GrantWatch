@@ -11,8 +11,10 @@ import io
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 
-from harness import MODEL, SCORES, NOT_SENT, new_section, plain_text, read_email
+from harness import ADMIN_PASSWORD, ADMIN_USER, MODEL, SCORES, NOT_SENT, new_section, plain_text, read_email
+from web import app as webapp
 
 # The order notifications/planner.py gives: grants closing within 30 days first, soonest first (the
 # first of them scores lower than the next); then the rest by score, then deadline. The forecast
@@ -82,6 +84,17 @@ def later_emails(world, first_email):
         after_third=world.emails(),
         second=read_email(after_second[-1]),
         runs=world.query("SELECT * FROM job_runs WHERE step = 'notify' ORDER BY id"),
+    )
+
+
+@pytest.fixture(scope="module")
+def admin_after_a_vote(world, later_emails):
+    """Every program has gone out as new; then one member marks one DURIP posting Not for us, and the admin page is read."""
+    world.query("INSERT INTO grant_feedback (opp_id, email, verdict) VALUES ('DURIP-ARMY-26', 'lead@und.edu', -1)")
+    client = TestClient(webapp.app, base_url="http://localhost")
+    return SimpleNamespace(
+        body=client.get("/admin/api", auth=(ADMIN_USER, ADMIN_PASSWORD)).json(),
+        recorded=world.query("SELECT COUNT(DISTINCT opp_id) AS n FROM notifications WHERE kind = 'new'")[0]["n"],
     )
 
 
@@ -195,3 +208,9 @@ class TestNotify:
         assert len(later_emails.after_third) == 2  # the third run had nothing new to say
         assert [run["stats"]["sent"] for run in later_emails.runs] == [1, 1, 0]
         assert later_emails.runs[-1]["stats"]["quiet"] == 1
+
+
+class TestAdminFeedbackShare:
+    def test_it_counts_programs_not_the_postings_each_was_recorded_under(self, admin_after_a_vote):
+        assert admin_after_a_vote.recorded == 9  # seven programs; the DURIP triple is three rows of notifications
+        assert admin_after_a_vote.body["feedback"] == {"votes": 1, "emailed": 7, "declined": 1, "days": 30}
