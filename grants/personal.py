@@ -38,7 +38,12 @@ _OUTAGE = ("cannot reach", "authentication failed")
 @dataclass(frozen=True)
 class Member:
     email: str
-    summary: str  # cleaned: 40 to 2,000 characters (grants.members.clean_summary)
+    summary: str  # cleaned: 40 to 2,000 characters (grants.members.clean_summary); what the model reads and the key is made from
+    stored: Optional[str] = None  # the text as the table holds it, which a write is matched against; None when it is already clean
+
+    @property
+    def stored_text(self) -> str:
+        return self.summary if self.stored is None else self.stored
 
 
 @dataclass
@@ -100,7 +105,7 @@ def fetch_members() -> List[Member]:
     members = []
     for email, summary in rows:
         try:
-            members.append(Member(email, clean_summary(summary)))
+            members.append(Member(email, clean_summary(summary), summary))
         except ProfileError as exc:
             logger("warning", f"Skipping the profile of {email}: {exc}")
     return members
@@ -114,13 +119,14 @@ def fetch_scored_numbers(email: str, key: str) -> Set[str]:
 
 
 # One statement in one transaction. The rows are written only while the member still has the profile
-# they were scored for (the summary is part of the match): a profile deleted or edited meanwhile writes
-# nothing, where the foreign key would otherwise raise or old-text scores would outlive the edit.
+# they were scored for: a profile deleted or edited meanwhile writes nothing, where the foreign key would
+# otherwise raise or old-text scores would outlive the edit. The match is on the text as stored, not the
+# cleaned text the model read: a profile written by hand need not be clean, and must still be saved.
 _WRITE_SQL = """
     INSERT INTO member_scores (opp_id, email, score, reason, model, score_key, scored_at)
     SELECT v.opp_id, v.email, v.score, v.reason, v.model, v.score_key, v.scored_at
-    FROM (VALUES %s) AS v (opp_id, email, score, reason, model, score_key, scored_at, summary)
-    WHERE EXISTS (SELECT 1 FROM member_profiles p WHERE p.email = v.email AND p.summary = v.summary)
+    FROM (VALUES %s) AS v (opp_id, email, score, reason, model, score_key, scored_at, stored)
+    WHERE EXISTS (SELECT 1 FROM member_profiles p WHERE p.email = v.email AND p.summary = v.stored)
     ON CONFLICT (opp_id, email) DO UPDATE SET
         score = EXCLUDED.score, reason = EXCLUDED.reason, model = EXCLUDED.model,
         score_key = EXCLUDED.score_key, scored_at = EXCLUDED.scored_at;
@@ -140,12 +146,13 @@ def _scored_at(value: Any) -> datetime:
 def write_scores(member: Member, key: str, entries: Dict[str, Dict[str, Any]]) -> int:
     """Save one chunk's scores (``ScoringOutcome.new_entries``) for ``member``; the number of rows written.
 
-    0 when the member's profile is gone or has other text now: nothing is written then.
+    0 when the member's profile is gone or no longer holds the text they were scored for (``member.stored_text``):
+    nothing is written then.
     """
     if not entries:
         return 0
     rows = [
-        (opp_id, member.email, entry["score"], entry.get("reason") or "", entry.get("model"), key, _scored_at(entry.get("scored_at")), member.summary)
+        (opp_id, member.email, entry["score"], entry.get("reason") or "", entry.get("model"), key, _scored_at(entry.get("scored_at")), member.stored_text)
         for opp_id, entry in sorted(entries.items())
     ]
     with db_connection() as conn, conn.cursor() as cur:

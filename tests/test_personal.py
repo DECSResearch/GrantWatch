@@ -378,3 +378,57 @@ class TestRun:
         monkeypatch.setattr(personal, "fetch_members", lambda: [])
         monkeypatch.setattr(personal, "score_people", lambda *a, **k: pytest.fail("nobody to score"))
         assert personal.run([record(1)], TEAM, LLM, started=0.0) == Totals()
+
+
+class _Cursor:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, sql, params=None):
+        pass
+
+    def fetchall(self):
+        return self.rows
+
+
+class _Conn(_Cursor):
+    def cursor(self):
+        return _Cursor(self.rows)
+
+
+class TestFetchMembers:
+    """The text a write is matched against is the text the table holds, not the cleaned text the model reads."""
+
+    @staticmethod
+    def fetch(monkeypatch, rows):
+        monkeypatch.setattr(personal, "db_connection", lambda: _Conn(rows))
+        return personal.fetch_members()
+
+    def test_a_member_keeps_the_stored_text_beside_the_cleaned_text(self, monkeypatch):
+        stored = "I build battery models for grid-scale storage,\nmostly lithium and sodium chemistries.  "
+        (found,) = self.fetch(monkeypatch, [("a@und.edu", stored)])
+        assert found.summary == "I build battery models for grid-scale storage, mostly lithium and sodium chemistries."
+        assert found.stored == stored and found.stored_text == stored
+
+    def test_a_member_built_from_clean_text_matches_by_that_text(self):
+        assert member("a").stored_text == member("a").summary
+
+    def test_a_profile_that_cannot_be_cleaned_is_skipped(self, monkeypatch, caplog):
+        with caplog.at_level(logging.WARNING, logger="grantwatch"):
+            found = self.fetch(monkeypatch, [("a@und.edu", "too short"), ("b@und.edu", "b studies a particular corner of power-grid research.")])
+        assert [m.email for m in found] == ["b@und.edu"] and "a@und.edu" in caplog.text
+
+    @given(st.lists(st.sampled_from(["power", "grid", "storage", "models"]), min_size=12, max_size=20),
+           st.lists(st.sampled_from([" ", "  ", "\n", "\t", "\r\n"]), min_size=20, max_size=20), st.sampled_from(["", " ", "\n", "  \n"]))
+    @settings(max_examples=60, **SLOW)
+    def test_the_stored_text_is_returned_exactly_whatever_the_spacing(self, words, gaps, tail):
+        stored = "".join(word + gap for word, gap in zip(words, gaps)) + tail
+        with pytest.MonkeyPatch.context() as patch:
+            (found,) = self.fetch(patch, [("a@und.edu", stored)])
+        assert found.stored_text == stored and found.summary == " ".join(stored.split())

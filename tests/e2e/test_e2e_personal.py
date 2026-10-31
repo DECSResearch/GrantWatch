@@ -2,9 +2,10 @@
 
 Real Postgres and the scripted model server. One story, told in the order it is written: a first run,
 a run with nothing changed, an edit, a time stop, then changes made directly (unsubscribing, deleting a
-profile, a write for a profile that changed) and last a stopped team pass. The fixtures run each step
-once and keep what it did, so the tests that read a fixture do not depend on their own order; the
-classes after `limited` change the database as they go and must run in the order written.
+profile, a write for a profile that changed), a stopped team pass, and last a profile written by hand
+with a line break in it. The fixtures run each step once and keep what it did, so the tests that read
+a fixture do not depend on their own order; the classes after `limited` change the database as they go
+and must run in the order written, and the last one empties it first.
 """
 from __future__ import annotations
 
@@ -13,8 +14,8 @@ from types import SimpleNamespace
 import pytest
 
 import main
-from grants.members import delete_member_profile, personal_profile, save_member_profile
-from grants.personal import Member, write_scores
+from grants.members import clean_summary, delete_member_profile, personal_profile, save_member_profile
+from grants.personal import Member, fetch_members, write_scores
 from grants.sql_utils import ensure_schema
 from harness import MODEL, NOT_SENT, SCORES, synopsis
 from llm_utils.relevance import personal_key, score_key
@@ -24,6 +25,7 @@ ALICE, BOB, CAROL = "alice@und.edu", "bob@und.edu", "carol@und.edu"
 ALICE_TEXT = "I build battery models for grid-scale storage, mostly lithium and sodium chemistries."
 BOB_TEXT = "I study wind-energy forecasting and the resilience of rural power grids to storms."
 ALICE_EDIT = ALICE_TEXT + " I also work on solid-state electrolytes."
+ALICE_HAND_TYPED = "I build battery models for grid-scale storage,\nmostly lithium and sodium chemistries.  "  # ALICE_TEXT as typed into psql
 SENT = sorted(set(SCORES))  # what the team pass sends to the model: 13 grants
 ALICE_SCORES = {"E2E-BROAD": 5, "E2E-TRUSTED": 0}
 BOB_SCORES = {"E2E-BROAD": 1}
@@ -241,3 +243,49 @@ class TestATeamOutage:
         assert outage.code == 0 and outage.loaded == [{"opp_id": "E2E-NEW"}]
         assert outage.notified == 0 and outage.emails
         assert outage.steps == ["notify", "personal", "ingest"]
+
+
+@pytest.fixture(scope="module")
+def hand_typed(world, outage):
+    """Alice's profile is inserted straight into the table with a line break and trailing spaces; two runs."""
+    assert clean_summary(ALICE_HAND_TYPED) == ALICE_TEXT != ALICE_HAND_TYPED
+    world.reset()
+    ensure_schema()
+    world.llm.profile_scores = {"battery": ALICE_SCORES}
+    assert main.main(["recipients", "add", ALICE]) == 0
+    world.query("INSERT INTO member_profiles (email, summary) VALUES (%s, %s)", (ALICE, ALICE_HAND_TYPED))
+    world.llm.requests.clear()
+    first = SimpleNamespace(code=world.ingest(), requests=[r for r in world.llm.requests if r["profile"] is not None], scores=rows(world), run=personal_run(world))
+    world.llm.requests.clear()
+    second = SimpleNamespace(code=world.ingest(), requests=list(world.llm.requests), scores=rows(world), run=personal_run(world))
+    return SimpleNamespace(first=first, second=second, stored=world.query("SELECT summary FROM member_profiles WHERE email = %s", (ALICE,))[0]["summary"])
+
+
+class TestAProfileTypedByHand:
+    def test_the_scores_are_saved_though_the_stored_text_is_not_the_cleaned_text(self, hand_typed):
+        first = hand_typed.first
+        assert first.code == 0 and first.run["stats"] == {"personal": {"people": 1, "scored": 13, "failed": 0, "pending": 0, "stopped": None}}
+        assert sorted(r["opp_id"] for r in first.scores) == SENT and {r["score_key"] for r in first.scores} == {keys(ALICE_TEXT)}
+        assert {r["score"] for r in first.scores if r["opp_id"] == "E2E-BROAD"} == {5}
+        assert {r["profile"] for r in first.requests} == {ALICE_TEXT}  # the model reads the cleaned text, in one line
+
+    def test_the_next_run_has_nothing_left_to_score(self, hand_typed):
+        second = hand_typed.second
+        assert second.code == 0 and second.requests == [] and second.scores == hand_typed.first.scores
+        assert second.run["stats"] == {"personal": {"people": 1, "scored": 0, "failed": 0, "pending": 0, "stopped": None}}
+
+    def test_the_stored_text_is_left_as_it_was_written(self, hand_typed):
+        assert hand_typed.stored == ALICE_HAND_TYPED
+
+    def test_a_member_carries_the_text_as_stored_for_the_write_and_the_cleaned_text_for_the_model(self, hand_typed):
+        (member,) = fetch_members()
+        assert (member.summary, member.stored) == (ALICE_TEXT, ALICE_HAND_TYPED)
+
+    def test_a_write_matches_the_profile_by_the_text_it_was_scored_for(self, world, hand_typed):
+        entry = {"score": 3, "reason": "r", "summary": "s", "model": MODEL, "scored_at": "2026-11-01T00:00:00+00:00"}
+        (member,) = fetch_members()
+        world.query("DELETE FROM member_scores")
+        assert write_scores(Member(ALICE, ALICE_TEXT, "I build battery models for grid-scale storage."), keys(ALICE_TEXT), {"E2E-BROAD": entry}) == 0
+        assert write_scores(Member(ALICE, ALICE_TEXT, "I build battery models for grid-scale storage,\nmostly lithium and sodium chemistries."), keys(ALICE_TEXT), {"E2E-BROAD": entry}) == 0
+        assert rows(world, ALICE) == []
+        assert write_scores(member, keys(ALICE_TEXT), {"E2E-BROAD": entry}) == 1
