@@ -98,13 +98,17 @@ class Profile:
             return False
         return not codes & (set(self.applicant_codes) | _OPEN_CODES)
 
-    def as_prompt_text(self) -> str:
-        parts = [self.summary.strip()]
+    def setting_text(self) -> str:
+        """The institution and applicant type as the prompt states them: what the profile says apart from its summary."""
+        parts = []
         if self.institution:
             parts.append(f"Institution: {self.institution.strip()}.")
         if self.applicant_type:
             parts.append(f"Applicant type: {self.applicant_type.strip()}.")
-        return " ".join(part for part in parts if part)
+        return " ".join(parts)
+
+    def as_prompt_text(self) -> str:
+        return " ".join(part for part in (self.summary.strip(), self.setting_text()) if part)
 
 
 def _as_list(value: Any) -> List[str]:
