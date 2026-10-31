@@ -8,10 +8,14 @@ Whatever the parameters, a visitor's answers must not differ by a byte.
 from __future__ import annotations
 
 import json
+import os
+from datetime import date, timedelta
 from types import SimpleNamespace
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import pytest
 from fastapi.testclient import TestClient
+from hypothesis import given, settings, strategies as st
 
 from grants.display import PUBLIC_DETAIL_FIELDS
 from grants.members import save_member_profile
@@ -20,7 +24,7 @@ from llm_utils.gpt_summarizer import description_summarizer
 from notifications import store
 from web import app as webapp
 
-ANA, BEN = "ana@und.edu", "ben@und.edu"
+ANA, BEN, CARA = "ana@und.edu", "ben@und.edu", "cara@und.edu"
 DURIP = ["DURIP-AFOSR-26", "DURIP-ARMY-26", "DURIP-ONR-26"]
 ALLOWED = set(PUBLIC_DETAIL_FIELDS) | {"also_posted", "superseded_by"}
 LONG = ("A long call for proposals. " * 40).strip()  # more than 320 characters
@@ -39,6 +43,31 @@ PATHS = [
 ]
 
 
+def iso(today, days):
+    return (today + timedelta(days=days)).isoformat()
+
+
+def windowed(today):
+    """Due-date windows that cut the list at one end or both, with limits smaller than the number of grants in them.
+
+    The fixture's grants close 12, 20, 35 (three postings), 40, 45, 55, 65, 70, 80 (two) and 100 days out, and one far off.
+    """
+    window = f"due_from={iso(today, 30)}&due_to={iso(today, 75)}"  # 8 postings: from the DURIP trio to E2E-ENTITY
+    return [
+        f"/api/grants?{window}", f"/api/grants?{window}&limit=1", f"/api/grants?{window}&limit=3", f"/api/grants?{window}&limit=5",
+        f"/api/grants?due_from={iso(today, 30)}&limit=2", f"/api/grants?due_to={iso(today, 50)}&limit=2", f"/api/grants?due_to={iso(today, 50)}&limit=4",
+        f"/api/grants?{window}&limit=3&min_score=5&watched_only=true&show_hidden=true&scores=mine&sort=relevance_score",
+        f"/api/grants?{window}&q=authentication&limit=1", f"/api/grants?due_from={iso(today, 90)}", f"/api/grants?due_from={iso(today, 90)}&due_to={iso(today, 30)}",
+    ]
+
+
+def twin_url(schema):
+    """The database address the web app is using, pointed at ``schema`` instead."""
+    parts = urlsplit(os.environ["POSTGRES_URL"])
+    query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k != "options"] + [("options", f"-csearch_path={schema}")]
+    return urlunsplit(parts._replace(query=urlencode(query)))
+
+
 def snapshot(client, paths):
     return {path: (reply.status_code, reply.content) for path, reply in ((p, client.get(p)) for p in paths)}
 
@@ -50,39 +79,68 @@ def story(world):
     world.query("UPDATE grants SET description = %s WHERE opp_id = 'E2E-PLACEHOLDER'", (LONG,))
     world.query("UPDATE grants SET description = %s WHERE opp_id = 'E2E-BROAD'", (SPACED,))
     client = TestClient(webapp.app, base_url="http://localhost")
+    member = TestClient(webapp.app, base_url="http://localhost")
+    world.sign_in(member, CARA)  # a member on the team profile, to show the changes below are ones a member can see
     ids = [row["opp_id"] for row in world.query("SELECT opp_id FROM grants ORDER BY opp_id")]
-    paths = PATHS + [f"/api/grants/{opp_id}" for opp_id in ids]
-    s = SimpleNamespace(client=client, ids=ids, paths=paths)
+    paths = PATHS + windowed(world.today) + [f"/api/grants/{opp_id}" for opp_id in ids]
+    s = SimpleNamespace(client=client, member=member, ids=ids, paths=paths, today=world.today)
+    s.member_paths = ["/api/grants?limit=3", f"/api/grants?{windowed(world.today)[0].split('?')[1]}&limit=3", "/api/grants/E2E-NOKW", "/api/grants/E2E-BROAD"]
     s.before = snapshot(client, paths)
+    s.member_before = snapshot(member, s.member_paths)
     s.watchlist = client.get("/api/watchlist")
     s.expected_order = [
         row["opp_id"] for row in world.query(
             f"SELECT g.opp_id FROM grants g WHERE {open_grant_sql('g')} ORDER BY g.close_date NULLS LAST, g.post_date DESC, g.title, g.opp_id"
         )
     ]
+    s.in_window = [
+        row["opp_id"] for row in world.query(
+            f"SELECT g.opp_id FROM grants g WHERE {open_grant_sql('g')} AND g.close_date BETWEEN %s AND %s ORDER BY g.close_date, g.post_date DESC, g.title, g.opp_id",
+            (world.today + timedelta(days=30), world.today + timedelta(days=75)),
+        )
+    ]
     s.descriptions = {row["opp_id"]: row["description"] for row in world.query("SELECT opp_id, description FROM grants")}
+    by_score = (
+        f"SELECT g.opp_id FROM grants g WHERE {open_grant_sql('g')} AND g.close_date BETWEEN %s AND %s"
+        " ORDER BY COALESCE(g.relevance_score, -1) DESC, g.close_date, g.opp_id"
+    )
+    window = (world.today + timedelta(days=30), world.today + timedelta(days=75))
+    s.by_score = {"before": [row["opp_id"] for row in world.query(by_score, window)]}
 
-    # Change only what the team holds. The scores run the other way round, the lead of a program by score
-    # would be another posting, and the tracked one would be another still.
-    world.query(
-        "UPDATE grants SET relevance_score = 5 - COALESCE(relevance_score, 0), relevance_reason = 'zebra reason', relevance_model = 'zebra-model',"
-        " relevance_profile = 'zebra', summary = 'zebra zebra cyber-physical', matched_keywords = 'zebra; cyber-physical', first_seen_at = first_seen_at - INTERVAL '40 days'"
-    )
-    world.query("INSERT INTO grant_watchlist (opp_id, note) VALUES ('DURIP-ONR-26', 'zebra note'), ('E2E-NOKW', 'zebra note'), ('E2E-BROAD', 'zebra note')")
-    for email in (ANA, BEN):
-        store.add_recipient(email)
-    world.query("UPDATE recipients SET min_score = 5")
-    save_member_profile(ANA, "I study zebra migration with cyber-physical sensors across the savanna.")
-    world.query(
-        "INSERT INTO member_scores (opp_id, email, score, reason, model, score_key) SELECT opp_id, %s, 5, 'zebra fit', 'zebra-model', 'zebra' FROM grants", (ANA,)
-    )
-    world.query(
-        "INSERT INTO grant_feedback (opp_id, email, verdict, title, agency, summary) VALUES "
-        "('DURIP-ARMY-26', %s, 1, 'zebra', 'zebra', 'zebra'), ('E2E-BROAD', %s, -1, 'zebra', 'zebra', 'zebra'), ('E2E-NOKW', %s, -1, 'zebra', 'zebra', 'zebra')",
-        (ANA, BEN, ANA),
-    )
-    s.after = snapshot(client, paths)
-    return s
+    # A second copy of the grants as they are now, for the property test at the end: it is read by pointing the app at it.
+    twin, own = f"{world.schema}_twin", os.environ["POSTGRES_URL"]
+    world.query(f"CREATE SCHEMA {twin}")
+    try:
+        world.query(f"CREATE TABLE {twin}.grants (LIKE grants INCLUDING ALL)")
+        world.query(f"INSERT INTO {twin}.grants SELECT * FROM grants")
+        s.twin_url, s.own_url = twin_url(twin), own
+
+        # Change only what the team holds. The scores run the other way round, the lead of a program by score
+        # would be another posting, and the tracked one would be another still.
+        world.query(
+            "UPDATE grants SET relevance_score = 5 - COALESCE(relevance_score, 0), relevance_reason = 'zebra reason', relevance_model = 'zebra-model',"
+            " relevance_profile = 'zebra', summary = 'zebra zebra cyber-physical', matched_keywords = 'zebra; cyber-physical', first_seen_at = first_seen_at - INTERVAL '40 days'"
+        )
+        world.query("INSERT INTO grant_watchlist (opp_id, note) VALUES ('DURIP-ONR-26', 'zebra note'), ('E2E-NOKW', 'zebra note'), ('E2E-BROAD', 'zebra note')")
+        for email in (ANA, BEN):
+            store.add_recipient(email)
+        world.query("UPDATE recipients SET min_score = 5")
+        save_member_profile(ANA, "I study zebra migration with cyber-physical sensors across the savanna.")
+        world.query(
+            "INSERT INTO member_scores (opp_id, email, score, reason, model, score_key) SELECT opp_id, %s, 5, 'zebra fit', 'zebra-model', 'zebra' FROM grants", (ANA,)
+        )
+        world.query(
+            "INSERT INTO grant_feedback (opp_id, email, verdict, title, agency, summary) VALUES "
+            "('DURIP-ARMY-26', %s, 1, 'zebra', 'zebra', 'zebra'), ('E2E-BROAD', %s, -1, 'zebra', 'zebra', 'zebra'), ('E2E-NOKW', %s, -1, 'zebra', 'zebra', 'zebra')",
+            (ANA, BEN, ANA),
+        )
+        s.after = snapshot(client, paths)
+        s.member_after = snapshot(member, s.member_paths)
+        s.by_score["after"] = [row["opp_id"] for row in world.query(by_score, window)]
+        yield s
+    finally:
+        world.mp.setenv("POSTGRES_URL", own)
+        world.query(f"DROP SCHEMA IF EXISTS {twin} CASCADE")
 
 
 def body(story, path, which="before"):
@@ -155,6 +213,17 @@ class TestTheList:
         assert [r["opp_id"] for r in listed["results"]] == story.expected_order[:3]
         assert listed["total"] == len(story.expected_order)
 
+    def test_a_window_and_a_limit_take_the_first_in_the_public_order(self, story):
+        whole, one, five = windowed(story.today)[0], windowed(story.today)[1], windowed(story.today)[3]
+        assert len(story.in_window) == 8  # three DURIP postings, the grant the rules ruled out, and four more
+        for path, postings in ((whole, 8), (five, 5), (one, 1)):
+            listed = body(story, path)[1]
+            shown = story.in_window[:postings]
+            folded = {a["opp_id"] for row in listed["results"] for a in row["also_posted"]}
+            assert [r["opp_id"] for r in listed["results"]] == [opp for opp in shown if opp not in folded], path
+        limited = body(story, five)[1]
+        assert limited["total"] == 8 and limited["count"] == 3  # the limit is smaller than what the window holds, and the total says so
+
     def test_a_score_floor_the_watchlist_and_closed_grants_are_not_a_visitors_to_ask_for(self, story):
         plain = body(story, "/api/grants")
         for path in ("/api/grants?min_score=5", "/api/grants?watched_only=true", "/api/grants?include_closed=true", "/api/grants?scores=mine"):
@@ -174,6 +243,49 @@ class TestTheList:
         for term in ("group", "zebra", "cyber-physical", "funds%20the%20group"):
             assert body(story, f"/api/grants?q={term}")[1]["results"] == [], term
             assert body(story, f"/api/grants?q={term}", "after")[1]["results"] == [], term
+
+
+class TestTheChangeWasReal:
+    """Identical answers prove nothing if the change was one nobody could see. A member on the team profile sees it."""
+
+    def test_a_member_sees_the_scores_that_changed(self, story):
+        for path in story.member_paths:
+            assert story.member_before[path] != story.member_after[path], path
+        assert json.loads(story.member_before["/api/grants/E2E-NOKW"][1])["relevance_score"] == 5
+        assert json.loads(story.member_after["/api/grants/E2E-NOKW"][1])["relevance_score"] == 0
+
+    def test_a_window_ordered_by_the_teams_score_would_have_come_out_differently_in_each_state(self, story):
+        first = slice(0, 5)  # the postings a limit of 5 keeps
+        assert story.by_score["before"][first] != story.in_window[first] and story.by_score["after"][first] != story.in_window[first]
+        assert story.by_score["before"][first] != story.by_score["after"][first]
+
+
+PARAMETERS = st.fixed_dictionaries({}, optional={
+    "q": st.sampled_from(["cyber", "group", "zebra", "funds", "Navy", "E2E", "authentication", "network"]),
+    "limit": st.integers(1, 20), "min_score": st.integers(0, 5), "closing_within": st.integers(1, 120),
+    "stage": st.sampled_from(["concept", "full"]), "scores": st.sampled_from(["mine", "team"]), "sort": st.sampled_from(["relevance_score", "close_date"]),
+    **{name: st.sampled_from(["true", "false"]) for name in ("watched_only", "show_hidden", "include_closed", "include_forecasted")},
+    **{name: st.integers(-10, 120).map(lambda n: iso(date.today(), n)) for name in ("due_from", "due_to")},
+})
+
+
+class TestForAnyParameters:
+    @settings(max_examples=80, deadline=None)
+    @given(params=PARAMETERS)
+    def test_what_the_team_holds_changes_no_byte_of_the_list_whatever_is_asked_for(self, story, world, params):
+        """The same query on two databases that differ only in the team's data: the grants as they were loaded, and the same with every score flipped, the
+        model's summaries and keywords replaced, grants tracked, votes cast, a member's profile and scores added and thresholds set."""
+        path = "/api/grants?" + urlencode(params)
+
+        def read(url):
+            world.mp.setenv("POSTGRES_URL", url)
+            try:
+                reply = story.client.get(path)
+                return reply.status_code, reply.content
+            finally:
+                world.mp.setenv("POSTGRES_URL", story.own_url)
+
+        assert read(story.own_url) == read(story.twin_url), path
 
 
 class TestTheRest:
