@@ -16,6 +16,7 @@ from hypothesis import given, settings, strategies as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "e2e"))
 
+from grants.members import personal_profile  # noqa: E402
 from grants.profile import Profile, load_profile  # noqa: E402
 from grants_data.parse_extract import process_extract_xml  # noqa: E402
 from harness import MODEL, NOT_SENT, PROFILE, SCORES, FakeLLM, closed_port, render_extract, synopsis  # noqa: E402
@@ -143,8 +144,6 @@ class TestFakeLLM:
         assert llm.mode == "ok"
 
     def test_a_members_description_picks_the_score_table_and_is_kept_with_the_request(self, llm):
-        from grants.members import personal_profile
-
         llm.reset()
         llm.profile_scores = {"battery": {"E2E-BROAD": 5}}
         base = Profile(summary="The team does security research.")
@@ -157,6 +156,56 @@ class TestFakeLLM:
         assert [request["profile"] for request in llm.requests] == [None, "I study battery chemistry in depth, as a researcher in the field.", "I study wind forecasting in depth, as a researcher in the field."]
         llm.reset()
         assert llm.profile_scores == {}
+
+    @settings(max_examples=30, deadline=None)
+    @given(
+        plan=st.lists(
+            st.tuples(
+                st.sampled_from([None, "battery", "security", "wind"]),
+                st.lists(st.sampled_from(sorted(SCORES)), min_size=1, max_size=4, unique=True),
+            ),
+            min_size=1,
+            max_size=6,
+        )
+    )
+    def test_requests_are_told_apart_by_the_profile_they_were_made_for(self, llm, plan):
+        """Whatever order the team and members are asked in: each profile's requests are its own, and together they are all of them.
+
+        "security" is in the team's summary too, so a team request must not take a member's table because of it.
+        """
+        llm.reset()
+        llm.profile_scores = {"battery": {n: 5 for n in SCORES}, "security": {n: 5 for n in SCORES}}
+        base = Profile(summary="The team does security research.")
+
+        def description(topic):
+            return None if topic is None else f"I study {topic} in depth, as a researcher in the field."
+
+        for topic, numbers in plan:
+            profile = base if topic is None else personal_profile(base, description(topic))
+            records = score_records(records_for(numbers), profile, settings=settings_for(llm), personal=topic is not None).records
+            table = 5 if topic in ("battery", "security") else None
+            assert {r["OPPORTUNITY_NUMBER"]: r["RELEVANCE_SCORE"] for r in records} == {n: SCORES[n] if table is None else table for n in numbers}
+        asked = {description(topic) for topic, _ in plan}
+        for text in asked:
+            expected = [n for topic, numbers in plan if description(topic) == text for n in numbers]
+            assert sorted(llm.sent(profile=text)) == sorted(expected)
+        assert sorted(n for text in asked for n in llm.sent(profile=text)) == sorted(llm.sent())
+
+    def test_a_number_asked_for_the_team_and_two_members_is_found_by_profile(self, llm):
+        llm.reset()
+        base = Profile(summary="The team does security research.")
+        ana, ben = "I study battery chemistry in depth, as a researcher in the field.", "I study wind forecasting in depth, as a researcher in the field."
+        for text in (None, ana, ben):
+            profile = base if text is None else personal_profile(base, text)
+            score_records(records_for(["E2E-BROAD"]), profile, settings=settings_for(llm), personal=text is not None)
+        with pytest.raises(AssertionError, match="was in 3 requests"):
+            llm.request_for("E2E-BROAD")
+        assert llm.request_for("E2E-BROAD", profile=None)["profile"] is None
+        assert llm.request_for("E2E-BROAD", profile=ana)["profile"] == ana and llm.request_for("E2E-BROAD", profile=ben)["profile"] == ben
+        assert llm.sent() == ["E2E-BROAD"] * 3 and llm.sent(profile=None) == ["E2E-BROAD"] and llm.sent(profile="a description nobody has") == []
+        with pytest.raises(AssertionError, match="was in 0 requests"):
+            llm.request_for("E2E-BROAD", profile="a description nobody has")
+        llm.reset()
 
     def test_it_lists_its_model(self, llm):
         body = requests.get(llm.base_url + "/models", timeout=5).json()

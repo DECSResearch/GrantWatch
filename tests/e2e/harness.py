@@ -57,6 +57,9 @@ DASHBOARD_URL = "https://grants.example.test"
 # and a closed grant is dropped before scoring.
 NOT_SENT = ("E2E-STATES", "E2E-CLOSED")
 
+# The default of FakeLLM.sent and request_for: requests for any profile. None is the team's, so it cannot stand for "any".
+ANY_PROFILE: Any = object()
+
 _NUMBER_LINE = re.compile(r"^Opportunity number: (.+)$", re.M)
 # A member's own description, as llm_utils.relevance sends it: a fenced block in the user message.
 _PROFILE_BLOCK = re.compile(r"^Researcher profile \([^)]*\):\n```\n(.*)\n```$", re.M)
@@ -103,6 +106,11 @@ class FakeLLM:
     A request for a member's own profile (it carries the description in a fenced block) is answered
     from ``profile_scores``: text found in the description -> scores that replace the usual ones for
     those numbers. A request for the team, or for a description no text matches, uses ``scores``.
+    The marker is looked for in the description only, never in the rest of the prompt: a vote's title
+    or the team's summary may well contain the same word.
+
+    ``sent`` and ``request_for`` take ``profile=``: a member's description, or None for the team's
+    requests; left out, they cover every request.
     """
 
     def __init__(self, scores: Optional[Mapping[str, int]] = None, model: str = MODEL):
@@ -199,15 +207,18 @@ class FakeLLM:
             "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         }
 
-    def sent(self) -> List[str]:
-        """Every opportunity number asked about so far, in the order asked."""
+    def _asked(self, profile: Any) -> List[Dict[str, Any]]:
+        """The requests so far for ``profile``: a member's description, None for the team's, or every one by default."""
         with self._lock:
-            return [number for request in self.requests for number in request["numbers"]]
+            return [request for request in self.requests if profile is ANY_PROFILE or request["profile"] == profile]
 
-    def request_for(self, number: str) -> Dict[str, Any]:
-        """The one chat request that asked about ``number``."""
-        with self._lock:
-            found = [request for request in self.requests if number in request["numbers"]]
+    def sent(self, profile: Any = ANY_PROFILE) -> List[str]:
+        """Every opportunity number asked about so far, in the order asked; only for ``profile`` when one is given (None is the team)."""
+        return [number for request in self._asked(profile) for number in request["numbers"]]
+
+    def request_for(self, number: str, profile: Any = ANY_PROFILE) -> Dict[str, Any]:
+        """The one chat request that asked about ``number``; with ``profile``, the one made for that member's description (None is the team)."""
+        found = [request for request in self._asked(profile) if number in request["numbers"]]
         assert len(found) == 1, f"{number} was in {len(found)} requests, expected 1"
         return found[0]
 
