@@ -14,7 +14,7 @@ class MemoryStore:
     """Behaves like PostgresStore, including the unique index on notifications.
 
     ``personal`` is each member's own scores and votes by address (what ``PostgresStore.personal``
-    reads, scores already narrowed to the profile they have now). A recipient listed there has a
+    reads: every score stored for them, whatever its key). A recipient listed there has a
     profile of their own. ``personal_fails`` makes the read raise, as a database error would.
     """
 

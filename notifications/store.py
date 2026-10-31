@@ -7,11 +7,8 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from psycopg2.extras import RealDictCursor, execute_values
 
-from grants.members import ProfileError
-from grants.personal import member_from_stored
-from grants.profile import Profile, load_profile
 from grants.sql_utils import db_connection, ensure_schema, listed_sql, open_grant_sql, team_voter_sql
-from llm_utils.relevance import RULE_MODEL, LLMSettings
+from llm_utils.relevance import RULE_MODEL
 from notifications.planner import GrantState, OwnScore, Personal, Recipient, SentRecord
 
 _RECIPIENT_COLUMNS = "id, email, name, min_score, unsubscribe_token, active"
@@ -128,15 +125,7 @@ def claim_login_email(email: str, cooldown_seconds: int = 60) -> Optional[Recipi
 
 
 class PostgresStore:
-    """What the notify step needs from the database (tests use an in-memory twin).
-
-    ``team`` and ``model`` are what a member's score key is made from (see ``personal``). Left out,
-    they are read when first needed: the team profile as ``load_profile`` finds it, the model from
-    the environment, which is where the scoring pass gets them.
-    """
-
-    def __init__(self, team: Optional[Profile] = None, model: Optional[str] = None):
-        self._team, self._model = team, model
+    """What the notify step needs from the database (tests use an in-memory twin)."""
 
     def ensure_schema(self) -> None:
         ensure_schema()
@@ -167,39 +156,30 @@ class PostgresStore:
     def personal(self, emails: Sequence[str]) -> Dict[str, Personal]:
         """The own scores and votes of these members, read together; an address with no profile is left out.
 
-        A score counts only when its ``score_key`` is the key of the profile the member has now,
-        made from their stored text as the scoring pass makes it (``Member.key``). Any other row was
-        made for text or a model they no longer have, so the grant is unscored for them until the
-        next personal run replaces it. A stored text that cannot be cleaned was never scored (the
-        scoring pass skips it), so such a member has votes and no scores.
+        Every score stored for the member counts, whatever its ``score_key``: an old one is shown until
+        the personal step rescores it, as the team's are, so a model swap, a new ``SCORER_VERSION`` or a
+        change of institution does not blank their email. (A change to the text of their profile through
+        the dashboard deletes their scores, so those are never old.)
         """
         if not emails:
             return {}
-        team = load_profile() if self._team is None else self._team
-        model = LLMSettings.from_env().model if self._model is None else self._model
         wanted = list(emails)
         with db_connection() as conn, conn.cursor() as cur:
-            cur.execute("SELECT email, summary FROM member_profiles WHERE email = ANY(%s);", (wanted,))
-            stored = dict(cur.fetchall())
-            cur.execute("SELECT email, opp_id, score, reason, score_key FROM member_scores WHERE email = ANY(%s);", (wanted,))
+            cur.execute("SELECT email FROM member_profiles WHERE email = ANY(%s);", (wanted,))
+            members = [email for (email,) in cur.fetchall()]
+            cur.execute("SELECT email, opp_id, score, reason FROM member_scores WHERE email = ANY(%s);", (wanted,))
             scored = cur.fetchall()
             cur.execute("SELECT email, opp_id, verdict FROM grant_feedback WHERE email = ANY(%s);", (wanted,))
             voted = cur.fetchall()
-        keys: Dict[str, Optional[str]] = {}
-        for email, text in stored.items():
-            try:
-                keys[email] = member_from_stored(email, text).key(team, model)
-            except ProfileError:
-                keys[email] = None
-        scores: Dict[str, Dict[str, OwnScore]] = {email: {} for email in stored}
-        for email, opp_id, score, reason, key in scored:
-            if email in keys and key == keys[email]:
+        scores: Dict[str, Dict[str, OwnScore]] = {email: {} for email in members}
+        for email, opp_id, score, reason in scored:
+            if email in scores:
                 scores[email][opp_id] = OwnScore(int(score), reason or "")
-        votes: Dict[str, Dict[str, int]] = {email: {} for email in stored}
+        votes: Dict[str, Dict[str, int]] = {email: {} for email in members}
         for email, opp_id, verdict in voted:
             if email in votes:
                 votes[email][opp_id] = 1 if verdict > 0 else -1
-        return {email: Personal(scores[email], votes[email]) for email in stored}
+        return {email: Personal(scores[email], votes[email]) for email in members}
 
     def grants(self) -> List[GrantState]:
         # Tracked grants are loaded even when closed off early, so the planner

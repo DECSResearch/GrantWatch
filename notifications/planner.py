@@ -145,9 +145,9 @@ class OwnScore:
 class Personal:
     """What a member's own profile changes in their email: the scores made for it and their own votes.
 
-    ``scores`` holds a grant only when it was scored for the profile the member has now (the store
-    sees to that), by opportunity number. ``votes`` is the member's own verdict on a grant: 1 for
-    Relevant, -1 for Not for us.
+    ``scores`` holds the scores stored for the member by opportunity number, whatever key they were
+    made under: an old one stands until the personal step rescores it, as the team's do. ``votes`` is
+    the member's own verdict on a grant: 1 for Relevant, -1 for Not for us.
     """
 
     scores: Mapping[str, OwnScore] = field(default_factory=dict)

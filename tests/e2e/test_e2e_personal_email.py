@@ -59,7 +59,7 @@ def read(world):
     """Alice (typed by hand), Bob, Dan (a text too short to ever be scored) and Erin have profiles; Carol uses the team's.
 
     Rows are written straight into the tables, some for a key the member no longer has. The store is read, then read
-    again with no model configured, then after Alice's profile text is changed behind the app's back.
+    again under another model, then after Alice's profile text is changed behind the app's back.
     """
     world.reset()
     ensure_schema()
@@ -73,7 +73,7 @@ def read(world):
     add_score(world, ALICE, "E2E-NOKW", 4, "scored by another model", key(ALICE_TEXT, "older-model"))
     add_score(world, ALICE, "E2E-TRUSTED", 3, "key made from the text as typed", key(ALICE_HAND_TYPED))
     add_score(world, BOB, "E2E-BROAD", 1, "Bob does not", key(BOB_TEXT))
-    add_score(world, DAN, "E2E-BROAD", 5, "scored under a key nothing can match", key("some other text that was long enough"))
+    add_score(world, DAN, "E2E-BROAD", 5, "scored under another text", key("some other text that was long enough"))
     vote(world, ALICE, "E2E-BROAD", -1)
     vote(world, BOB, "E2E-TRUSTED", 1)
     vote(world, CAROL, "E2E-NOKW", -1)
@@ -82,12 +82,12 @@ def read(world):
     store = PostgresStore()
     first = store.personal([ALICE, BOB, CAROL, DAN])
     with pytest.MonkeyPatch.context() as patch:
-        patch.delenv("GRANTS_LLM_MODEL")
-        no_model = store.personal([ALICE])
+        patch.setenv("GRANTS_LLM_MODEL", "a-newer-model")
+        swapped = store.personal([ALICE])
     world.query("UPDATE member_profiles SET summary = %s WHERE email = %s", (ALICE_TEXT + " I also work on solid-state electrolytes.", ALICE))
     edited = store.personal([ALICE])
     return SimpleNamespace(
-        store=store, first=first, no_model=no_model, edited=edited, nobody=store.personal([]),
+        store=store, first=first, swapped=swapped, edited=edited, nobody=store.personal([]),
         recipients={r.email: r for r in store.recipients()},
     )
 
@@ -99,14 +99,12 @@ class TestTheStoreRead:
     def test_an_unsubscribed_member_is_not_a_recipient(self, read):
         assert ERIN not in read.recipients
 
-    def test_only_the_scores_for_the_profile_the_member_has_now_count(self, read):
-        assert read.first[ALICE].scores == {"E2E-BROAD": OwnScore(5, "Alice fits")}
+    def test_every_score_stored_for_a_member_counts_whatever_key_it_was_made_under(self, read):
+        assert read.first[ALICE].scores == {
+            "E2E-BROAD": OwnScore(5, "Alice fits"), "E2E-NOKW": OwnScore(4, "scored by another model"),
+            "E2E-TRUSTED": OwnScore(3, "key made from the text as typed"),
+        }
         assert read.first[BOB].scores == {"E2E-BROAD": OwnScore(1, "Bob does not")}
-
-    def test_the_key_is_made_from_the_cleaned_text_even_when_the_table_holds_it_as_typed(self, read):
-        assert key(ALICE_HAND_TYPED) != key(ALICE_TEXT)
-        assert "E2E-BROAD" in read.first[ALICE].scores  # a row under the cleaned text's key counts
-        assert "E2E-TRUSTED" not in read.first[ALICE].scores  # one under the typed text's key is not this member's key
 
     def test_a_member_is_read_with_their_own_votes_only(self, read):
         assert read.first[ALICE].votes == {"E2E-BROAD": -1}
@@ -116,14 +114,14 @@ class TestTheStoreRead:
         assert CAROL not in read.first and set(read.first) == {ALICE, BOB, DAN}
         assert read.nobody == {}
 
-    def test_a_text_that_cannot_be_cleaned_has_votes_and_no_scores(self, read):
-        assert read.first[DAN] == Personal(scores={}, votes={"E2E-NOKW": 1})
+    def test_the_rows_of_a_member_whose_text_cannot_be_cleaned_are_read_as_they_are(self, read):
+        assert read.first[DAN] == Personal(scores={"E2E-BROAD": OwnScore(5, "scored under another text")}, votes={"E2E-NOKW": 1})
 
-    def test_with_no_model_configured_no_score_matches_but_the_votes_are_kept(self, read):
-        assert read.no_model[ALICE] == Personal(scores={}, votes={"E2E-BROAD": -1})
+    def test_a_model_swap_leaves_the_scores_a_member_sees_as_they_were(self, read):
+        assert read.swapped[ALICE] == read.first[ALICE]
 
-    def test_a_profile_changed_behind_the_apps_back_leaves_its_old_scores_unmatched(self, read):
-        assert read.edited[ALICE] == Personal(scores={}, votes={"E2E-BROAD": -1})
+    def test_a_profile_changed_behind_the_apps_back_keeps_its_old_scores_until_they_are_rescored(self, read):
+        assert read.edited[ALICE] == read.first[ALICE]
 
 
 # What the model scripts for a member's profile (the rest keep the team's scores; see harness.FakeLLM):
@@ -139,6 +137,12 @@ TITLES = {
     "E2E-PLACEHOLDER": "Long-term Secure Infrastructure Partnership", "E2E-BROAD": "Young Faculty Awards (YFA)",
     "E2E-NOCODES": "Rural Broadband Network Planning",
 }
+
+
+ALICE_LIST = sorted([
+    ("5/5", TITLES["E2E-BULLETS"]), ("5/5", TITLES["E2E-PLACEHOLDER"]), ("5/5", DURIP),
+    ("4/5", FORECAST), ("5/5", TITLES["E2E-BROAD"]),
+])  # what her scores make of the fixture extract, when she marked E2E-ENTITY Not for us
 
 
 def listed(message):
@@ -184,10 +188,7 @@ class TestEachRecipientsEmail:
         ])
 
     def test_alice_gets_her_own_scores_though_her_profile_was_typed_by_hand(self, emailed):
-        assert listed(emailed.mails[ALICE]) == sorted([
-            ("5/5", TITLES["E2E-BULLETS"]), ("5/5", TITLES["E2E-PLACEHOLDER"]), ("5/5", DURIP),
-            ("4/5", FORECAST), ("5/5", TITLES["E2E-BROAD"]),
-        ])
+        assert listed(emailed.mails[ALICE]) == ALICE_LIST
 
     def test_bob_gets_his(self, emailed):
         assert listed(emailed.mails[BOB]) == sorted([
@@ -224,6 +225,52 @@ class TestEachRecipientsEmail:
             assert team not in emailed.texts[email] and "Want matches" not in emailed.texts[email]
         assert team in emailed.texts[CAROL] and invite in emailed.texts[CAROL]
         assert f'<a href="{DASHBOARD_URL}"' in emailed.htmls[CAROL] and own not in emailed.texts[CAROL]
+
+
+@pytest.fixture(scope="module")
+def stale(world):
+    """Alice (typed by hand) and Carol, scored by one ingest; then the model is swapped and notify runs.
+
+    Every score of Alice's is then for a key she no longer has, as after a model swap, a new SCORER_VERSION or a
+    change of institution before the personal step has run again. The mail must go out from those scores.
+    """
+    world.reset()
+    ensure_schema()
+    for email in (ALICE, CAROL):
+        assert main.main(["recipients", "add", email]) == 0
+    world.query("INSERT INTO member_profiles (email, summary) VALUES (%s, %s)", (ALICE, ALICE_HAND_TYPED))
+    world.llm.profile_scores = {"battery": ALICE_SCORES}
+    vote(world, ALICE, "E2E-ENTITY", -1)
+    code = world.ingest()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("GRANTS_LLM_MODEL", "a-newer-model")
+        status = world.notify()
+    mails = emails_since(world, 0)
+    keys = {row["score_key"] for row in world.query("SELECT DISTINCT score_key FROM member_scores WHERE email = %s", (ALICE,))}
+    return SimpleNamespace(
+        code=code, status=status, mails=mails, texts={to: plain_text(m) for to, m in mails.items()}, keys=keys,
+        rows=notified(world, ALICE),
+    )
+
+
+class TestAMemberWhoseScoresAreForAnOlderKey:
+    """The design shows an old score until it is rescored, as the team's are (and the issue: the team's scores only while they have none)."""
+
+    def test_the_scores_really_are_for_a_key_she_no_longer_has(self, stale):
+        assert (stale.code, stale.status) == (0, 0) and set(stale.mails) == {ALICE, CAROL}
+        assert stale.keys and key(ALICE_TEXT, "a-newer-model") not in stale.keys and key(ALICE_HAND_TYPED, "a-newer-model") not in stale.keys
+
+    def test_she_still_gets_her_own_list_and_the_own_footer(self, stale):
+        assert listed(stale.mails[ALICE]) == ALICE_LIST
+        assert "Scores are for your own research profile." in stale.texts[ALICE]
+
+    def test_she_is_not_told_her_matches_have_not_started(self, stale):
+        assert "start after the next daily run" not in stale.texts[ALICE]
+
+    def test_what_is_recorded_for_her_follows_her_scores_and_not_the_teams(self, stale):
+        told = {opp for opp, kind in stale.rows if kind == "new"}
+        assert "E2E-BROAD" in told and "E2E-NOKW" not in told  # she scored the one high and the other 0; the team the reverse
+        assert "E2E-ENTITY" not in told  # her own Not for us
 
 
 @pytest.fixture(scope="module")
