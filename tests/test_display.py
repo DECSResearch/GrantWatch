@@ -12,7 +12,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from grants.display import (  # noqa: E402
     COUNTDOWN_DAYS,
-    FIRM_DEADLINE_DAYS,
     PLACEHOLDER_CEILING,
     Posting,
     base_title,
@@ -31,6 +30,7 @@ from web import app as webapp  # noqa: E402
 TODAY = date(2026, 9, 14)
 ME = Recipient(id=1, email="me@und.edu", unsubscribe_token="tok123")
 TWO_YEARS = 730  # days; the rule is written out here, not read from the code under test
+FIVE_YEARS = 1825  # days; likewise
 
 
 def _email(*grants, settings=None):
@@ -45,10 +45,10 @@ def _grant(opp, close, **kw):
 
 class TestPlaceholderDeadlines:
     def test_boundary_is_five_years(self):
-        assert days_until_deadline(TODAY + timedelta(days=FIRM_DEADLINE_DAYS), TODAY) == FIRM_DEADLINE_DAYS
-        assert days_until_deadline(TODAY + timedelta(days=FIRM_DEADLINE_DAYS + 1), TODAY) is None
-        assert firm_deadline(TODAY + timedelta(days=FIRM_DEADLINE_DAYS), TODAY)
-        assert not firm_deadline(TODAY + timedelta(days=FIRM_DEADLINE_DAYS + 1), TODAY)
+        assert days_until_deadline(TODAY + timedelta(days=FIVE_YEARS), TODAY) == FIVE_YEARS
+        assert days_until_deadline(TODAY + timedelta(days=FIVE_YEARS + 1), TODAY) is None
+        assert firm_deadline(TODAY + timedelta(days=FIVE_YEARS), TODAY)
+        assert not firm_deadline(TODAY + timedelta(days=FIVE_YEARS + 1), TODAY)
 
     def test_no_date_and_past_dates(self):
         assert days_until_deadline(None, TODAY) is None and not firm_deadline(None, TODAY)
@@ -58,7 +58,7 @@ class TestPlaceholderDeadlines:
     @given(st.integers(-5000, 40000))
     def test_a_day_count_never_comes_from_a_date_over_five_years_out(self, offset):
         days = days_until_deadline(TODAY + timedelta(days=offset), TODAY)
-        assert (days is None) == (offset > FIRM_DEADLINE_DAYS)
+        assert (days is None) == (offset > FIVE_YEARS)
         assert days in (None, offset)
 
     def test_grant_state_reads_the_same_rule(self):
@@ -85,7 +85,7 @@ class TestPlaceholderDeadlines:
     def test_email_counts_days_only_for_a_real_deadline_within_a_year(self, offset):
         text = _email(_grant("G", TODAY + timedelta(days=offset))).text
         assert ("left)" in text) == (offset <= COUNTDOWN_DAYS)
-        assert ("no firm deadline" in text) == (offset > FIRM_DEADLINE_DAYS)
+        assert ("no firm deadline" in text) == (offset > FIVE_YEARS)
 
     def test_placeholder_date_is_not_a_reminder_or_in_the_overview(self):
         tracked = _grant("T", date(2076, 10, 5), watched=True, score=None)
