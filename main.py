@@ -7,11 +7,13 @@
     python main.py recipients list | add EMAIL [--name N] [--min-score S] | remove EMAIL
     python main.py test-email EMAIL send one short message to check delivery
     python main.py admin-user NAME  make the line that gives NAME access to the admin page
+    python main.py sign-in-link EMAIL  print a one-hour dashboard sign-in link for a recipient
 """
 from __future__ import annotations
 
 import argparse
 import getpass
+import os
 import time
 from typing import Any, Dict, List, Optional
 
@@ -200,6 +202,35 @@ def ingest_then_personal(started: float) -> int:
     return code
 
 
+def sign_in_link(address: str) -> int:
+    """Print a one-hour sign-in link for an active recipient, for an admin to pass on when mail does not arrive.
+
+    The link is signed with GRANTS_SECRET_KEY, so it only works on a server that has the same key. It
+    points at GRANTS_DASHBOARD_URL, else at a dashboard on this machine.
+    """
+    from notifications import store
+    from src.web import auth
+
+    if auth.secret_key() is None:
+        print("GRANTS_SECRET_KEY is not set (16 characters or more), so nobody can sign in. Use the value the web server has.")
+        return 1
+    try:
+        member = store.active_recipient(address)
+    except Exception as exc:
+        print(f"Could not check the recipient list: {exc}")
+        return 1
+    if member is None:
+        print(f"{address} is not an active recipient. Add them with: python main.py recipients add {address}")
+        return 1
+    base = (os.getenv("GRANTS_DASHBOARD_URL") or "").strip().rstrip("/")
+    print(f"Sign-in link for {member.email}, good for one hour:\n")
+    print(f"{base or 'http://localhost:8000'}/auth?token={auth.sign(auth.LOGIN, member.email, auth.ADMIN_LINK_SECONDS)}\n")
+    print(f"Anyone who has this link can sign in as {member.email} until it expires. Send it to them only.")
+    if not base:
+        print("GRANTS_DASHBOARD_URL is not set, so this link is for a dashboard running on this machine. Set it to the address people open.")
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="GrantWatch: Grants.gov opportunities and deadlines for the team.")
     sub = parser.add_subparsers(dest="command")
@@ -215,6 +246,8 @@ def _parser() -> argparse.ArgumentParser:
     test.add_argument("address")
     admin = sub.add_parser("admin-user", help="make the line that lets one person open the admin page")
     admin.add_argument("name")
+    link = sub.add_parser("sign-in-link", help="print a one-hour dashboard sign-in link for a recipient")
+    link.add_argument("address", metavar="EMAIL")
     return parser
 
 
@@ -230,6 +263,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return test_email(args.address)
     if args.command == "admin-user":
         return admin_user(args.name)
+    if args.command == "sign-in-link":
+        return sign_in_link(args.address)
     if args.command == "recipients":
         if args.action != "list" and not args.email:
             _parser().error(f"recipients {args.action} needs an email address")

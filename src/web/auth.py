@@ -16,6 +16,7 @@ from typing import Optional
 
 SESSION_COOKIE = "gw_session"
 LINK_SECONDS = 15 * 60
+ADMIN_LINK_SECONDS = 60 * 60  # a link an admin hands over (python main.py sign-in-link) outlives mail delays
 SESSION_SECONDS = 30 * 24 * 3600
 LOGIN = "login"
 SESSION = "session"

@@ -195,6 +195,13 @@ needs `GRANTS_SECRET_KEY` on the server and a sign-in. Without the key the
 dashboard is read-only: it hides Track and the vote buttons, and marks the
 grants the MCP server tracked with a plain "Tracked" label.
 
+When the sign-in email does not arrive (a university mail filter may hold it),
+an admin prints a link that works for one hour with
+`python main.py sign-in-link EMAIL`. It is for an active recipient only, needs
+the web server's `GRANTS_SECRET_KEY`, and points at `GRANTS_DASHBOARD_URL`
+(which must be the address people open), else at `http://localhost:8000`.
+Anyone who has the link can sign in as that person, so send it to them only.
+
 ### Team feedback
 
 A team member can mark a grant Relevant or Not for us (one vote each, and a
