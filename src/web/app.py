@@ -32,7 +32,8 @@ from grants.feedback import with_feedback
 from grants.profile import Profile, load_profile
 from grants.queries import GrantQuery, count_grants, data_status, get_grant, query_grants
 from grants.sql_utils import (
-    add_to_watchlist, clear_vote, ensure_schema, fetch_vote_counts, list_watchlist, record_vote, remove_from_watchlist,
+    add_to_watchlist, clear_vote, ensure_schema, fetch_relevant_ids, fetch_vote_counts, list_watchlist, record_vote,
+    remove_from_watchlist,
 )
 from notifications import store
 from notifications.transport import build_message, get_transport, sender_address
@@ -280,6 +281,21 @@ def _with_votes(rows: List[Dict[str, Any]], request: Request) -> List[Dict[str, 
     return with_feedback(rows, counts)
 
 
+def _team_relevant() -> Tuple[str, ...]:
+    """The postings of programs the team marked Relevant on balance; none when the votes cannot be read.
+
+    Read before the grants are, and guarded like ``_with_votes``: before the first ingest there is no
+    grant_feedback table, and that must not fail the list.
+    """
+    try:
+        return tuple(fetch_relevant_ids())
+    except UndefinedTable:
+        return ()  # the daily job has not created grant_feedback yet
+    except Exception as exc:
+        logger.warning("Could not read the grants the team marked Relevant: %s", exc)
+        return ()
+
+
 @app.get("/api/grants")
 def get_grants(
     request: Request,
@@ -310,6 +326,7 @@ def get_grants(
         due_from=due_from,
         due_to=due_to,
         limit=limit,
+        team_relevant=_team_relevant() if min_score else (),  # only a score floor can leave them out
         today=date.today(),
     )
     try:

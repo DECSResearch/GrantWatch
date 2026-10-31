@@ -8,7 +8,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 
 from grants.display import Posting, program_of
-from grants.feedback import Votes, clean_text
+from grants.feedback import Votes, clean_text, relevant_postings
 
 _SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
 
@@ -307,3 +307,30 @@ def fetch_vote_counts(opp_ids: Sequence[str], email: Optional[str] = None) -> Di
     with db_connection() as conn, conn.cursor() as cur:
         cur.execute(query, (email, list(opp_ids)))
         return {opp_id: Votes(int(up), int(down), mine) for opp_id, up, down, mine in cur.fetchall()}
+
+
+# The grants that could be folded with a posting: those that share its close date, and the posting
+# itself, which is a program of one when it has no date.
+_PROGRAMS_OF_SQL = """
+    SELECT opp_id, title, agency_code, close_date::date
+    FROM grants
+    WHERE opp_id = ANY(%s)
+       OR close_date::date IN (SELECT close_date::date FROM grants WHERE opp_id = ANY(%s));
+"""
+
+
+def fetch_relevant_ids() -> List[str]:
+    """Every posting of each program the team marked Relevant on balance (see ``relevant_postings``).
+
+    A program's votes are summed over all its postings, so a Not for us on a sibling counts.
+    Raises ``UndefinedTable`` until the first run has created grant_feedback.
+    """
+    with db_connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT opp_id, SUM(verdict)::int FROM grant_feedback GROUP BY opp_id;")
+        nets = {opp_id: int(net) for opp_id, net in cur.fetchall()}
+        liked = [opp_id for opp_id, net in nets.items() if net > 0]
+        if not liked:
+            return []  # a program with no posting on the plus side cannot come out ahead
+        cur.execute(_PROGRAMS_OF_SQL, (liked, liked))
+        postings = [Posting(opp_id=o, title=t or "", agency_code=a or "", close=c) for o, t, a, c in cur.fetchall()]
+    return relevant_postings(postings, nets)

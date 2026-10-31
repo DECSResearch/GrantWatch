@@ -34,6 +34,7 @@ class GrantQuery:
     due_from: Optional[date] = None
     due_to: Optional[date] = None
     limit: int = 300
+    team_relevant: Tuple[str, ...] = ()  # postings the team marked Relevant (grants.feedback.relevant_postings); they pass min_score
     today: Optional[date] = None  # the day the window counts from; a caller fixes it once so every part of a request agrees
 
 
@@ -54,8 +55,14 @@ def _where(query: GrantQuery) -> Tuple[str, List[Any]]:
     if query.watched_only:
         conditions.append("w.opp_id IS NOT NULL")
     if query.min_score is not None and query.min_score > 0:
-        conditions.append("(g.relevance_score >= %s OR w.opp_id IS NOT NULL)")
+        # A tracked grant passes whatever it scores, and so does one the team marked Relevant,
+        # which the email treats as meeting the threshold.
+        passes = ["g.relevance_score >= %s", "w.opp_id IS NOT NULL"]
         params.append(int(query.min_score))
+        if query.team_relevant:
+            passes.append("g.opp_id = ANY(%s)")
+            params.append(list(query.team_relevant))
+        conditions.append(f"({' OR '.join(passes)})")
     if query.stage:
         conditions.append("g.stage = %s")
         params.append(query.stage)

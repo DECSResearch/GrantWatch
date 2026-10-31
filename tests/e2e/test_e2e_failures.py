@@ -6,6 +6,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from grants.sql_utils import ensure_schema
 from harness import ADMIN_PASSWORD, ADMIN_USER, closed_port, new_section, plain_text, read_email
 from web import app as webapp
 
@@ -106,3 +107,19 @@ class TestModelUnreachable:
         assert "match the research keywords in the profile, those closing within 30 days first, then most matches first." in text
         recorded = {row["opp_id"] for row in fresh.query("SELECT opp_id FROM notifications WHERE kind = 'new'")}
         assert "E2E-STATES" not in recorded and "E2E-NOKW" not in recorded
+
+
+class TestFeedbackTableMissing:
+    def test_the_list_still_answers_at_a_score_floor_before_anyone_has_made_the_table(self, fresh, client):
+        # A database the daily job has not brought up to date: the grants are there, grant_feedback is not.
+        assert fresh.ingest() == 0
+        fresh.query("DROP TABLE grant_feedback")
+        try:
+            floor = client.get("/api/grants?min_score=4&limit=1000")
+            plain = client.get("/api/grants?limit=1000")
+        finally:
+            ensure_schema()  # the module's later tests expect the table
+        for reply in (floor, plain):
+            assert reply.status_code == 200 and reply.json()["count"] > 0
+            assert all(row["votes_up"] is None and row["team_verdict"] is None for row in reply.json()["results"])
+        assert 0 < floor.json()["count"] < plain.json()["count"]  # the floor still applies

@@ -15,6 +15,8 @@ from __future__ import annotations
 import unicodedata
 from typing import Any, Dict, Iterable, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 
+from grants.display import Posting, group_postings
+
 # How many marked grants go to the scorer as examples, and how long each may be.
 EXAMPLE_LIMIT = 10
 ENTRY_CHARS = 200
@@ -41,6 +43,22 @@ def clean_text(value: Any, limit: Optional[int] = None) -> str:
 def net_verdict(net_votes: int) -> int:
     """1 when Relevant outnumbers Not for us, -1 when it is outnumbered, else 0 (no verdict)."""
     return (net_votes > 0) - (net_votes < 0)
+
+
+def relevant_postings(postings: Sequence[Posting], net_votes: Mapping[str, int]) -> List[str]:
+    """The opp_ids, sorted, of every posting of each program the team marked Relevant on balance.
+
+    ``net_votes`` is each posting's Relevant votes less its Not for us votes (a posting
+    missing from it has none). A program is judged on its postings' votes together, as the
+    email planner judges it, and all its postings count: the dashboard then folds the row
+    as it does at any score floor, and the program is listed as the email announces it.
+    """
+    out: List[str] = []
+    for group in group_postings(postings):
+        members = (group.lead, *group.also)
+        if net_verdict(sum(net_votes.get(opp_id, 0) for opp_id in members)) > 0:
+            out.extend(members)
+    return sorted(out)
 
 
 def _sign(verdict: Any) -> int:

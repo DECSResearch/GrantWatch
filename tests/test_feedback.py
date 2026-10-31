@@ -22,7 +22,10 @@ from psycopg2.errors import UndefinedTable
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from grants import sql_utils  # noqa: E402
-from grants.feedback import ENTRY_CHARS, EXAMPLE_LIMIT, Votes, clean_text, feedback_examples, net_verdict, with_feedback  # noqa: E402
+from grants.display import Posting, group_postings  # noqa: E402
+from grants.feedback import (  # noqa: E402
+    ENTRY_CHARS, EXAMPLE_LIMIT, Votes, clean_text, feedback_examples, net_verdict, relevant_postings, with_feedback,
+)
 from grants.profile import Profile  # noqa: E402
 from grants_data import pipeline  # noqa: E402
 from llm_utils import relevance  # noqa: E402
@@ -440,6 +443,7 @@ class VoteDb:
         self.grants = grants  # opp_id -> (title, agency_code, close date)
         self.votes = {}  # (opp_id, email) -> verdict
         self.connections = 0
+        self.statements = []
 
     def connection(self):
         db = self
@@ -456,12 +460,22 @@ class VoteDb:
 
             def execute(self, sql, params=None):
                 sql = " ".join(sql.split())
+                db.statements.append(sql)
                 if sql.startswith("SELECT title, agency, summary FROM grants"):
                     found = db.grants.get(params[0])
                     self.rows = [(found[0], "Agency", None)] if found else []
                 elif sql == " ".join(sql_utils._PROGRAM_SQL.split()):
                     close = db.grants.get(params[0], (None, None, None))[2]
                     self.rows = [(opp, *grant) for opp, grant in db.grants.items() if close is not None and grant[2] == close]
+                elif sql.startswith("SELECT opp_id, SUM(verdict)::int FROM grant_feedback GROUP BY opp_id"):
+                    totals = {}
+                    for (opp, _), verdict in db.votes.items():
+                        totals[opp] = totals.get(opp, 0) + verdict
+                    self.rows = sorted(totals.items())
+                elif sql == " ".join(sql_utils._PROGRAMS_OF_SQL.split()):
+                    liked = set(params[0])
+                    days = {db.grants[opp][2] for opp in liked if opp in db.grants and db.grants[opp][2] is not None}
+                    self.rows = [(opp, *grant) for opp, grant in db.grants.items() if opp in liked or grant[2] in days]
                 elif sql.startswith("DELETE FROM grant_feedback WHERE email = %s AND opp_id = ANY(%s)"):
                     email, ids = params
                     gone = [key for key in db.votes if key[1] == email and key[0] in ids]
@@ -602,6 +616,57 @@ class TestOneVotePerProgram:
                     assert db.votes[(row["my_vote_opp_id"], email)] == row["my_verdict"]
 
 
+class TestRelevantIds:
+    """The postings a score floor must let through: every posting of a program the team is ahead on (#45)."""
+
+    @pytest.fixture
+    def db(self, monkeypatch):
+        db = VoteDb({**PROGRAM_GRANTS, "NODATE": ("Undated call", "NSF", None), "NODATE-2": ("Another undated call", "NSF", None)})
+        monkeypatch.setattr(sql_utils, "get_connection", db.connection)
+        return db
+
+    def test_a_vote_on_one_posting_lists_the_whole_program(self, db):
+        sql_utils.record_vote("D-ONR", "me@und.edu", 1)
+        assert sql_utils.fetch_relevant_ids() == ["D-AFOSR", "D-ARMY", "D-ONR"]  # not PLAIN, which closes the same day, nor OTHER
+
+    def test_a_posting_with_no_close_date_is_a_program_of_one(self, db):
+        sql_utils.record_vote("NODATE", "me@und.edu", 1)
+        assert sql_utils.fetch_relevant_ids() == ["NODATE"]  # not NODATE-2, though neither has a date
+
+    def test_the_programs_votes_are_summed_over_its_postings(self, db):
+        sql_utils.record_vote("D-ONR", "me@und.edu", 1)
+        sql_utils.record_vote("D-ARMY", "you@und.edu", -1)
+        assert sql_utils.fetch_relevant_ids() == []  # a tie is no verdict
+        sql_utils.record_vote("D-AFOSR", "her@und.edu", 1)
+        assert sql_utils.fetch_relevant_ids() == ["D-AFOSR", "D-ARMY", "D-ONR"]  # two to one: the Not for us sat on a posting of its own
+
+    def test_a_posting_marked_relevant_on_its_own_does_not_outvote_the_program(self, db):
+        db.votes.update({("D-ONR", "me@und.edu"): 1, ("D-ARMY", "you@und.edu"): -1, ("D-AFOSR", "her@und.edu"): -1})
+        assert sql_utils.fetch_relevant_ids() == []  # D-ONR is ahead alone, the program is not
+
+    def test_nothing_ahead_means_no_second_read(self, db):
+        sql_utils.record_vote("D-ONR", "me@und.edu", -1)
+        reads, connections = len(db.statements), db.connections
+        assert sql_utils.fetch_relevant_ids() == []
+        assert len(db.statements) - reads == 1 and db.connections - connections == 1  # the sums, and nothing about programs
+
+    @given(st.lists(st.tuples(st.sampled_from(["vote", "clear"]), st.sampled_from(sorted(PROGRAM_OF)), st.sampled_from(PEOPLE), st.sampled_from([1, -1])), max_size=25))
+    def test_whatever_was_pressed_the_listed_postings_are_those_of_the_programs_the_team_is_ahead_on(self, ops):
+        with pytest.MonkeyPatch.context() as mp:
+            db = VoteDb(PROGRAM_GRANTS)
+            mp.setattr(sql_utils, "get_connection", db.connection)
+            latest = {}  # (person, program) -> their verdict on it
+            for action, opp, email, verdict in ops:
+                if action == "vote":
+                    sql_utils.record_vote(opp, email, verdict)
+                    latest[(email, PROGRAM_OF[opp])] = verdict
+                else:
+                    sql_utils.clear_vote(opp, email)
+                    latest.pop((email, PROGRAM_OF[opp]), None)
+            ahead = {program for program in set(PROGRAM_OF.values()) if sum(v for (_, p), v in latest.items() if p == program) > 0}
+            assert sql_utils.fetch_relevant_ids() == sorted(opp for opp, program in PROGRAM_OF.items() if program in ahead)
+
+
 def posting(opp, **kw):
     row = {"opp_id": opp, "title": f"Grant {opp}", "agency_code": opp, "close_date": "2026-11-06", "post_date": "2026-08-01",
            "opportunity_status": "Posted", "relevance_score": 4, "watched": False, "url": f"https://x/{opp}", "also_posted": []}
@@ -682,7 +747,7 @@ KEY = "k" * 32
 @pytest.fixture
 def web(monkeypatch):
     state = SimpleNamespace(votes=[], cleared=[], schema=0, known={"A-1", "B/2"}, missing=0, boom=None, rows=[], asked=[], counts={},
-                            counts_error=None, removed=True)
+                            counts_error=None, removed=True, relevant=[], relevant_error=None, relevant_reads=0, queries=[], counted=[])
 
     def record(opp_id, email, verdict):
         if state.boom:
@@ -705,13 +770,29 @@ def web(monkeypatch):
             raise state.counts_error
         return {opp: Votes(v.up, v.down, v.mine if email else None) for opp, v in state.counts.items()}  # nobody's own verdict without an email
 
+    def relevant():
+        state.relevant_reads += 1
+        if state.relevant_error:
+            raise state.relevant_error
+        return list(state.relevant)
+
+    def query(q):
+        state.queries.append(q)
+        return [dict(r) for r in state.rows]
+
+    def count(q):
+        state.counted.append(q)
+        return 99
+
     monkeypatch.setenv("GRANTS_SECRET_KEY", KEY)
     monkeypatch.setattr(webapp.store, "active_recipient", lambda email: ME if email == ME.email else None)
     monkeypatch.setattr(webapp, "record_vote", record)
     monkeypatch.setattr(webapp, "clear_vote", clear)
     monkeypatch.setattr(webapp, "fetch_vote_counts", counts)
     monkeypatch.setattr(webapp, "ensure_schema", lambda: setattr(state, "schema", state.schema + 1))
-    monkeypatch.setattr(webapp, "query_grants", lambda query: [dict(r) for r in state.rows])
+    monkeypatch.setattr(webapp, "fetch_relevant_ids", relevant)
+    monkeypatch.setattr(webapp, "query_grants", query)
+    monkeypatch.setattr(webapp, "count_grants", count)
     return TestClient(webapp.app, base_url="http://localhost"), state
 
 
@@ -880,6 +961,39 @@ class TestGrantsApi:
         assert {"title", "watched", "relevance_score", "also_posted", "superseded_by", "url"} <= set(rows["C"])
 
 
+class TestScoreFloorAndTheTeam:
+    """A grant the team marked Relevant passes the score floor, as the email already treats it (#45)."""
+
+    def test_the_postings_the_team_marked_relevant_go_to_the_query_when_there_is_a_floor(self, web):
+        client, state = web
+        state.relevant = ["B", "A"]
+        assert client.get("/api/grants?min_score=4").status_code == 200
+        assert state.queries[0].min_score == 4 and state.queries[0].team_relevant == ("B", "A")
+
+    def test_the_count_behind_a_full_list_uses_the_same_postings(self, web):
+        client, state = web
+        state.relevant, state.rows = ["A"], [posting("A")]
+        body = client.get("/api/grants?min_score=3&limit=1").json()
+        assert body["total"] == 99 and state.counted[0].team_relevant == ("A",)  # counted, since the list is full
+
+    @pytest.mark.parametrize("floor", ["", "?min_score=0"])
+    def test_without_a_floor_the_votes_are_not_read(self, web, floor):
+        client, state = web
+        state.relevant = ["A"]
+        client.get(f"/api/grants{floor}")
+        assert state.relevant_reads == 0 and state.queries[0].team_relevant == ()
+
+    @pytest.mark.parametrize("error", [UndefinedTable(), RuntimeError("down")])
+    def test_votes_that_cannot_be_read_leave_the_list_as_it_was(self, web, error, caplog):
+        client, state = web
+        state.rows, state.relevant_error = [posting("A")], error
+        with caplog.at_level(logging.WARNING, logger="grantwatch.web"):
+            reply = client.get("/api/grants?min_score=4")
+        assert reply.status_code == 200 and reply.json()["count"] == 1  # before the first ingest there is no grant_feedback
+        assert state.queries[0].team_relevant == ()
+        assert ("Could not read the grants the team marked Relevant" in caplog.text) == isinstance(error, RuntimeError)
+
+
 TODAY = date(2026, 9, 14)
 PERSON = Recipient(id=1, email="a@und.edu", unsubscribe_token="t")
 
@@ -974,3 +1088,65 @@ def test_the_teams_votes_decide_what_is_announced(grants, min_score, threshold):
     plain = plan([replace(g, net_votes=0) for g in grants], min_score=min_score, keyword_threshold=threshold, max_new=100)
     assert [n.grant.opp_id for n in p.reminders] == [n.grant.opp_id for n in plain.reminders]
     assert [n.grant.opp_id for n in p.removed] == [n.grant.opp_id for n in plain.removed]
+
+
+# Few close dates, acronyms and agencies, so postings often fold into programs and sometimes refuse to.
+_CALLS = st.sampled_from(["Call (DURIP)", "Call (MURI)", "Call (S-STEM)", "Plain call"])
+_AGENCIES = st.sampled_from(["DOD-A", "DOD-B", "NSF", ""])
+_DAYS = st.sampled_from([date(2026, 11, 6), date(2026, 11, 13), None])
+
+
+@st.composite
+def voted_postings(draw):
+    """Postings with a net vote each, and the same grants as the planner sees them with scores below its threshold."""
+    rows = [
+        (f"P{i:02d}", draw(_CALLS), draw(_AGENCIES), draw(_DAYS), draw(st.integers(-2, 2)), draw(st.integers(0, 3)))
+        for i in range(draw(st.integers(0, 10)))
+    ]
+    postings = [Posting(opp_id=o, title=t, agency_code=a, close=c) for o, t, a, c, _, _ in rows]
+    nets = {o: n for o, _, _, _, n, _ in rows}
+    states = [GrantState(opp_id=o, title=t, agency_code=a, close_date=c, net_votes=n, score=score, url="https://x") for o, t, a, c, n, score in rows]
+    return postings, nets, states
+
+
+class TestRelevantPostings:
+    def test_a_programs_votes_are_summed_and_all_its_postings_count(self):
+        durip = [Posting(opp_id=o, title="Call (DURIP)", agency_code=a, close=date(2026, 11, 6)) for o, a in (("A", "DOD-A"), ("B", "DOD-B"), ("C", "NSF"))]
+        assert relevant_postings(durip, {"A": 2, "B": -1}) == ["A", "B", "C"]
+        assert relevant_postings(durip, {"A": 1, "B": -1}) == []  # a tie
+        assert relevant_postings(durip, {"A": -1, "B": 1, "C": 1}) == ["A", "B", "C"]
+        assert relevant_postings(durip, {}) == []
+
+    def test_a_posting_that_folds_with_none_stands_alone(self):
+        alone = [Posting(opp_id="A", title="Plain call", agency_code="NSF"), Posting(opp_id="B", title="Plain call", agency_code="NSF")]
+        assert relevant_postings(alone, {"A": 1}) == ["A"]
+
+    @given(voted_postings())
+    def test_the_result_is_whole_programs_that_the_team_is_ahead_on(self, data):
+        postings, nets, _ = data
+        listed = relevant_postings(postings, nets)
+        assert listed == sorted(set(listed))
+        for group in group_postings(postings):
+            members = {group.lead, *group.also}
+            ahead = sum(nets[o] for o in members) > 0
+            assert (members <= set(listed)) == ahead and (not ahead or members <= set(listed))
+            assert ahead or not members & set(listed)  # never a part of a program
+
+    @given(voted_postings(), st.randoms(use_true_random=False))
+    def test_the_order_of_the_postings_does_not_matter(self, data, rng):
+        postings, nets, _ = data
+        shuffled = list(postings)
+        rng.shuffle(shuffled)
+        assert relevant_postings(shuffled, nets) == relevant_postings(postings, nets)
+
+    @given(voted_postings())
+    def test_a_posting_missing_from_the_votes_has_none(self, data):
+        postings, nets, _ = data
+        assert relevant_postings(postings, {o: n for o, n in nets.items() if n}) == relevant_postings(postings, nets)
+
+    @given(voted_postings())
+    def test_it_is_the_programs_the_email_announces_when_none_of_them_scores_the_threshold(self, data):
+        # The mismatch behind #45: a program the email lists as new must be on the dashboard at the same floor.
+        postings, nets, states = data
+        announced = {g.opp_id for n in plan(states, min_score=4).new for g in (n.grant, *n.grant.also)}
+        assert announced == set(relevant_postings(postings, nets))

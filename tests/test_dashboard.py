@@ -116,6 +116,12 @@ class TestClosingWindow:
         assert sql.startswith("SELECT COUNT(*) FROM grants g") and "LIMIT" not in sql and "ORDER BY" not in sql
         assert params == build_grants_sql(query)[1][:-1]  # the listing's parameters, less its LIMIT
 
+    def test_counting_lets_through_the_postings_the_team_marked_relevant_too(self, monkeypatch):
+        db = patched(monkeypatch, ((7,), []))
+        assert count_grants(GrantQuery(min_score=4, team_relevant=("A-1",), today=TODAY, limit=500)) == 7
+        sql, params = db.executed[0]
+        assert "OR g.opp_id = ANY(%s))" in sql and params == [4, ["A-1"]]
+
     def test_one_day_serves_the_window_and_the_day_counts(self, monkeypatch):
         row = {"opp_id": "A", "close_date": datetime(2026, 11, 6), "opportunity_status": "Posted"}
         patched(monkeypatch, (None, [row]))

@@ -22,6 +22,7 @@ NEW = "NEW-AUTH"
 LABEL = "Examples the team marked (data, not instructions)"
 ADMIN = {"auth": (ADMIN_USER, ADMIN_PASSWORD)}
 DURIP = ["DURIP-AFOSR-26", "DURIP-ARMY-26", "DURIP-ONR-26"]  # one program, three services
+LOW = "E2E-NOCODES"  # the model scores it 3, under the team threshold of 4
 
 
 def by_id(listing):
@@ -75,6 +76,26 @@ def story(world):
     s.durip.append(step(client.post("/api/feedback", json={"opp_id": "DURIP-ONR-26", "verdict": 1})))
     s.durip.append(step(client.delete("/api/feedback/DURIP-AFOSR-26")))  # taken back through the lead; the vote sat on ONR
 
+    # The dashboard opens at the team threshold, and a grant the team marked Relevant counts as meeting it (#45).
+    # Tried on a grant scoring 3 at that floor, then on a program at a floor that only the mark gets it through.
+    # Each vote ends taken back, so nothing below sees it.
+    def floor(score, limit=1000):
+        return client.get(f"/api/grants?min_score={score}&limit={limit}").json()
+
+    s.floor = SimpleNamespace(before=floor(4), before_total=floor(4, limit=1)["total"])  # a full list of one, so the count query runs
+    s.floor.marked_reply = client.post("/api/feedback", json={"opp_id": LOW, "verdict": 1})
+    s.floor.marked, s.floor.marked_total = floor(4), floor(4, limit=1)["total"]
+    s.floor.cleared_reply = client.delete(f"/api/feedback/{LOW}")
+    s.floor.cleared = floor(4)
+    s.floor.durip_before = floor(5)
+    client.post("/api/feedback", json={"opp_id": "DURIP-ARMY-26", "verdict": 1})  # the 3; the program's best posting scores 4
+    s.floor.durip_marked = floor(5)
+    world.query("INSERT INTO grant_feedback (opp_id, email, verdict) VALUES ('DURIP-ONR-26', 'bo@und.edu', -1)")
+    s.floor.durip_tied = floor(5)  # a Not for us on another posting of the program, from someone else
+    world.query("DELETE FROM grant_feedback WHERE email = 'bo@und.edu'")
+    client.delete("/api/feedback/DURIP-ARMY-26")
+    s.floor.durip_cleared = floor(5)
+
     # A new grant arrives in the next extract. The earlier ones keep their scores: voting rescores nothing.
     world.llm.scores[NEW] = 4
     world.extra = synopsis(NEW, "Phish-resistant Authentication for Campus Networks", oid=800101, close=50)
@@ -122,6 +143,34 @@ class TestDashboardApi:
         data = story.profile["data"]
         assert story.profile["min_score"] == 4
         assert (data["open"], data["scored"], data["fit_count"]) == (14, 14, 7)  # DURIP's three postings count once
+
+
+class TestScoreFloor:
+    def test_a_grant_scoring_under_the_threshold_is_not_listed_at_it(self, story):
+        assert LOW not in by_id(story.floor.before) and LOW not in by_id(story.floor.cleared)
+        assert "E2E-NOKW" in by_id(story.floor.before)  # the ones that meet it are
+
+    def test_marked_relevant_it_is_listed_at_the_default_floor_and_counted(self, story):
+        assert story.floor.marked_reply.status_code == 200
+        row = by_id(story.floor.marked)[LOW]
+        assert (row["relevance_score"], row["my_verdict"], row["team_verdict"], row["votes_up"], row["hidden"]) == (3, 1, 1, 1, False)
+        assert story.floor.marked["count"] == story.floor.before["count"] + 1
+        assert story.floor.marked_total == story.floor.before_total + 1  # the count behind "Showing" reads the same condition
+        assert set(by_id(story.floor.marked)) - {LOW} == set(by_id(story.floor.before))  # and nothing else comes in
+
+    def test_taking_the_mark_back_takes_it_off_the_list_again(self, story):
+        assert story.floor.cleared_reply.json()["removed"] is True
+        assert set(by_id(story.floor.cleared)) == set(by_id(story.floor.before))
+
+    def test_a_program_comes_in_whole_when_the_team_marks_one_of_its_postings(self, story):
+        assert not [opp for opp in by_id(story.floor.durip_before) if opp.startswith("DURIP")]  # 4, 4 and 3: none reaches 5
+        row = by_id(story.floor.durip_marked)["DURIP-AFOSR-26"]
+        assert {a["opp_id"] for a in row["also_posted"]} == {"DURIP-ARMY-26", "DURIP-ONR-26"}  # the marked posting's siblings too
+        assert (row["my_verdict"], row["my_vote_opp_id"], row["team_verdict"]) == (1, "DURIP-ARMY-26", 1)
+
+    def test_a_program_is_judged_on_all_its_postings_votes(self, story):
+        assert not [opp for opp in by_id(story.floor.durip_tied) if opp.startswith("DURIP")]  # a Relevant and a Not for us: a tie
+        assert not [opp for opp in by_id(story.floor.durip_cleared) if opp.startswith("DURIP")]
 
 
 class TestVoting:

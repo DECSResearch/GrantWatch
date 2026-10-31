@@ -418,6 +418,19 @@ resolutions win over the text above.
     at least one emailed posting, and calls a program declined when any
     posting of it, emailed or not, has a Not for us vote: the dashboard may
     lead the row with the later posting, and a vote goes to the lead.
+- **A Relevant program passes the dashboard's score floor (#45).** The planner
+  announces a net Relevant program as if it met the threshold, so the dashboard
+  must list it at the floor it opens on, or the email links to a page without
+  it.
+  - `GET /api/grants` reads the postings of every program whose votes, summed
+    over its postings, come out ahead (`relevant_postings`, run on
+    `group_postings`, so it folds as the planner does), and `_where` adds
+    `OR g.opp_id = ANY(...)` to the `min_score` condition, as it does for a
+    tracked grant. `count_grants` shares that condition. All of the program's
+    postings pass, so the row folds as it would at any floor.
+  - The read is its own query before the grants, not a join, and has the same
+    missing-table guard as the vote counts: before the first ingest it is an
+    empty set, and the list still answers. It runs only when there is a floor.
 
 ### UX
 
