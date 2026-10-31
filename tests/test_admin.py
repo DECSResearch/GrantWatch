@@ -1257,6 +1257,11 @@ class TestAdminPage:
         for part in ("function renderVerdict(data) {", "function renderWarnings(list) {"):
             assert "sign_in" not in webapp.ADMIN_HTML.split(part)[1].split("\n  }\n")[0]  # the count of things needing attention ignores it
 
+    def test_an_address_in_the_people_table_keeps_a_readable_column_when_the_table_scrolls_on_a_phone(self):
+        # Six columns do not fit 343px; without a minimum the address column shrinks to a few letters.
+        assert "td.email { overflow-wrap: anywhere; min-width: 150px; }" in webapp.ADMIN_HTML
+        assert 'class="scroll"><table id="people">' in webapp.ADMIN_HTML  # the wrapper that scrolls sideways instead of the page
+
     def test_the_keyword_lines_say_so_when_keywords_do_not_filter(self):
         team = webapp.ADMIN_HTML.split("function renderTeam(data) {")[1].split("\n  }\n")[0]
         assert "data.health.scores_every_grant" in team and "Keywords do not filter; every open grant is scored." in team
