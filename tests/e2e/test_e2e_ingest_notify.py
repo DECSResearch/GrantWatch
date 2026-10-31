@@ -89,12 +89,18 @@ def later_emails(world, first_email):
 
 @pytest.fixture(scope="module")
 def admin_after_a_vote(world, later_emails):
-    """Every program has gone out as new; then one member marks one DURIP posting Not for us, and the admin page is read."""
-    world.query("INSERT INTO grant_feedback (opp_id, email, verdict) VALUES ('DURIP-ARMY-26', 'lead@und.edu', -1)")
+    """Every program has gone out as new; then a fourth DURIP posting is added that was never emailed,
+    scores highest so it leads the row, and takes a member's Not for us. The admin page is read."""
+    world.query(
+        "INSERT INTO grants (opp_id, title, agency_code, close_date, relevance_score) "
+        "SELECT 'DURIP-DARPA-26', title, 'DOD-DARPA', close_date, 5 FROM grants WHERE opp_id = 'DURIP-ARMY-26'"
+    )
+    world.query("INSERT INTO grant_feedback (opp_id, email, verdict) VALUES ('DURIP-DARPA-26', 'lead@und.edu', -1)")
     client = TestClient(webapp.app, base_url="http://localhost")
     return SimpleNamespace(
         body=client.get("/admin/api", auth=(ADMIN_USER, ADMIN_PASSWORD)).json(),
         recorded=world.query("SELECT COUNT(DISTINCT opp_id) AS n FROM notifications WHERE kind = 'new'")[0]["n"],
+        sibling_emailed=world.query("SELECT COUNT(*) AS n FROM notifications WHERE opp_id = 'DURIP-DARPA-26'")[0]["n"],
     )
 
 
@@ -213,4 +219,8 @@ class TestNotify:
 class TestAdminFeedbackShare:
     def test_it_counts_programs_not_the_postings_each_was_recorded_under(self, admin_after_a_vote):
         assert admin_after_a_vote.recorded == 9  # seven programs; the DURIP triple is three rows of notifications
+        assert admin_after_a_vote.body["feedback"]["emailed"] == 7
+
+    def test_a_not_for_us_on_a_posting_added_after_the_program_went_out_declines_the_program(self, admin_after_a_vote):
+        assert admin_after_a_vote.sibling_emailed == 0  # the planner skips a program once any of its postings was announced
         assert admin_after_a_vote.body["feedback"] == {"votes": 1, "emailed": 7, "declined": 1, "days": 30}

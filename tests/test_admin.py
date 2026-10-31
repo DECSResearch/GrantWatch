@@ -307,8 +307,8 @@ class FakeDb:
 STARTED = datetime(2026, 9, 14, 12, 30, tzinfo=timezone.utc)
 
 
-def _emailed(opp_id, title, agency_code, declined=False, close=date(2026, 11, 6)):
-    return {"opp_id": opp_id, "title": title, "agency_code": agency_code, "close_date": close, "declined": declined}
+def _posting(opp_id, title, agency_code, declined=False, close=date(2026, 11, 6), emailed=True):
+    return {"opp_id": opp_id, "title": title, "agency_code": agency_code, "close_date": close, "emailed": emailed, "declined": declined}
 
 
 def _answers(token="tok-1"):
@@ -328,10 +328,11 @@ def _answers(token="tok-1"):
             "feedback_votes": 7,
         }],
         # Three postings of one program and three plain grants went out as new: four programs, one marked Not for us.
+        # A grant closing the same day that was never emailed is not one of them.
         admin._FEEDBACK_SQL: [
-            _emailed("D-AFOSR", "Instrumentation Program (DURIP)", "AFOSR"), _emailed("D-ARMY", "Instrumentation Program (DURIP)", "ARMY", declined=True),
-            _emailed("D-ONR", "Instrumentation Program (DURIP)", "ONR"), _emailed("P-1", "One", "NSF"), _emailed("P-2", "Two", "NIH"),
-            _emailed("P-3", "Three", "DOE"),
+            _posting("D-AFOSR", "Instrumentation Program (DURIP)", "AFOSR"), _posting("D-ARMY", "Instrumentation Program (DURIP)", "ARMY", declined=True),
+            _posting("D-ONR", "Instrumentation Program (DURIP)", "ONR"), _posting("P-1", "One", "NSF"), _posting("P-2", "Two", "NIH"),
+            _posting("P-3", "Three", "DOE"), _posting("X-1", "Four", "NASA", emailed=False),
         ],
         admin._RECIPIENTS_SQL: [
             {"email": "a@und.edu", "name": None, "min_score": None, "active": True, "unsubscribed_at": None,
@@ -452,42 +453,66 @@ class TestAdminStatus:
         assert status["feedback"] == {"votes": 7, "emailed": 4, "declined": 1, "days": 30}
         assert not any(name.startswith("feedback") for name in status["health"])
 
-    def test_feedback_reads_the_postings_emailed_as_new_in_the_last_30_days_and_whether_someone_marked_each_not_for_us(self):
+    def test_feedback_reads_the_postings_emailed_as_new_in_the_last_30_days_and_the_grants_that_could_be_folded_with_them(self):
         assert "(SELECT COUNT(*) FROM grant_feedback) AS feedback_votes" in " ".join(admin._HEALTH_SQL.split())
         assert "feedback_emailed" not in admin._HEALTH_SQL and "feedback_declined" not in admin._HEALTH_SQL  # counted per program below
         sql = " ".join(admin._FEEDBACK_SQL.split())
-        assert "SELECT DISTINCT opp_id FROM notifications WHERE kind = 'new' AND sent_at > NOW() - INTERVAL '30 days'" in sql
-        assert "LEFT JOIN grants g ON g.opp_id = n.opp_id" in sql  # a posting that left the table is still counted
-        assert "EXISTS (SELECT 1 FROM grant_feedback f WHERE f.opp_id = n.opp_id AND f.verdict = -1) AS declined" in sql
+        assert "WITH emailed AS ( SELECT DISTINCT opp_id FROM notifications WHERE kind = 'new' AND sent_at > NOW() - INTERVAL '30 days' )" in sql
+        assert "SELECT e.opp_id, g.title, g.agency_code, g.close_date::date AS close_date, TRUE AS emailed FROM emailed e LEFT JOIN grants g ON g.opp_id = e.opp_id" in sql
+        # a posting that left the table is still counted; so is a sibling added after the program was announced, which was never emailed
+        assert "UNION ALL SELECT g.opp_id, g.title, g.agency_code, g.close_date::date, FALSE FROM grants g" in sql
+        assert "WHERE NOT EXISTS (SELECT 1 FROM emailed e WHERE e.opp_id = g.opp_id)" in sql
+        assert "AND g.close_date::date IN (SELECT g2.close_date::date FROM emailed e JOIN grants g2 ON g2.opp_id = e.opp_id)" in sql
+        assert "EXISTS (SELECT 1 FROM grant_feedback f WHERE f.opp_id = p.opp_id AND f.verdict = -1) AS declined" in sql
 
     def test_a_program_emailed_as_three_postings_counts_once_and_is_declined_when_any_posting_is(self):
-        rows = [_emailed(f"D-{a}", "Instrumentation Program (DURIP)", a, declined=a == "ONR") for a in ("AFOSR", "ARMY", "ONR")]
+        rows = [_posting(f"D-{a}", "Instrumentation Program (DURIP)", a, declined=a == "ONR") for a in ("AFOSR", "ARMY", "ONR")]
         assert admin.feedback_programs(rows) == (1, 1)  # one row the team saw and rejected, not "1 of the 3 grants emailed"
         assert admin.feedback_programs([dict(r, declined=False) for r in rows]) == (1, 0)
 
+    def test_a_not_for_us_on_a_sibling_that_was_never_emailed_declines_the_program(self):
+        # The sibling was posted after the program went out, so it has no notification, but it scores higher and leads the row.
+        rows = [
+            _posting("A-ARMY", "Instrumentation Program (DURIP)", "ARMY"),
+            _posting("B-NAVY", "Instrumentation Program (DURIP)", "NAVY", declined=True, emailed=False),
+        ]
+        assert admin.feedback_programs(rows) == (1, 1)
+        assert admin.feedback_programs([dict(r, declined=False) for r in rows]) == (1, 0)
+
+    def test_a_program_none_of_whose_postings_was_emailed_is_not_counted_whatever_its_votes(self):
+        rows = [_posting(f"D-{a}", "Instrumentation Program (DURIP)", a, declined=True, emailed=False) for a in ("ARMY", "NAVY")]
+        rows.append(_posting("P-1", "One", "NSF"))
+        assert admin.feedback_programs(rows) == (1, 0)
+
     def test_plain_grants_programs_of_other_days_and_grants_that_left_the_table_each_count_once(self):
         rows = [
-            _emailed("A", "One", "NSF", declined=True), _emailed("B", "Two", "NIH"),
-            _emailed("D1", "Program (DURIP)", "AFOSR"), _emailed("D2", "Program (DURIP)", "ONR", close=date(2026, 12, 1)),  # another day
-            {"opp_id": "GONE", "title": None, "agency_code": None, "close_date": None, "declined": True},
+            _posting("A", "One", "NSF", declined=True), _posting("B", "Two", "NIH"),
+            _posting("D1", "Program (DURIP)", "AFOSR"), _posting("D2", "Program (DURIP)", "ONR", close=date(2026, 12, 1)),  # another day
+            {"opp_id": "GONE", "title": None, "agency_code": None, "close_date": None, "emailed": True, "declined": True},
         ]
         assert admin.feedback_programs(rows) == (5, 2)
         assert admin.feedback_programs([]) == (0, 0)
 
-    @given(st.integers(1, 5), st.booleans())
-    def test_more_postings_of_one_program_never_make_it_more_programs(self, postings, marked):
-        rows = [_emailed(f"D{i}", "Call (DURIP)", f"AG{i}", declined=marked and i == postings - 1) for i in range(postings)]
-        assert admin.feedback_programs(rows) == (1, int(marked))
+    @given(st.lists(st.tuples(st.booleans(), st.booleans()), min_size=1, max_size=5))
+    def test_a_program_is_counted_when_any_posting_was_emailed_and_declined_when_any_posting_has_a_not_for_us(self, flags):
+        rows = [_posting(f"D{i}", "Call (DURIP)", f"AG{i}", declined=declined, emailed=emailed) for i, (emailed, declined) in enumerate(flags)]
+        counted = any(emailed for emailed, _ in flags)
+        assert admin.feedback_programs(rows) == (int(counted), int(counted and any(declined for _, declined in flags)))
 
     @given(st.lists(st.tuples(st.sampled_from(["A", "B", "C"]), st.sampled_from(["", " (DURIP)", " (MURI)"]), st.sampled_from([date(2026, 11, 6), date(2026, 11, 13), None]),
-                              st.booleans()), max_size=15, unique_by=lambda t: t[:3]), st.data())
+                              st.booleans(), st.booleans()), max_size=15, unique_by=lambda t: t[:3]), st.data())
     def test_the_share_counts_programs_never_more_than_postings_and_does_not_depend_on_order(self, picks, data):
-        rows = [_emailed(f"G{i}", f"Call{tag}", agency, declined=declined, close=close) for i, (agency, tag, close, declined) in enumerate(picks)]
+        rows = [
+            _posting(f"G{i}", f"Call{tag}", agency, declined=declined, close=close, emailed=emailed)
+            for i, (agency, tag, close, declined, emailed) in enumerate(picks)
+        ]
         emailed, declined = admin.feedback_programs(rows)
-        assert declined <= emailed <= len(rows)
-        assert declined <= sum(1 for r in rows if r["declined"])  # a program is declined by a posting, never on its own
-        assert (emailed == 0) == (not rows) and (declined == 0) == (not any(r["declined"] for r in rows))
+        assert declined <= emailed <= sum(1 for r in rows if r["emailed"])  # a program is emailed through a posting, never on its own
+        assert declined <= sum(1 for r in rows if r["declined"])  # and declined by a posting
+        assert (emailed == 0) == (not any(r["emailed"] for r in rows))
         assert admin.feedback_programs(data.draw(st.permutations(rows))) == (emailed, declined)
+        assert admin.feedback_programs([dict(r, declined=True) for r in rows]) == (emailed, emailed)  # every posting marked: every program declined
+        assert admin.feedback_programs([dict(r, declined=False) for r in rows]) == (emailed, 0)
 
     def test_the_profile_and_settings_come_with_it(self, fake_db):
         status = admin.admin_status()

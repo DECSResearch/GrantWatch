@@ -411,9 +411,13 @@ resolutions win over the text above.
     `my_vote_opp_id`: that posting, or the lead when there is none. The
     dashboard sends its votes to that posting.
   - The admin share counts programs, as everywhere else. `Notice.records`
-    writes one `new` notification per posting, so the emailed postings are
-    folded with `group_postings` (`feedback_programs`), and a program is
-    declined when any posting of it has a Not for us vote.
+    writes one `new` notification per posting, and the planner skips a program
+    once any posting of it was announced, so a posting added later is never
+    emailed. `feedback_programs` folds the emailed postings and every other
+    grant closing the same day with `group_postings`, counts the programs with
+    at least one emailed posting, and calls a program declined when any
+    posting of it, emailed or not, has a Not for us vote: the dashboard may
+    lead the row with the later posting, and a vote goes to the lead.
 
 ### UX
 

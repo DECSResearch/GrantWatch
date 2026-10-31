@@ -56,19 +56,23 @@ def run_state(finished_at: Any, ok: Optional[bool], age_seconds: Optional[float]
 
 
 def feedback_programs(rows: List[Dict[str, Any]]) -> Tuple[int, int]:
-    """(emailed, declined): how many programs the rows stand for, and how many someone marked Not for us.
+    """(emailed, declined): how many programs were emailed, and how many someone marked Not for us.
 
-    ``rows`` are the emailed postings (see _FEEDBACK_SQL). Postings of one program count once,
-    as the team sees them in one row, and the program is declined when any of them has a
-    Not for us vote.
+    ``rows`` are the emailed postings and the other grants closing the same day (see _FEEDBACK_SQL).
+    Postings of one program count once, as the team sees them in one row, and only if one of
+    them was emailed. The program is declined when any of its postings has a Not for us vote,
+    one added after the program was announced and never emailed included: the dashboard may
+    lead the row with it, and a vote goes to the lead.
     """
     postings = [
         Posting(opp_id=row["opp_id"], title=row.get("title") or "", agency_code=row.get("agency_code") or "", close=row.get("close_date"))
         for row in rows
     ]
-    marked = {row["opp_id"] for row in rows if row.get("declined")}
-    groups = group_postings(postings)
-    return len(groups), sum(1 for group in groups if marked & {group.lead, *group.also})
+    emailed = {row["opp_id"] for row in rows if row["emailed"]}
+    marked = {row["opp_id"] for row in rows if row["declined"]}
+    programs = [{group.lead, *group.also} for group in group_postings(postings)]
+    shown = [program for program in programs if program & emailed]
+    return len(shown), sum(1 for program in shown if program & marked)
 
 
 def _ago(seconds: float) -> str:
@@ -212,16 +216,30 @@ _HEALTH_SQL = f"""
     FROM grants g;
 """
 
-# The postings emailed as new in the last _FEEDBACK_DAYS days, one row each, with what the grouping
-# rules read and whether anyone marked it Not for us. A program posted by several services is
-# emailed as one row but recorded once per posting, so these rows are folded (feedback_programs).
-# A posting that has left the grants table has no title or date and stands alone.
+# The postings emailed as new in the last _FEEDBACK_DAYS days, one row each, and every other grant
+# closing the same day (the postings they could be folded with, as sql_utils._PROGRAM_SQL reads
+# them), with what the grouping rules read, whether it was emailed and whether anyone marked it Not
+# for us. A program posted by several services is emailed as one row but recorded once per posting,
+# and a posting added after it was announced is never emailed, yet the dashboard may lead the row
+# with it, so these rows are folded (feedback_programs). A posting that has left the grants table
+# has no title or date and stands alone.
 _FEEDBACK_SQL = f"""
-    SELECT n.opp_id, g.title, g.agency_code, g.close_date::date AS close_date,
-           EXISTS (SELECT 1 FROM grant_feedback f WHERE f.opp_id = n.opp_id AND f.verdict = -1) AS declined
-    FROM (SELECT DISTINCT opp_id FROM notifications
-          WHERE kind = 'new' AND sent_at > NOW() - INTERVAL '{_FEEDBACK_DAYS} days') n
-    LEFT JOIN grants g ON g.opp_id = n.opp_id;
+    WITH emailed AS (
+        SELECT DISTINCT opp_id FROM notifications
+        WHERE kind = 'new' AND sent_at > NOW() - INTERVAL '{_FEEDBACK_DAYS} days'
+    )
+    SELECT p.opp_id, p.title, p.agency_code, p.close_date, p.emailed,
+           EXISTS (SELECT 1 FROM grant_feedback f WHERE f.opp_id = p.opp_id AND f.verdict = -1) AS declined
+    FROM (
+        SELECT e.opp_id, g.title, g.agency_code, g.close_date::date AS close_date, TRUE AS emailed
+        FROM emailed e
+        LEFT JOIN grants g ON g.opp_id = e.opp_id
+        UNION ALL
+        SELECT g.opp_id, g.title, g.agency_code, g.close_date::date, FALSE
+        FROM grants g
+        WHERE NOT EXISTS (SELECT 1 FROM emailed e WHERE e.opp_id = g.opp_id)
+          AND g.close_date::date IN (SELECT g2.close_date::date FROM emailed e JOIN grants g2 ON g2.opp_id = e.opp_id)
+    ) p;
 """
 
 # The unsubscribe token is deliberately not selected.
@@ -399,7 +417,7 @@ def admin_status() -> Dict[str, Any]:
         cur.execute(_HEALTH_SQL)
         health_row = dict(cur.fetchone() or {})
         cur.execute(_FEEDBACK_SQL)
-        emailed_postings = [dict(row) for row in cur.fetchall()]
+        feedback_rows = [dict(row) for row in cur.fetchall()]
         cur.execute(_RECIPIENTS_SQL)
         recipients = [_pick(row, _RECIPIENT_FIELDS) for row in cur.fetchall()]
         cur.execute(_EMAILS_SQL, {"tz": zone})
@@ -413,7 +431,7 @@ def admin_status() -> Dict[str, Any]:
         run["has_log"] = bool(run["has_log"])
         runs.append(run)
     health = _pick(health_row, _HEALTH_FIELDS)
-    emailed, declined = feedback_programs(emailed_postings)
+    emailed, declined = feedback_programs(feedback_rows)
     feedback = {"votes": health_row.get("feedback_votes"), "emailed": emailed, "declined": declined, "days": _FEEDBACK_DAYS}
     health["data_as_of"] = _iso(health["data_as_of"])
     health["scoring_on"] = profile.is_configured
