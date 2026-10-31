@@ -28,15 +28,20 @@ from . import admin_auth, auth
 from .document_checker_routes import router as document_checker_router
 
 from grants.admin import admin_status, llm_check, run_log
-from grants.display import group_rows
+from grants.display import group_rows, public_rows
 from grants.feedback import with_feedback
 from grants.profile import Profile, load_profile
-from grants.queries import GrantQuery, count_grants, data_status, get_grant, query_grants
+from grants.queries import (
+    GrantQuery, count_grants, count_public_grants, data_status, get_grant, get_public_grant, public_status, query_grants,
+    query_public_grants,
+)
 from grants.sql_utils import (
     add_to_watchlist, clear_vote, ensure_schema, fetch_relevant_ids, fetch_vote_counts, list_watchlist, record_vote,
     remove_from_watchlist,
 )
+from llm_utils.relevance import LLMSettings
 from notifications import store
+from notifications.planner import Recipient
 from notifications.transport import build_message, get_transport, sender_address
 
 settings = get_settings()
@@ -158,15 +163,21 @@ def _public_base(request: Request) -> Optional[str]:
     return None
 
 
-def _session_email(request: Request) -> Optional[str]:
+def _viewer(request: Request) -> Optional[Recipient]:
+    """The signed-in member, or None for a visitor (no cookie, a bad one, a removed member, or no GRANTS_SECRET_KEY on this server)."""
     email = auth.verify(request.cookies.get(auth.SESSION_COOKIE), auth.SESSION)
     if email is None:
         return None
     try:
-        return email if store.active_recipient(email) else None  # removed members lose access
+        return store.active_recipient(email)  # removed members lose access
     except Exception as exc:
         logger.warning("Could not check the session against recipients: %s", exc)
         return None
+
+
+def _session_email(request: Request) -> Optional[str]:
+    member = _viewer(request)
+    return member.email if member else None
 
 
 def require_member(request: Request) -> str:
@@ -286,8 +297,30 @@ def admin_run_log(run_id: int = PathParam(ge=1, le=2_147_483_647), _admin: str =
     return log
 
 
+def _public_list_on() -> bool:
+    """Whether visitors may see a list at all.
+
+    The database holds every open grant only when a model scores them all; without one it holds the
+    keyword matches, which is a pick made for the team and not the open grants GrantWatch follows.
+    """
+    return _profile().is_configured and LLMSettings.from_env().enabled
+
+
+def _public_profile() -> Dict[str, Any]:
+    """All a visitor is told about the data: whether there is a list, how many grants are open, and when it was loaded."""
+    on = _public_list_on()
+    try:
+        data: Optional[Dict[str, Any]] = public_status() if on else {"open": 0, "data_as_of": None}
+    except Exception as exc:
+        logger.warning("Could not read data status: %s", exc)
+        data = None
+    return {"configured": on, "data": data}
+
+
 @app.get("/api/profile")
-def profile_info() -> Dict[str, Any]:
+def profile_info(request: Request) -> Dict[str, Any]:
+    if _viewer(request) is None:
+        return _public_profile()
     profile = _profile()
     try:
         status = data_status(profile.min_score_to_notify)
@@ -306,11 +339,11 @@ def profile_info() -> Dict[str, Any]:
     }
 
 
-def _with_votes(rows: List[Dict[str, Any]], request: Request) -> List[Dict[str, Any]]:
-    """The rows with the team's votes on each; the vote fields are null when they cannot be read."""
+def _with_votes(rows: List[Dict[str, Any]], email: str) -> List[Dict[str, Any]]:
+    """The rows with the team's votes on each and ``email``'s own; the vote fields are null when they cannot be read."""
     ids = [opp_id for row in rows for opp_id in (row["opp_id"], *(a["opp_id"] for a in row["also_posted"]))]
     try:
-        counts: Optional[Dict[str, Any]] = fetch_vote_counts(ids, _session_email(request))
+        counts: Optional[Dict[str, Any]] = fetch_vote_counts(ids, email)
     except UndefinedTable:
         counts = None  # the daily job has not created grant_feedback yet
     except Exception as exc:
@@ -353,6 +386,14 @@ def get_grants(
     if due_from and due_to and due_from > due_to:
         raise HTTPException(status_code=400, detail="due_from cannot be after due_to")
 
+    viewer = _viewer(request)
+    if viewer is None:
+        # A visitor: no score floor, no tracked-only, no closed grants; those are a member's.
+        return _public_grants(GrantQuery(
+            q=q, closing_within=closing_within, include_forecasted=include_forecasted, stage=stage,
+            due_from=due_from, due_to=due_to, limit=limit, today=date.today(),
+        ))
+
     query = GrantQuery(
         q=q,
         min_score=min_score,
@@ -374,13 +415,29 @@ def get_grants(
         results = group_rows(rows)
     except Exception as exc:
         raise _db_error("fetching grants", exc) from exc
-    return {"results": _with_votes(results, request), "count": len(results), "total": total}
+    return {"results": _with_votes(results, viewer.email), "count": len(results), "total": total}
+
+
+def _public_grants(query: GrantQuery) -> Dict[str, Any]:
+    """The open Grants.gov grants as a visitor sees them (see ``grants.queries.build_public_sql``); nothing at all when there is no list."""
+    if not _public_list_on():
+        return {"results": [], "count": 0, "total": 0}
+    try:
+        rows = query_public_grants(query)
+        total = count_public_grants(query) if len(rows) >= query.limit else len(rows)
+        results = public_rows(rows)
+    except Exception as exc:
+        raise _db_error("fetching grants", exc) from exc
+    return {"results": results, "count": len(results), "total": total}
 
 
 @app.get("/api/grants/{opp_id:path}")
-def grant_detail(opp_id: str) -> Dict[str, Any]:
+def grant_detail(opp_id: str, request: Request) -> Dict[str, Any]:
+    visitor = _viewer(request) is None
+    if visitor and not _public_list_on():
+        raise HTTPException(status_code=404, detail="Grant not found.")
     try:
-        grant = get_grant(opp_id)
+        grant = get_public_grant(opp_id) if visitor else get_grant(opp_id)
     except Exception as exc:
         raise _db_error("fetching the grant", exc) from exc
     if grant is None:
@@ -389,7 +446,7 @@ def grant_detail(opp_id: str) -> Dict[str, Any]:
 
 
 @app.get("/api/watchlist")
-def watchlist() -> Dict[str, List[Dict[str, Any]]]:
+def watchlist(_member: str = Depends(require_member)) -> Dict[str, List[Dict[str, Any]]]:
     try:
         rows = list_watchlist()
     except Exception as exc:

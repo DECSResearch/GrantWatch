@@ -25,9 +25,11 @@ from grants import queries, sql_utils  # noqa: E402
 from grants.display import days_until_deadline  # noqa: E402
 from grants.profile import Profile  # noqa: E402
 from grants.queries import GrantQuery, build_grants_sql, count_grants, data_status  # noqa: E402
+from notifications.planner import Recipient  # noqa: E402
 from support import patched  # noqa: E402
 from web import app as webapp  # noqa: E402
 
+MEMBER = Recipient(id=1, email="me@und.edu", unsubscribe_token="t")
 INDEX = webapp.INDEX_HTML
 ADMIN = webapp.ADMIN_HTML
 TODAY = date(2026, 10, 30)
@@ -110,6 +112,7 @@ class TestFitCount:
 
         monkeypatch.setattr(webapp, "_profile", lambda: Profile(summary="Cyber research.", min_score_to_notify=3))
         monkeypatch.setattr(webapp, "data_status", status)
+        monkeypatch.setattr(webapp, "_viewer", lambda request: MEMBER)  # signed in: a visitor is not told the team's threshold
         body = TestClient(webapp.app, base_url="http://localhost").get("/api/profile").json()
         assert asked == [3] and body["min_score"] == 3 and body["data"]["fit_count"] == 2
 
@@ -136,6 +139,7 @@ class TestGrantsTotal:
 
             monkeypatch.setattr(webapp, "query_grants", query)
             monkeypatch.setattr(webapp, "count_grants", count)
+            monkeypatch.setattr(webapp, "_viewer", lambda request: MEMBER)  # signed in: a visitor's list has its own tests
             return TestClient(webapp.app, base_url="http://localhost").get(f"/api/grants?limit={limit}").json()
 
         return run, seen
@@ -159,7 +163,7 @@ class TestGrantsTotal:
     def test_the_total_is_never_less_than_what_is_listed(self, n, limit, extra):
         rows = listing(min(n, limit))  # the query never returns more than its limit
         matching = len(rows) + extra if len(rows) == limit else None
-        with patch.object(webapp, "fetch_vote_counts", lambda ids, email=None: {}), \
+        with patch.object(webapp, "fetch_vote_counts", lambda ids, email=None: {}), patch.object(webapp, "_viewer", lambda request: MEMBER), \
                 patch.object(webapp, "query_grants", lambda q: list(rows)), patch.object(webapp, "count_grants", lambda q: matching):
             body = TestClient(webapp.app, base_url="http://localhost").get(f"/api/grants?limit={limit}").json()
         assert body["total"] >= len(rows) >= body["count"]

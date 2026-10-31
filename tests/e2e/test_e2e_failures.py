@@ -113,6 +113,7 @@ class TestFeedbackTableMissing:
     def test_the_list_still_answers_at_a_score_floor_before_anyone_has_made_the_table(self, fresh, client):
         # A database the daily job has not brought up to date: the grants are there, grant_feedback is not.
         assert fresh.ingest() == 0
+        fresh.sign_in(client, "ana@und.edu")  # the vote fields are a member's; a visitor's list has none
         fresh.query("DROP TABLE grant_feedback")
         try:
             floor = client.get("/api/grants?min_score=4&limit=1000")

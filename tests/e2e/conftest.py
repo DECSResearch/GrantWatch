@@ -35,7 +35,8 @@ from grants.sql_utils import _DSN_ENV_VARS, db_connection  # noqa: E402
 from grants_data import pipeline  # noqa: E402
 from harness import ADMIN_PASSWORD, ADMIN_USER, DASHBOARD_URL, MODEL, PROFILE, SECRET_KEY, FakeLLM, render_extract  # noqa: E402
 from llm_utils import relevance_cache  # noqa: E402
-from web import admin_auth  # noqa: E402
+from notifications import store  # noqa: E402
+from web import admin_auth, auth  # noqa: E402
 from web import app as webapp  # noqa: E402
 
 # Everything the code reads from the environment that a developer's shell or .env could set. Cleared
@@ -110,6 +111,11 @@ class World:
 
     def emails(self) -> List[Path]:
         return sorted(self.outbox.glob("*.eml"))
+
+    def sign_in(self, client: Any, email: str) -> None:
+        """Make ``email`` a recipient and give ``client`` their session cookie, as following their sign-in link does."""
+        store.add_recipient(email)
+        client.cookies.set(auth.SESSION_COOKIE, auth.sign(auth.SESSION, email, auth.SESSION_SECONDS))
 
     def reset(self) -> None:
         """Back to an empty database, cache, outbox and folder of CSVs, and a model that answers."""

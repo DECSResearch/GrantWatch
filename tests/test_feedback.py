@@ -960,23 +960,16 @@ class TestGrantsApi:
         posting("D", title="Tracked call", watched=True),
     ]
 
-    def get(self, web, signed_in):
+    def get(self, web):
         client, state = web
         state.rows = [dict(r) for r in self.ROWS]
         state.counts = {"A": Votes(1, 0, 1), "B": Votes(0, 1, None), "C": Votes(0, 2, -1), "D": Votes(0, 2, None)}
-        if signed_in:
-            sign_in(client)
+        sign_in(client)
         body = client.get("/api/grants").json()
         return {r["opp_id"]: r for r in body["results"]}, state
 
-    def test_signed_out_sees_the_counts_but_not_a_verdict_of_its_own(self, web):
-        rows, state = self.get(web, signed_in=False)
-        assert state.asked[0][1] is None
-        assert all(r["my_verdict"] is None for r in rows.values())
-        assert (rows["C"]["votes_up"], rows["C"]["votes_down"], rows["C"]["team_verdict"], rows["C"]["hidden"]) == (0, 2, -1, True)
-
     def test_signed_in_sees_its_own_verdict(self, web):
-        rows, state = self.get(web, signed_in=True)
+        rows, state = self.get(web)
         assert state.asked[0][1] == "me@und.edu"
         assert rows["C"]["my_verdict"] == -1 and rows["C"]["hidden"] is True
 
@@ -989,17 +982,17 @@ class TestGrantsApi:
         assert (row["my_verdict"], row["my_vote_opp_id"], row["votes_down"]) == (-1, "B", 1)
 
     def test_a_row_with_no_vote_of_mine_points_new_votes_at_the_lead(self, web):
-        rows, _ = self.get(web, signed_in=False)
+        rows, _ = self.get(web)
         assert {opp: r["my_vote_opp_id"] for opp, r in rows.items()} == {"A": "A", "C": "C", "D": "D"}
 
     def test_the_votes_asked_for_cover_every_posting_of_a_program(self, web):
-        rows, state = self.get(web, signed_in=False)
+        rows, state = self.get(web)
         assert sorted(state.asked[0][0]) == ["A", "B", "C", "D"]
         assert [a["opp_id"] for a in rows["A"]["also_posted"]] == ["B"]
         assert (rows["A"]["votes_up"], rows["A"]["votes_down"], rows["A"]["team_verdict"], rows["A"]["hidden"]) == (1, 1, 0, False)
 
     def test_a_tracked_grant_the_team_dislikes_is_not_hidden(self, web):
-        rows, _ = self.get(web, signed_in=False)
+        rows, _ = self.get(web)
         assert rows["D"]["team_verdict"] == -1 and rows["D"]["hidden"] is False
 
     @pytest.mark.parametrize("error", [UndefinedTable(), RuntimeError("down")])
@@ -1007,6 +1000,7 @@ class TestGrantsApi:
         client, state = web
         state.rows = [dict(r) for r in self.ROWS]
         state.counts_error = error
+        sign_in(client)
         with caplog.at_level(logging.WARNING, logger="grantwatch.web"):
             body = client.get("/api/grants").json()
         assert body["count"] == 3  # the grants still come back, with the pair folded
@@ -1016,7 +1010,7 @@ class TestGrantsApi:
         assert ("Could not read the team's votes" in caplog.text) == isinstance(error, RuntimeError)
 
     def test_the_existing_fields_are_still_there(self, web):
-        rows, _ = self.get(web, signed_in=False)
+        rows, _ = self.get(web)
         assert {"title", "watched", "relevance_score", "also_posted", "superseded_by", "url"} <= set(rows["C"])
 
 
@@ -1025,12 +1019,14 @@ class TestScoreFloorAndTheTeam:
 
     def test_the_postings_the_team_marked_relevant_go_to_the_query_when_there_is_a_floor(self, web):
         client, state = web
+        sign_in(client)
         state.relevant = ["B", "A"]
         assert client.get("/api/grants?min_score=4").status_code == 200
         assert state.queries[0].min_score == 4 and state.queries[0].team_relevant == ("B", "A")
 
     def test_the_count_behind_a_full_list_uses_the_same_postings(self, web):
         client, state = web
+        sign_in(client)
         state.relevant, state.rows = ["A"], [posting("A")]
         body = client.get("/api/grants?min_score=3&limit=1").json()
         assert body["total"] == 99 and state.counted[0].team_relevant == ("A",)  # counted, since the list is full
@@ -1038,6 +1034,7 @@ class TestScoreFloorAndTheTeam:
     @pytest.mark.parametrize("floor", ["", "?min_score=0"])
     def test_without_a_floor_the_votes_are_not_read(self, web, floor):
         client, state = web
+        sign_in(client)
         state.relevant = ["A"]
         client.get(f"/api/grants{floor}")
         assert state.relevant_reads == 0 and state.queries[0].team_relevant == ()
@@ -1045,6 +1042,7 @@ class TestScoreFloorAndTheTeam:
     @pytest.mark.parametrize("error", [UndefinedTable(), RuntimeError("down")])
     def test_votes_that_cannot_be_read_leave_the_list_as_it_was(self, web, error, caplog):
         client, state = web
+        sign_in(client)
         state.rows, state.relevant_error = [posting("A")], error
         with caplog.at_level(logging.WARNING, logger="grantwatch.web"):
             reply = client.get("/api/grants?min_score=4")

@@ -46,13 +46,13 @@ def story(world):
     client = TestClient(webapp.app, base_url="http://localhost")
 
     s = SimpleNamespace(first_requests=first_requests)
-    s.signed_out = client.get("/api/grants?limit=1000").json()
-    s.profile = client.get("/api/profile").json()
     s.session_before = client.get("/api/session").json()
     s.vote_signed_out = client.post("/api/feedback", json={"opp_id": "E2E-NOKW", "verdict": 1})
 
     s.login = sign_in(client, world)
     s.session_after = client.get("/api/session").json()
+    s.before_votes = client.get("/api/grants?limit=1000").json()  # a member's list; a visitor's has its own tests
+    s.profile = client.get("/api/profile").json()
     s.voted = [
         client.post("/api/feedback", json={"opp_id": "E2E-NOKW", "verdict": 1}),
         client.post("/api/feedback", json={"opp_id": "E2E-BROAD", "verdict": -1}),
@@ -124,25 +124,25 @@ def story(world):
 
 class TestDashboardApi:
     def test_every_row_carries_the_team_marks_and_they_are_empty_before_any_vote(self, story):
-        rows = story.signed_out["results"]
+        rows = story.before_votes["results"]
         assert len(rows) == 12  # 14 postings, with the three DURIP postings folded into one row
         for row in rows:
             assert row["my_verdict"] is None and row["votes_up"] == 0 and row["votes_down"] == 0
             assert row["team_verdict"] == 0 and row["hidden"] is False
 
     def test_a_program_posted_by_three_services_is_one_row(self, story):
-        rows = by_id(story.signed_out)
+        rows = by_id(story.before_votes)
         assert [row for row in rows if row.startswith("DURIP")] == ["DURIP-AFOSR-26"]
         assert {a["opp_id"] for a in rows["DURIP-AFOSR-26"]["also_posted"]} == {"DURIP-ARMY-26", "DURIP-ONR-26"}
-        assert story.signed_out["count"] == 12 and story.signed_out["total"] >= 12
+        assert story.before_votes["count"] == 12 and story.before_votes["total"] >= 12
 
     def test_an_older_solicitation_is_noted_never_hidden(self, story):
-        rows = by_id(story.signed_out)
+        rows = by_id(story.before_votes)
         assert rows["EXP-2020"]["superseded_by"]["opp_id"] == "EXP-2026"
         assert rows["EXP-2026"]["superseded_by"] is None
 
     def test_placeholder_dates_and_ceilings_are_missing_not_facts(self, story):
-        rows = by_id(story.signed_out)
+        rows = by_id(story.before_votes)
         placeholder = rows["E2E-PLACEHOLDER"]
         assert placeholder["firm_deadline"] is False and placeholder["days_left"] is None
         assert placeholder["award_ceiling"] is None
@@ -156,6 +156,7 @@ class TestDashboardApi:
 
     def test_a_closed_grant_is_not_counted_as_scored(self, world, story):
         client = TestClient(webapp.app, base_url="http://localhost")
+        world.sign_in(client, MEMBER)
         before = client.get("/api/profile").json()["data"]
         world.query("INSERT INTO grants (opp_id, title, close_date, relevance_score) "
                     "VALUES ('E2E-CLOSED-SCORED', 'Closed last month', CURRENT_DATE - 30, 5)")
