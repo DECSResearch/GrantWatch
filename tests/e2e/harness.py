@@ -58,6 +58,8 @@ DASHBOARD_URL = "https://grants.example.test"
 NOT_SENT = ("E2E-STATES", "E2E-CLOSED")
 
 _NUMBER_LINE = re.compile(r"^Opportunity number: (.+)$", re.M)
+# A member's own description, as llm_utils.relevance sends it: a fenced block in the user message.
+_PROFILE_BLOCK = re.compile(r"^Researcher profile \([^)]*\):\n```\n(.*)\n```$", re.M)
 
 
 def render_extract(today: date, extra: str = "") -> str:
@@ -97,10 +99,15 @@ class FakeLLM:
     request. ``mode`` is ``"ok"``, or ``"truncated"`` for an answer cut off at the token limit
     (``finish_reason`` "length"). A server that is down is just ``stop()``: the port refuses connections.
     Every reply says ``x-should-retry: false`` so a test never waits on the SDK's retries.
+
+    A request for a member's own profile (it carries the description in a fenced block) is answered
+    from ``profile_scores``: text found in the description -> scores that replace the usual ones for
+    those numbers. A request for the team, or for a description no text matches, uses ``scores``.
     """
 
     def __init__(self, scores: Optional[Mapping[str, int]] = None, model: str = MODEL):
         self.scores: Dict[str, int] = dict(SCORES if scores is None else scores)
+        self.profile_scores: Dict[str, Dict[str, int]] = {}
         self.model = model
         self.mode = "ok"
         self.requests: List[Dict[str, Any]] = []
@@ -155,13 +162,20 @@ class FakeLLM:
         with self._lock:
             self.requests.clear()
         self.mode = "ok"
+        self.profile_scores = {}
 
     def _complete(self, body: Dict[str, Any]) -> Dict[str, Any]:
         messages = {m["role"]: str(m["content"]) for m in body.get("messages", [])}
         user = messages.get("user", "")
         numbers = [n.strip() for n in _NUMBER_LINE.findall(user)]
+        found = _PROFILE_BLOCK.search(user)
+        profile = found.group(1) if found else None
+        scores = dict(self.scores)
+        for text, table in self.profile_scores.items():
+            if profile is not None and text in profile:
+                scores.update(table)
         with self._lock:
-            self.requests.append({"body": body, "system": messages.get("system", ""), "user": user, "numbers": numbers})
+            self.requests.append({"body": body, "system": messages.get("system", ""), "user": user, "numbers": numbers, "profile": profile})
             mode = self.mode
         if mode == "truncated":
             content, finish = '{"scores": [{"opportunity_number": "', "length"
@@ -169,7 +183,7 @@ class FakeLLM:
             answers = [
                 {
                     "opportunity_number": number,
-                    "score": self.scores.get(number, DEFAULT_SCORE),
+                    "score": scores.get(number, DEFAULT_SCORE),
                     "summary": f"{number} funds the group's research.",
                     "reason": f"{number} fits the group's profile as scripted.",
                 }

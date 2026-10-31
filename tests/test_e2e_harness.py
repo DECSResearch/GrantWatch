@@ -142,6 +142,22 @@ class TestFakeLLM:
         llm.reset()
         assert llm.mode == "ok"
 
+    def test_a_members_description_picks_the_score_table_and_is_kept_with_the_request(self, llm):
+        from grants.members import personal_profile
+
+        llm.reset()
+        llm.profile_scores = {"battery": {"E2E-BROAD": 5}}
+        base = Profile(summary="The team does security research.")
+        batteries, wind = (personal_profile(base, f"I study {topic} in depth, as a researcher in the field.") for topic in ("battery chemistry", "wind forecasting"))
+        out = {
+            label: score_records(records_for(["E2E-BROAD"]), profile, settings=settings_for(llm), personal=personal).records[0]["RELEVANCE_SCORE"]
+            for label, profile, personal in (("team", base, False), ("battery", batteries, True), ("wind", wind, True))
+        }
+        assert out == {"team": SCORES["E2E-BROAD"], "battery": 5, "wind": SCORES["E2E-BROAD"]}
+        assert [request["profile"] for request in llm.requests] == [None, "I study battery chemistry in depth, as a researcher in the field.", "I study wind forecasting in depth, as a researcher in the field."]
+        llm.reset()
+        assert llm.profile_scores == {}
+
     def test_it_lists_its_model(self, llm):
         body = requests.get(llm.base_url + "/models", timeout=5).json()
         assert [m["id"] for m in body["data"]] == [MODEL]
