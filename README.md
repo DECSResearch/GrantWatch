@@ -1,5 +1,12 @@
 ﻿# GrantWatch
 
+> **Archived.** GrantWatch has moved to the C2SR web-hosting organization's
+> repository, [c2sr-web-hosting/GrantWatch](https://github.com/c2sr-web-hosting/GrantWatch),
+> which runs [grantwatch.c2sr.org](https://grantwatch.c2sr.org). That repository
+> is the current version, and this one is kept read-only for its history. Work
+> done here after the two split, such as the 0 to 5 relevance scoring, the
+> eligibility check and the team's votes, is being carried over there.
+
 GrantWatch watches Grants.gov for funding a research group can actually
 pursue and makes sure no deadline slips. A daily pipeline scores every open
 opportunity against a written research profile, each team member is emailed
